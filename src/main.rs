@@ -31,15 +31,44 @@ struct Cli {
 
 #[derive(Debug, Args, Clone)]
 struct OidcConfig {
-    #[arg(long, env = "WEBSITES_TLS_CERT_PATH")]
+    /// Path to the TLS certificate file.
+    #[arg(
+        long = "tls-cert-path",
+        env = "WEBSITES_TLS_CERT_PATH",
+        value_name = "FILE"
+    )]
     tls_cert_path: Option<String>,
-    #[arg(long, env = "WEBSITES_TLS_KEY_PATH")]
+
+    /// Path to the TLS private key file.
+    #[arg(
+        long = "tls-key-path",
+        env = "WEBSITES_TLS_KEY_PATH",
+        value_name = "FILE"
+    )]
     tls_key_path: Option<String>,
-    #[arg(long, env = "WEBSITES_FRONTEND_URL")]
+
+    /// Public frontend URL for OIDC redirect and callback configuration.
+    #[arg(
+        long = "frontend-url",
+        env = "WEBSITES_FRONTEND_URL",
+        value_name = "URL"
+    )]
     frontend_url: Option<String>,
-    #[arg(long, env = "WEBSITES_OIDC_CLIENT_ID")]
+
+    /// OIDC client ID.
+    #[arg(
+        long = "client-id",
+        env = "WEBSITES_OIDC_CLIENT_ID",
+        value_name = "STRING"
+    )]
     oidc_client_id: Option<String>,
-    #[arg(long, env = "WEBSITES_OIDC_DISCOVERY_URL")]
+
+    /// OIDC discovery document URL.
+    #[arg(
+        long = "discovery-url",
+        env = "WEBSITES_OIDC_DISCOVERY_URL",
+        value_name = "URL"
+    )]
     oidc_discovery_url: Option<String>,
 }
 
@@ -47,6 +76,8 @@ struct OidcConfig {
 enum Commands {
     /// Initialize required schema tables.
     Init,
+    /// Show effective OIDC configuration loaded from CLI flags and env vars.
+    ShowConfig,
     /// Manage managed sites.
     Site {
         #[command(subcommand)]
@@ -286,11 +317,19 @@ async fn main() {
     }
 }
 
-async fn execute(command: Commands, database_url: &str, _oidc: &OidcConfig) -> Result<(), String> {
+async fn execute(command: Commands, database_url: &str, oidc: &OidcConfig) -> Result<(), String> {
     match command {
         Commands::Init => {
             ensure_schema(database_url).await?;
             println!("database initialized: {}", database_url);
+            Ok(())
+        }
+        Commands::ShowConfig => {
+            println!("tls_cert_path={}", cli_value(&oidc.tls_cert_path));
+            println!("tls_key_path={}", cli_value(&oidc.tls_key_path));
+            println!("frontend_url={}", cli_value(&oidc.frontend_url));
+            println!("oidc_client_id={}", cli_value(&oidc.oidc_client_id));
+            println!("oidc_discovery_url={}", cli_value(&oidc.oidc_discovery_url));
             Ok(())
         }
         Commands::Site { command } => match command {
@@ -685,4 +724,10 @@ async fn execute(command: Commands, database_url: &str, _oidc: &OidcConfig) -> R
             }
         },
     }
+}
+
+fn cli_value(value: &Option<String>) -> String {
+    value
+        .as_deref()
+        .map_or_else(|| "<unset>".to_string(), |value| value.to_string())
 }
