@@ -108,6 +108,7 @@ const DEFAULT_PAGE_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"
 const DEFAULT_INDEX_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{site}}</title></head><body><h1>{{site}}</h1><ul>{{items}}</ul></body></html>";
 const DEFAULT_RSS_TEMPLATE: &str = "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel><title>{{site}}</title>{{items}}</channel></rss>";
 const DEFAULT_ATOM_TEMPLATE: &str = "<?xml version=\"1.0\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><title>{{site}}</title><updated>{{updated}}</updated>{{entries}}</feed>";
+const DEFAULT_TAG_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{tag}}</title></head><body><h1>{{tag}}</h1><ul>{{items}}</ul></body></html>";
 
 /// Renders all published content for a site into ./rendered/<site_short_name>.
 pub async fn render_site(
@@ -141,6 +142,7 @@ pub async fn render_site(
         load_template(&template_root, "index.html", DEFAULT_INDEX_TEMPLATE).await?;
     let rss_template = load_template(&template_root, "rss.xml", DEFAULT_RSS_TEMPLATE).await?;
     let atom_template = load_template(&template_root, "atom.xml", DEFAULT_ATOM_TEMPLATE).await?;
+    let tag_template = load_template(&template_root, "tag.html", DEFAULT_TAG_TEMPLATE).await?;
 
     let rendered_root = Path::new(rendered_dir).join(site.short_name.clone());
     let tmp_root = Path::new(rendered_dir).join(format!("{}.tmp", site.short_name));
@@ -246,6 +248,51 @@ pub async fn render_site(
         .await
         .map_err(|error| error.to_string())?;
     files_written = files_written.saturating_add(1);
+
+    let tags = entities::tag::Entity::find()
+        .filter(entities::tag::Column::SiteId.eq(site.id.clone()))
+        .all(&db)
+        .await
+        .map_err(|error: DbErr| error.to_string())?;
+
+    for tag in tags {
+        let mut tag_rows = String::new();
+        let links = entities::content_tag::Entity::find()
+            .filter(entities::content_tag::Column::TagId.eq(tag.id.clone()))
+            .all(&db)
+            .await
+            .map_err(|error: DbErr| error.to_string())?;
+
+        for link in links {
+            if let Some(content) = entities::content_item::Entity::find_by_id(link.content_id)
+                .one(&db)
+                .await
+                .map_err(|error| error.to_string())?
+            {
+                if content.draft {
+                    continue;
+                }
+
+                tag_rows.push_str(&format!(
+                    "<li><a href=\"/{}/\">{}</a></li>",
+                    content_primary_route(&content).trim_matches('/'),
+                    content.title
+                ));
+            }
+        }
+
+        let tag_output = apply_tag_template(&tag_template, &tag.name, &tag_rows);
+        let tag_slug = sanitize_tag_slug(&tag.name);
+        let tag_path = tmp_root.join("tags").join(tag_slug);
+
+        fs::create_dir_all(&tag_path)
+            .await
+            .map_err(|error| error.to_string())?;
+        fs::write(tag_path.join("index.html"), tag_output.as_bytes())
+            .await
+            .map_err(|error| error.to_string())?;
+        files_written = files_written.saturating_add(1);
+    }
 
     let template_assets = template_root.join("assets");
     copy_directory_recursive(
@@ -401,6 +448,34 @@ fn apply_index_template(template: &str, site: &str, items: &str) -> String {
     template
         .replace("{{site}}", site)
         .replace("{{items}}", items)
+}
+
+fn apply_tag_template(template: &str, tag_name: &str, items: &str) -> String {
+    template
+        .replace("{{tag}}", tag_name)
+        .replace("{{items}}", items)
+}
+
+fn sanitize_tag_slug(tag_name: &str) -> String {
+    let mut slug = String::new();
+    let mut previous_dash = false;
+
+    for c in tag_name.to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c);
+            previous_dash = false;
+        } else if !previous_dash {
+            slug.push('-');
+            previous_dash = true;
+        }
+    }
+
+    let slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        "tag".to_string()
+    } else {
+        slug
+    }
 }
 
 fn render_rss_items_xml(content_items: &[entities::content_item::Model]) -> String {
