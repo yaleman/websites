@@ -4,9 +4,10 @@ use websites::{
     NewAlias, NewAsset, NewAssetVariant, NewContent, NewContentTag, NewMembership, NewTag, NewUser,
     UpdateContent, add_content_tag, content_primary_route, create_alias, create_asset,
     create_asset_variant, create_content, create_membership, create_site, create_tag, create_user,
-    ensure_schema, get_content, list_aliases, list_asset_variants, list_assets, list_content,
-    list_content_tags, list_memberships, list_revision_aliases, list_revision_tags, list_revisions,
-    list_sites, list_tags, list_users, render_site, update_content,
+    ensure_schema, get_content, list_aliases, list_asset_variants, list_assets, list_audit_events,
+    list_content, list_content_tags, list_memberships, list_revision_aliases, list_revision_tags,
+    list_revisions, list_sites, list_tags, list_users, log_audit_event, render_site,
+    update_content,
 };
 
 #[derive(Debug, Parser)]
@@ -93,9 +94,23 @@ enum Commands {
         #[command(subcommand)]
         command: AssetCommands,
     },
+    /// Inspect audit log.
+    Audit {
+        #[command(subcommand)]
+        command: AuditCommands,
+    },
     Content {
         #[command(subcommand)]
         command: ContentCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AuditCommands {
+    /// List recent audit events.
+    List {
+        #[arg(long)]
+        site_id: Option<String>,
     },
 }
 
@@ -344,6 +359,20 @@ async fn execute(command: Commands, database_url: &str, oidc: &OidcConfig) -> Re
                 template_name,
             } => {
                 let site = create_site(database_url, short_name, full_title, template_name).await?;
+                let _ = log_audit_event(
+                    database_url,
+                    "system",
+                    "create_site",
+                    "site",
+                    &site.id,
+                    Some(&site.id),
+                    Some(&format!(
+                        "{{\"short_name\":\"{}\",\"full_title\":\"{}\"}}",
+                        json_field(&site.short_name),
+                        json_field(&site.full_title)
+                    )),
+                )
+                .await?;
                 println!("created site: {} ({})", site.id, site.short_name);
                 Ok(())
             }
@@ -377,6 +406,21 @@ async fn execute(command: Commands, database_url: &str, oidc: &OidcConfig) -> Re
                     },
                 )
                 .await?;
+                let _ = log_audit_event(
+                    database_url,
+                    "system",
+                    "create_membership",
+                    "site_membership",
+                    &membership.id,
+                    Some(&membership.site_id),
+                    Some(&format!(
+                        "{{\"site_id\":\"{}\",\"user_id\":\"{}\",\"role\":\"{}\"}}",
+                        json_field(&membership.site_id),
+                        json_field(&membership.user_id),
+                        json_field(&membership.role),
+                    )),
+                )
+                .await?;
                 println!("created membership: {} {}", membership.id, membership.role);
                 Ok(())
             }
@@ -395,6 +439,16 @@ async fn execute(command: Commands, database_url: &str, oidc: &OidcConfig) -> Re
             }
             SiteCommands::TagCreate { site_id, name } => {
                 let tag = create_tag(database_url, NewTag { site_id, name }).await?;
+                let _ = log_audit_event(
+                    database_url,
+                    "system",
+                    "create_tag",
+                    "tag",
+                    &tag.id,
+                    Some(&tag.site_id),
+                    Some(&format!("{{\"name\":\"{}\"}}", json_field(&tag.name),)),
+                )
+                .await?;
                 println!("created tag: {} {}", tag.id, tag.name);
                 Ok(())
             }
@@ -425,6 +479,19 @@ async fn execute(command: Commands, database_url: &str, oidc: &OidcConfig) -> Re
         Commands::User { command } => match command {
             UserCommands::Create { subject } => {
                 let user = create_user(database_url, NewUser { subject }).await?;
+                let _ = log_audit_event(
+                    database_url,
+                    "system",
+                    "create_user",
+                    "user",
+                    &user.id,
+                    None,
+                    Some(&format!(
+                        "{{\"subject\":\"{}\"}}",
+                        json_field(&user.subject),
+                    )),
+                )
+                .await?;
                 println!("created user: {} {}", user.id, user.subject);
                 Ok(())
             }
@@ -465,6 +532,20 @@ async fn execute(command: Commands, database_url: &str, oidc: &OidcConfig) -> Re
                         width,
                         height,
                     },
+                )
+                .await?;
+                let _ = log_audit_event(
+                    database_url,
+                    &asset.uploader_sub,
+                    "create_asset",
+                    "asset",
+                    &asset.id,
+                    Some(&asset.site_id),
+                    Some(&format!(
+                        "{{\"original_filename\":\"{}\",\"storage_basename\":\"{}\"}}",
+                        json_field(&asset.original_filename),
+                        json_field(&asset.storage_basename),
+                    )),
                 )
                 .await?;
                 println!("created asset: {} {}", asset.id, asset.original_filename);
@@ -508,6 +589,20 @@ async fn execute(command: Commands, database_url: &str, oidc: &OidcConfig) -> Re
                     },
                 )
                 .await?;
+                let _ = log_audit_event(
+                    database_url,
+                    "system",
+                    "create_asset_variant",
+                    "asset_variant",
+                    &variant.id,
+                    Some(&variant.asset_id),
+                    Some(&format!(
+                        "{{\"variant_kind\":\"{}\",\"filename\":\"{}\"}}",
+                        json_field(&variant.variant_kind),
+                        json_field(&variant.filename),
+                    )),
+                )
+                .await?;
                 println!("created variant: {} {}", variant.id, variant.filename);
                 Ok(())
             }
@@ -523,6 +618,35 @@ async fn execute(command: Commands, database_url: &str, oidc: &OidcConfig) -> Re
                     println!(
                         "{}\t{}\t{}\t{}\t{}",
                         row.id, row.asset_id, row.variant_kind, row.filename, row.mime_type
+                    );
+                }
+                Ok(())
+            }
+        },
+        Commands::Audit { command } => match command {
+            AuditCommands::List { site_id } => {
+                let events = list_audit_events(database_url, site_id.as_deref()).await?;
+                if events.is_empty() {
+                    println!("no audit events");
+                    return Ok(());
+                }
+
+                println!(
+                    "id\tsite_id\tactor_sub\tevent_type\tentity_type\tentity_id\tcreated_at\tpayload_json"
+                );
+                for event in events {
+                    let site_id = event.site_id.unwrap_or_else(|| "-".to_string());
+                    let payload = event.payload_json.unwrap_or_else(|| "null".to_string());
+                    println!(
+                        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                        event.id,
+                        site_id,
+                        event.actor_sub,
+                        event.event_type,
+                        event.entity_type,
+                        event.entity_id,
+                        event.created_at,
+                        payload
                     );
                 }
                 Ok(())
@@ -551,6 +675,22 @@ async fn execute(command: Commands, database_url: &str, oidc: &OidcConfig) -> Re
                         draft,
                         published_at,
                     },
+                )
+                .await?;
+                let _ = log_audit_event(
+                    database_url,
+                    &content.creator_sub,
+                    "create_content",
+                    "content_item",
+                    &content.id,
+                    Some(&content.site_id),
+                    Some(&format!(
+                        "{{\"page_type\":\"{}\",\"slug\":\"{}\",\"title\":\"{}\",\"draft\":{}}}",
+                        json_field(&content.page_type),
+                        json_field(&content.slug),
+                        json_field(&content.title),
+                        content.draft
+                    )),
                 )
                 .await?;
                 println!("created content: {} {}", content.id, content.title);
@@ -600,6 +740,21 @@ async fn execute(command: Commands, database_url: &str, oidc: &OidcConfig) -> Re
                         alias_path,
                         kind,
                     },
+                )
+                .await?;
+                let _ = log_audit_event(
+                    database_url,
+                    "system",
+                    "create_alias",
+                    "content_alias",
+                    &alias.id,
+                    Some(&alias.site_id),
+                    Some(&format!(
+                        "{{\"content_id\":\"{}\",\"alias_path\":\"{}\",\"kind\":\"{}\"}}",
+                        json_field(&alias.content_id),
+                        json_field(&alias.alias_path),
+                        json_field(&alias.kind),
+                    )),
                 )
                 .await?;
                 println!("created alias: {} {}", alias.id, alias.alias_path);
@@ -737,6 +892,22 @@ async fn execute(command: Commands, database_url: &str, oidc: &OidcConfig) -> Re
                     },
                 )
                 .await?;
+                let _ = log_audit_event(
+                    database_url,
+                    &content.creator_sub,
+                    "update_content",
+                    "content_item",
+                    &content.id,
+                    Some(&content.site_id),
+                    Some(&format!(
+                        "{{\"content_id\":\"{}\",\"page_type\":\"{}\",\"slug\":\"{}\",\"title\":\"{}\"}}",
+                        json_field(&content.id),
+                        json_field(&content.page_type),
+                        json_field(&content.slug),
+                        json_field(&content.title),
+                    )),
+                )
+                .await?;
                 println!("updated content: {} {}", content.id, content.title);
                 Ok(())
             }
@@ -752,6 +923,20 @@ async fn execute(command: Commands, database_url: &str, oidc: &OidcConfig) -> Re
                         site_id,
                         tag_name,
                     },
+                )
+                .await?;
+                let _ = log_audit_event(
+                    database_url,
+                    "system",
+                    "add_content_tag",
+                    "content_tag",
+                    &content_tag.id,
+                    Some(&content_tag.content_id),
+                    Some(&format!(
+                        "{{\"content_id\":\"{}\",\"tag_id\":\"{}\"}}",
+                        json_field(&content_tag.content_id),
+                        json_field(&content_tag.tag_id),
+                    )),
                 )
                 .await?;
                 println!(
@@ -781,4 +966,12 @@ fn cli_value(value: &Option<String>) -> String {
     value
         .as_deref()
         .map_or_else(|| "<unset>".to_string(), |value| value.to_string())
+}
+
+fn json_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }

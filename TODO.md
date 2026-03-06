@@ -34,7 +34,7 @@
 
 ## Phase 2 — Content features
 
-- [ ] Hook admin actions to `audit_event` logging table
+- [x] Hook admin actions to `audit_event` logging table
 - [ ] Implement media upload pipeline and derivative generation (thumbnail creation)
 - [ ] Add source-mode editor flow
 - [ ] Add scheduled publishing capabilities (beyond `published_at` field)
