@@ -2,10 +2,10 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::result::Result as StdResult;
 
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, Datelike, SecondsFormat, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseBackend, DbErr, EntityTrait,
-    IntoActiveModel, QueryFilter, Set, Statement,
+    IntoActiveModel, QueryFilter, QueryOrder, Set, Statement,
 };
 use tokio::fs;
 use uuid::Uuid;
@@ -161,7 +161,7 @@ pub async fn render_site(
 
     for item in content_items {
         let mut routes = HashSet::new();
-        routes.insert(format!("/{}", item.slug.trim_matches('/')));
+        routes.insert(content_primary_route(&item));
 
         let aliases = entities::content_alias::Entity::find()
             .filter(entities::content_alias::Column::ContentId.eq(item.id.clone()))
@@ -169,7 +169,7 @@ pub async fn render_site(
             .await
             .map_err(|error: DbErr| error.to_string())?;
         for alias in aliases {
-            routes.insert(format!("/{}", alias.alias_path.trim_matches('/')));
+            routes.insert(alias.alias_path);
         }
 
         let template = if item.page_type == "post" {
@@ -198,9 +198,10 @@ pub async fn render_site(
             files_written = files_written.saturating_add(1);
         }
 
+        let primary_route = content_primary_route(&item);
         index_rows.push_str(&format!(
             "<li><a href=\"/{}/\">{}</a></li>",
-            item.slug.trim_matches('/'),
+            primary_route.trim_matches('/'),
             item.title
         ));
     }
@@ -676,12 +677,37 @@ pub async fn list_revisions(
 
     let revisions = entities::content_revision::Entity::find()
         .filter(entities::content_revision::Column::ContentId.eq(content_id.to_owned()))
+        .order_by_asc(entities::content_revision::Column::RevisionNumber)
         .all(&db)
         .await
         .map_err(|error| error.to_string())?;
 
     let _ = db.close().await;
     Ok(revisions)
+}
+
+fn content_primary_route(content: &entities::content_item::Model) -> String {
+    let slug = content.slug.trim_matches('/').to_string();
+    if content.page_type != "post" {
+        return slug;
+    }
+
+    let date_source = content
+        .published_at
+        .as_deref()
+        .unwrap_or(content.created_at.as_str());
+
+    format!(
+        "{}/{}",
+        content_date_path(date_source).unwrap_or_else(|| "0000/00/00".to_string()),
+        slug
+    )
+}
+
+fn content_date_path(value: &str) -> Option<String> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|date| format!("{:04}/{:02}/{:02}", date.year(), date.month(), date.day()))
 }
 
 /// Creates a user record and returns the persisted row.
