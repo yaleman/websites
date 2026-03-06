@@ -4,3 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chrono = "0.4.44"
+clap = { version = "4.5.60", features = ["derive", "env"] }
+markdown = "1.0.0"
+sea-orm = { version = "1.1.19", features = ["runtime-tokio-rustls", "sqlx-sqlite"] }
+tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros"] }
+uuid = { version = "1.22.0", features = ["v7"] }
