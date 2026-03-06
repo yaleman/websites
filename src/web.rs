@@ -1,17 +1,21 @@
 use crate::middleware::log_requests;
 use crate::{
-    cli::OidcConfig, content_primary_route, get_content, get_site, list_aliases, list_assets,
-    list_content, list_content_tags, list_revisions, list_sites, list_tags, render_site,
+    cli::OidcConfig,
+    content_primary_route, create_content, create_site, get_content, get_site, list_aliases,
+    list_assets, list_content, list_content_tags, list_revisions, list_sites, list_tags,
+    log_audit_event, render_site, NewContent,
 };
 use askama::Template;
 use axum::http::StatusCode;
 use axum::middleware::from_fn;
 use axum::{
-    Router,
-    extract::{Path, State},
+    extract::{Form, Path, State},
     response::{IntoResponse, Redirect, Response},
     routing::get,
+    Router,
 };
+use serde::Deserialize;
+use serde_json::json;
 
 #[derive(Clone)]
 struct AdminState {
@@ -29,6 +33,7 @@ struct AdminPageTemplate {
     message: String,
     rows: Vec<AdminRow>,
     links: Vec<AdminLink>,
+    inline_body: String,
     pre_body: String,
 }
 
@@ -43,6 +48,25 @@ struct AdminLink {
     href: String,
     label: String,
 }
+
+#[derive(Debug, Deserialize)]
+struct CreateSiteForm {
+    short_name: String,
+    full_title: String,
+    template_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateContentForm {
+    page_type: String,
+    title: String,
+    slug: String,
+    page_content: String,
+    draft: Option<bool>,
+}
+
+const ADMIN_ACTOR_SUB: &str = "web-admin";
+const DEFAULT_TEMPLATE_NAME: &str = "default";
 
 const ADMIN_STYLE: &str = include_str!("../templates/admin/assets/style.css");
 
@@ -62,12 +86,16 @@ pub async fn run_admin_server(
         .route("/", get(admin_root))
         .route("/admin", get(admin_index))
         .route("/admin/sites", get(admin_sites))
-        .route("/admin/sites/new", get(admin_sites_new))
+        .route("/admin/sites/new", get(admin_sites_new).post(admin_sites_create))
         .route("/admin/login", get(admin_login))
         .route("/admin/logout", get(admin_logout))
         .route(
             "/admin/site/{site_id}/content",
             get(admin_site_content_list),
+        )
+        .route(
+            "/admin/site/{site_id}/content/new",
+            get(admin_site_content_new).post(admin_site_content_create),
         )
         .route(
             "/admin/site/{site_id}/content/{content_id}",
@@ -141,6 +169,7 @@ async fn admin_index(State(state): State<AdminState>) -> AdminPageTemplate {
             },
         ],
         links,
+        inline_body: String::new(),
         pre_body: String::new(),
     }
 }
@@ -162,9 +191,10 @@ async fn admin_sites(State(state): State<AdminState>) -> Response {
             AdminPageTemplate {
                 title: "Sites".to_string(),
                 heading: "Managed Sites".to_string(),
-                message: "Add or inspect site-specific admin routes.".to_string(),
+                message: "Manage sites and browse site zones from here.".to_string(),
                 rows,
                 links: vec![link("/admin/sites/new", "New site")],
+                inline_body: String::new(),
                 pre_body: String::new(),
             }
             .into_response()
@@ -177,12 +207,66 @@ async fn admin_sites_new() -> Response {
     AdminPageTemplate {
         title: "New Site".to_string(),
         heading: "Create Site".to_string(),
-        message: "POST-backed create flow will be added next; use CLI create for now.".to_string(),
+        message: "Use this form to create a site.".to_string(),
         rows: vec![],
         links: vec![link("/admin/sites", "Back to sites")],
+        inline_body: admin_sites_new_form_html().to_string(),
         pre_body: String::new(),
     }
     .into_response()
+}
+
+async fn admin_sites_create(
+    State(state): State<AdminState>,
+    Form(form): Form<CreateSiteForm>,
+) -> Response {
+    let template_name = form
+        .template_name
+        .unwrap_or_else(|| DEFAULT_TEMPLATE_NAME.to_string());
+
+    match create_site(
+        &state.database_url,
+        form.short_name,
+        form.full_title,
+        template_name,
+    )
+    .await
+    {
+        Ok(site) => {
+            let _ = log_audit_event(
+                &state.database_url,
+                ADMIN_ACTOR_SUB,
+                "create_site",
+                "site",
+                &site.id,
+                Some(&site.id),
+                Some(&format!(
+                    "{}",
+                    json!({ "short_name": &site.short_name, "full_title": &site.full_title })
+                )),
+            )
+            .await;
+            Redirect::to("/admin/sites").into_response()
+        }
+        Err(error) => internal_error(format!("failed to create site: {error}")),
+    }
+}
+
+fn admin_sites_new_form_html() -> &'static str {
+    r#"
+      <form method="post" action="/admin/sites/new">
+        <label for="short_name">Short Name</label>
+        <input id="short_name" name="short_name" required />
+
+        <label for="full_title">Full Title</label>
+        <input id="full_title" name="full_title" required />
+
+        <label for="template_name">Template Name</label>
+        <input id="template_name" name="template_name" value="default" />
+
+        <button type="submit">Create site</button>
+      </form>
+    "#
 }
 
 async fn admin_login() -> Response {
@@ -193,6 +277,7 @@ async fn admin_login() -> Response {
             .to_string(),
         rows: vec![],
         links: vec![link("/admin/logout", "Logout")],
+        inline_body: String::new(),
         pre_body: String::new(),
     }
     .into_response()
@@ -207,6 +292,7 @@ async fn admin_logout() -> Response {
                 .to_string(),
         rows: vec![],
         links: vec![link("/admin/login", "Login")],
+        inline_body: String::new(),
         pre_body: String::new(),
     }
     .into_response()
@@ -239,7 +325,9 @@ async fn admin_site_content_list(
                     link(&format!("/admin/site/{site_id}/tags"), "Tags"),
                     link(&format!("/admin/site/{site_id}/assets"), "Assets"),
                     link(&format!("/admin/site/{site_id}/render"), "Render"),
+                    link(&format!("/admin/site/{site_id}/content/new"), "New content"),
                 ],
+                inline_body: String::new(),
                 pre_body: String::new(),
             }
             .into_response()
@@ -248,6 +336,120 @@ async fn admin_site_content_list(
             "failed to load content for site {site_id}: {error}"
         )),
     }
+}
+
+async fn admin_site_content_new(
+    State(state): State<AdminState>,
+    Path(site_id): Path<String>,
+) -> Response {
+    match get_site(&state.database_url, &site_id).await {
+        Ok(site) => {
+            AdminPageTemplate {
+                title: "New Content".to_string(),
+                heading: format!("Create Content {}", site.short_name),
+                message: "Create a page or post and start drafting immediately.".to_string(),
+                rows: vec![AdminRow {
+                    label: "site_id".to_string(),
+                    value: site.id,
+                }],
+                links: vec![
+                    link(&format!("/admin/site/{site_id}/content"), "Back to content"),
+                    link(&format!("/admin/site/{}/settings", site_id), "Site settings"),
+                ],
+                inline_body: admin_site_content_new_form_html().to_string(),
+                pre_body: String::new(),
+            }
+            .into_response()
+        }
+        Err(error) => internal_error(format!("failed to load site {site_id}: {error}")),
+    }
+}
+
+async fn admin_site_content_create(
+    State(state): State<AdminState>,
+    Path(site_id): Path<String>,
+    Form(form): Form<CreateContentForm>,
+) -> Response {
+    let page_type = form.page_type;
+    if page_type != "post" && page_type != "page" {
+        return internal_error("invalid page_type, expected post or page".to_string());
+    }
+
+    match get_site(&state.database_url, &site_id).await {
+        Ok(site) => match create_content(
+            &state.database_url,
+            NewContent {
+                site_id: site.id,
+                page_type,
+                title: form.title,
+                slug: form.slug,
+                page_content: form.page_content,
+                draft: form.draft.unwrap_or(false),
+                creator_sub: ADMIN_ACTOR_SUB.to_string(),
+                published_at: None,
+            },
+        )
+        .await
+        {
+            Ok(content) => {
+                let _ = log_audit_event(
+                    &state.database_url,
+                    ADMIN_ACTOR_SUB,
+                    "create_content",
+                    "content_item",
+                    &content.id,
+                    Some(&content.site_id),
+                    Some(&format!(
+                        "{}",
+                        json!({
+                            "page_type": &content.page_type,
+                            "slug": &content.slug,
+                            "title": &content.title,
+                            "draft": content.draft
+                        })
+                    )),
+                )
+                .await;
+                Redirect::to(&format!(
+                    "/admin/site/{}/content/{}",
+                    content.site_id, content.id
+                ))
+                .into_response()
+            }
+            Err(error) => {
+                internal_error(format!("failed to create content for site {site_id}: {error}"))
+            }
+        },
+        Err(error) => internal_error(format!("failed to load site {site_id}: {error}")),
+    }
+}
+
+fn admin_site_content_new_form_html() -> &'static str {
+    r#"
+      <form method="post" action="">
+        <label for="page_type">Page Type</label>
+        <select id="page_type" name="page_type" required>
+          <option value="post">Post</option>
+          <option value="page">Page</option>
+        </select>
+
+        <label for="title">Title</label>
+        <input id="title" name="title" required />
+
+        <label for="slug">Slug</label>
+        <input id="slug" name="slug" required />
+
+        <label for="page_content">Content</label>
+        <textarea id="page_content" name="page_content" rows="12"></textarea>
+
+        <label class="inline-checkbox">
+          <input id="draft" name="draft" type="checkbox" value="true" />
+          Save as draft
+        </label>
+
+        <button type="submit">Create content</button>
+      </form>
+    "#
 }
 
 async fn admin_site_content_detail(
@@ -329,6 +531,7 @@ async fn admin_site_content_detail(
                         "Back to content",
                     ),
                 ],
+                inline_body: String::new(),
                 pre_body: String::new(),
             }
             .into_response()
@@ -351,6 +554,7 @@ async fn admin_site_content_source(
                 &format!("/admin/site/{}/content/{}", content.site_id, content.id),
                 "Back to content",
             )],
+            inline_body: String::new(),
             pre_body: content.page_content,
         }
         .into_response(),
@@ -413,6 +617,7 @@ async fn admin_site_content_advanced(
             &format!("/admin/site/{}/content/{}", content.site_id, content.id),
             "Back to content",
         )],
+        inline_body: String::new(),
         pre_body: String::new(),
     }
     .into_response()
@@ -444,6 +649,7 @@ async fn admin_site_content_revisions(
                     &format!("/admin/site/{site_id}/content/{content_id}"),
                     "Back to content",
                 )],
+                inline_body: String::new(),
                 pre_body: String::new(),
             }
             .into_response()
@@ -474,6 +680,7 @@ async fn admin_site_tags(State(state): State<AdminState>, Path(site_id): Path<St
                     &format!("/admin/site/{site_id}/content"),
                     "Back to content",
                 )],
+                inline_body: String::new(),
                 pre_body: String::new(),
             }
             .into_response()
@@ -508,6 +715,7 @@ async fn admin_site_assets(
                     &format!("/admin/site/{site_id}/content"),
                     "Back to content",
                 )],
+                inline_body: String::new(),
                 pre_body: String::new(),
             }
             .into_response()
@@ -550,6 +758,7 @@ async fn admin_site_settings(
                     &format!("/admin/site/{site_id}/content"),
                     "Back to content",
                 )],
+                inline_body: String::new(),
                 pre_body: String::new(),
             }
             .into_response()
@@ -572,6 +781,7 @@ async fn admin_site_render(
                 &format!("/admin/site/{site_id}/content"),
                 "Back to content",
             )],
+            inline_body: String::new(),
             pre_body: String::new(),
         }
         .into_response(),
