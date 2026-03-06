@@ -105,6 +105,61 @@ pub async fn ensure_schema(database_url: &str) -> StdResult<(), String> {
     Ok(())
 }
 
+/// Records an audit event for administrative actions.
+pub async fn log_audit_event(
+    database_url: &str,
+    actor_sub: &str,
+    event_type: &str,
+    entity_type: &str,
+    entity_id: &str,
+    site_id: Option<&str>,
+    payload_json: Option<&str>,
+) -> StdResult<entities::audit_event::Model, String> {
+    let db = Database::connect(database_url)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let model = entities::audit_event::ActiveModel {
+        id: Set(uuid_v7()),
+        site_id: Set(site_id.map(ToString::to_string)),
+        actor_sub: Set(actor_sub.to_string()),
+        event_type: Set(event_type.to_string()),
+        entity_type: Set(entity_type.to_string()),
+        entity_id: Set(entity_id.to_string()),
+        created_at: Set(utc_now()),
+        payload_json: Set(payload_json.map(ToString::to_string)),
+    };
+
+    let model = model.insert(&db).await.map_err(|error| error.to_string())?;
+    let _ = db.close().await;
+    Ok(model)
+}
+
+/// Returns audit events, optionally filtered by site_id.
+pub async fn list_audit_events(
+    database_url: &str,
+    site_id: Option<&str>,
+) -> StdResult<Vec<entities::audit_event::Model>, String> {
+    let db = Database::connect(database_url)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let query = entities::audit_event::Entity::find();
+    let query = if let Some(site_id) = site_id {
+        query.filter(entities::audit_event::Column::SiteId.eq(site_id.to_owned()))
+    } else {
+        query
+    };
+    let events = query
+        .order_by_desc(entities::audit_event::Column::CreatedAt)
+        .all(&db)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let _ = db.close().await;
+    Ok(events)
+}
+
 const DEFAULT_POST_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{title}}</title></head><body><h1>{{title}}</h1><article>{{content}}</article></body></html>";
 const DEFAULT_PAGE_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{title}}</title></head><body><h1>{{title}}</h1><article>{{content}}</article></body></html>";
 const DEFAULT_INDEX_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{site}}</title></head><body><h1>{{site}}</h1><ul>{{items}}</ul></body></html>";
@@ -836,6 +891,25 @@ pub async fn get_content(
 
     let _ = db.close().await;
     Ok(content)
+}
+
+/// Returns a single site by id.
+pub async fn get_site(
+    database_url: &str,
+    site_id: &str,
+) -> StdResult<entities::site::Model, String> {
+    let db = Database::connect(database_url)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let model = entities::site::Entity::find_by_id(site_id.to_owned())
+        .one(&db)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "site not found".to_string())?;
+
+    let _ = db.close().await;
+    Ok(model)
 }
 
 /// Creates a content alias entry.

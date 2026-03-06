@@ -1,5 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 
+mod web;
+
 use websites::{
     NewAlias, NewAsset, NewAssetVariant, NewContent, NewContentTag, NewMembership, NewTag, NewUser,
     UpdateContent, add_content_tag, content_primary_route, create_alias, create_asset,
@@ -79,6 +81,11 @@ enum Commands {
     Init,
     /// Show effective OIDC configuration loaded from CLI flags and env vars.
     ShowConfig,
+    /// Start the admin web UI server.
+    Serve {
+        #[command(subcommand)]
+        command: ServeCommands,
+    },
     /// Manage managed sites.
     Site {
         #[command(subcommand)]
@@ -102,6 +109,15 @@ enum Commands {
     Content {
         #[command(subcommand)]
         command: ContentCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ServeCommands {
+    /// Start the admin web UI server.
+    Admin {
+        #[arg(long, default_value = "127.0.0.1:3000")]
+        listen: String,
     },
 }
 
@@ -621,6 +637,11 @@ async fn execute(command: Commands, database_url: &str, oidc: &OidcConfig) -> Re
                     );
                 }
                 Ok(())
+            }
+        },
+        Commands::Serve { command } => match command {
+            ServeCommands::Admin { listen } => {
+                web::run_admin_server(database_url, &listen, oidc).await
             }
         },
         Commands::Audit { command } => match command {
