@@ -1,18 +1,17 @@
+use crate::middleware::log_requests;
+use crate::{
+    cli::OidcConfig, content_primary_route, get_content, get_site, list_aliases, list_assets,
+    list_content, list_content_tags, list_revisions, list_sites, list_tags, render_site,
+};
 use askama::Template;
-use askama_web::WebTemplate;
 use axum::http::StatusCode;
+use axum::middleware::from_fn;
 use axum::{
     Router,
     extract::{Path, State},
     response::{IntoResponse, Redirect, Response},
     routing::get,
 };
-use websites::{
-    content_primary_route, get_content, get_site, list_aliases, list_assets, list_content,
-    list_content_tags, list_revisions, list_sites, list_tags, render_site,
-};
-
-use crate::OidcConfig;
 
 #[derive(Clone)]
 struct AdminState {
@@ -22,7 +21,7 @@ struct AdminState {
     oidc_discovery_url: Option<String>,
 }
 
-#[derive(Template, WebTemplate)]
+#[derive(Template)]
 #[template(path = "admin/page.html")]
 struct AdminPageTemplate {
     title: String,
@@ -91,6 +90,7 @@ pub async fn run_admin_server(
         .route("/admin/site/{site_id}/settings", get(admin_site_settings))
         .route("/admin/site/{site_id}/render", get(admin_site_render))
         .route("/admin/assets/style.css", get(admin_style_css))
+        .layer(from_fn(log_requests))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(listen)
@@ -594,4 +594,13 @@ fn link(href: &str, label: &str) -> AdminLink {
 
 fn internal_error(error: String) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, error).into_response()
+}
+
+impl IntoResponse for AdminPageTemplate {
+    fn into_response(self) -> Response {
+        match self.render() {
+            Ok(rendered) => rendered.into_response(),
+            Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+        }
+    }
 }

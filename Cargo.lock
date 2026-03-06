@@ -2768,7 +2768,9 @@ dependencies = [
  "clap",
  "markdown",
  "sea-orm",
+ "serde_json",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
