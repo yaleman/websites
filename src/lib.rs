@@ -1055,7 +1055,7 @@ pub async fn list_revisions(
 
     let revisions = entities::content_revision::Entity::find()
         .filter(entities::content_revision::Column::ContentId.eq(content_id.to_owned()))
-        .order_by_asc(entities::content_revision::Column::RevisionNumber)
+        .order_by_desc(entities::content_revision::Column::RevisionNumber)
         .all(&db)
         .await
         .map_err(|error| error.to_string())?;
@@ -1064,7 +1064,7 @@ pub async fn list_revisions(
     Ok(revisions)
 }
 
-fn content_primary_route(content: &entities::content_item::Model) -> String {
+pub fn content_primary_route(content: &entities::content_item::Model) -> String {
     let slug = content.slug.trim_matches('/').to_string();
     if content.page_type != "post" {
         return slug;
