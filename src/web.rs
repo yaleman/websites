@@ -1,26 +1,35 @@
 use crate::middleware::log_requests;
 use crate::{
     NewAsset, NewAssetVariant, NewContent, cli::OidcConfig, content_primary_route, create_asset,
-    create_asset_variant, create_content, create_site, get_content, get_site, list_aliases,
-    list_assets, list_content, list_content_tags, list_revisions, list_sites, list_tags,
-    log_audit_event, render_site, search_content, update_content,
+    create_asset_variant, create_content, create_site, get_content, get_revision,
+    get_revision_by_number, get_site, list_aliases, list_asset_variants, list_assets, list_content,
+    list_content_tags, list_revisions, list_sites, list_tags, log_audit_event, render_site,
+    search_content, update_content,
 };
 use askama::Template;
 use axum::http::StatusCode;
-use axum::middleware::from_fn;
+use axum::middleware::{Next, from_fn};
 use axum::{
     Router,
-    extract::{Form, Multipart, Path, Query, State},
+    extract::{Form, Multipart, Path, Query, Request, State},
     response::{IntoResponse, Redirect, Response},
     routing::get,
 };
 use image::{GenericImageView, ImageFormat};
+use openidconnect::{
+    AuthorizationCode, ClientId, CsrfToken, EndpointMaybeSet, EndpointNotSet, EndpointSet,
+    IssuerUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
+    core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata},
+};
+use reqwest::redirect::Policy;
 use serde::Deserialize;
 use serde_json::json;
+use similar::TextDiff;
 use std::io::Cursor;
 use std::path::Path as StdPath;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
+use tower_sessions::{Expiry, MemoryStore, Session, SessionManagerLayer};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -86,6 +95,23 @@ struct SearchQuery {
     q: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct OidcCallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
+type OidcClient = CoreClient<
+    EndpointSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointMaybeSet,
+    EndpointMaybeSet,
+>;
+
 const ADMIN_ACTOR_SUB: &str = "web-admin";
 const DEFAULT_TEMPLATE_NAME: &str = "default";
 const UPLOAD_ROOT: &str = "./uploads/media-storage";
@@ -105,16 +131,18 @@ pub async fn run_admin_server(
         oidc_discovery_url: oidc.oidc_discovery_url.clone(),
     };
 
-    let app = Router::new()
-        .route("/", get(admin_root))
+    let session_store = MemoryStore::default();
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_secure(false)
+        .with_expiry(Expiry::OnSessionEnd);
+
+    let protected_routes = Router::new()
         .route("/admin", get(admin_index))
         .route("/admin/sites", get(admin_sites))
         .route(
             "/admin/sites/new",
             get(admin_sites_new).post(admin_sites_create),
         )
-        .route("/admin/login", get(admin_login))
-        .route("/admin/logout", get(admin_logout))
         .route(
             "/admin/site/{site_id}/content",
             get(admin_site_content_list),
@@ -140,6 +168,10 @@ pub async fn run_admin_server(
             "/admin/site/{site_id}/content/{content_id}/revisions",
             get(admin_site_content_revisions),
         )
+        .route(
+            "/admin/site/{site_id}/content/{content_id}/revisions/{revision_id}",
+            get(admin_site_revision_diff),
+        )
         .route("/admin/site/{site_id}/tags", get(admin_site_tags))
         .route("/admin/site/{site_id}/assets", get(admin_site_assets))
         .route(
@@ -148,7 +180,16 @@ pub async fn run_admin_server(
         )
         .route("/admin/site/{site_id}/settings", get(admin_site_settings))
         .route("/admin/site/{site_id}/render", get(admin_site_render))
+        .layer(from_fn(require_admin_session));
+
+    let app = Router::new()
+        .route("/", get(admin_root))
+        .route("/admin/login", get(admin_login))
+        .route("/admin/login/callback", get(admin_login_callback))
+        .route("/admin/logout", get(admin_logout))
         .route("/admin/assets/style.css", get(admin_style_css))
+        .merge(protected_routes)
+        .layer(session_layer)
         .layer(from_fn(log_requests))
         .with_state(state);
 
@@ -165,6 +206,19 @@ pub async fn run_admin_server(
 
 async fn admin_root() -> Redirect {
     Redirect::to("/admin")
+}
+
+async fn require_admin_session(session: Session, request: Request, next: Next) -> Response {
+    let is_authenticated = session
+        .get::<String>("user_sub")
+        .await
+        .unwrap_or(None)
+        .is_some();
+    if is_authenticated {
+        next.run(request).await
+    } else {
+        Redirect::to("/admin/login").into_response()
+    }
 }
 
 async fn admin_style_css() -> impl IntoResponse {
@@ -187,8 +241,7 @@ async fn admin_index(State(state): State<AdminState>) -> AdminPageTemplate {
     AdminPageTemplate {
         title: "Admin".to_string(),
         heading: "Administration".to_string(),
-        message: "Use the route set below to browse admin surfaces. Authentication is wired next."
-            .to_string(),
+        message: "Use the route set below to browse admin surfaces.".to_string(),
         rows: vec![
             AdminRow {
                 label: "Dashboard".to_string(),
@@ -300,33 +353,198 @@ fn admin_sites_new_form_html() -> &'static str {
     "#
 }
 
-async fn admin_login() -> Response {
-    AdminPageTemplate {
-        title: "Login".to_string(),
-        heading: "Admin Login".to_string(),
-        message: "OIDC login flow is part of the next phase; this page is a placeholder."
-            .to_string(),
-        rows: vec![],
-        links: vec![link("/admin/logout", "Logout")],
-        inline_body: String::new(),
-        pre_body: String::new(),
+async fn admin_login(State(state): State<AdminState>, session: Session) -> Response {
+    if !admin_oidc_is_configured(&state) {
+        return AdminPageTemplate {
+            title: "Login".to_string(),
+            heading: "Admin Login".to_string(),
+            message: "OIDC configuration is missing. Set the required environment variables."
+                .to_string(),
+            rows: vec![],
+            links: vec![link("/admin", "Back to admin")],
+            inline_body: String::new(),
+            pre_body: String::new(),
+        }
+        .into_response();
     }
-    .into_response()
+
+    let http_client = match build_http_client() {
+        Ok(client) => client,
+        Err(error) => {
+            return internal_error(format!("failed to build http client: {error}"));
+        }
+    };
+    let client = match build_oidc_client(&state, &http_client).await {
+        Ok(client) => client,
+        Err(error) => {
+            return internal_error(format!("failed to initialize OIDC client: {error}"));
+        }
+    };
+
+    let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+    let (auth_url, csrf_state, nonce) = client
+        .authorize_url(
+            CoreAuthenticationFlow::AuthorizationCode,
+            CsrfToken::new_random,
+            Nonce::new_random,
+        )
+        .add_scope(Scope::new("openid".to_string()))
+        .add_scope(Scope::new("profile".to_string()))
+        .add_scope(Scope::new("email".to_string()))
+        .set_pkce_challenge(pkce_challenge)
+        .url();
+
+    if session
+        .insert("oidc_state", csrf_state.secret().to_string())
+        .await
+        .is_err()
+        || session
+            .insert("oidc_pkce", pkce_verifier.secret().to_string())
+            .await
+            .is_err()
+        || session
+            .insert("oidc_nonce", nonce.secret().to_string())
+            .await
+            .is_err()
+    {
+        return internal_error("failed to persist OIDC session data".to_string());
+    }
+
+    let auth_url = auth_url.to_string();
+    Redirect::to(&auth_url).into_response()
 }
 
-async fn admin_logout() -> Response {
-    AdminPageTemplate {
-        title: "Logout".to_string(),
-        heading: "Admin Logout".to_string(),
-        message:
-            "OIDC logout endpoint will terminate the session once authentication middleware is active."
-                .to_string(),
-        rows: vec![],
-        links: vec![link("/admin/login", "Login")],
-        inline_body: String::new(),
-        pre_body: String::new(),
+async fn admin_login_callback(
+    State(state): State<AdminState>,
+    Query(query): Query<OidcCallbackQuery>,
+    session: Session,
+) -> Response {
+    if let Some(error) = query.error {
+        let description = query.error_description.unwrap_or_default();
+        return internal_error(format!("OIDC error: {error} {description}"));
     }
-    .into_response()
+
+    let code = match query.code {
+        Some(code) => code,
+        None => return internal_error("missing authorization code".to_string()),
+    };
+    let state_value = match query.state {
+        Some(state) => state,
+        None => return internal_error("missing state".to_string()),
+    };
+
+    let stored_state = session
+        .get::<String>("oidc_state")
+        .await
+        .unwrap_or(None)
+        .unwrap_or_default();
+    if stored_state != state_value {
+        return internal_error("OIDC state mismatch".to_string());
+    }
+
+    let pkce_verifier = session
+        .get::<String>("oidc_pkce")
+        .await
+        .unwrap_or(None)
+        .unwrap_or_default();
+    let nonce_value = session
+        .get::<String>("oidc_nonce")
+        .await
+        .unwrap_or(None)
+        .unwrap_or_default();
+
+    let http_client = match build_http_client() {
+        Ok(client) => client,
+        Err(error) => {
+            return internal_error(format!("failed to build http client: {error}"));
+        }
+    };
+    let client = match build_oidc_client(&state, &http_client).await {
+        Ok(client) => client,
+        Err(error) => {
+            return internal_error(format!("failed to initialize OIDC client: {error}"));
+        }
+    };
+
+    let token_request = match client.exchange_code(AuthorizationCode::new(code)) {
+        Ok(request) => request,
+        Err(error) => return internal_error(format!("failed to build token request: {error}")),
+    };
+    let token_response = match token_request
+        .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier))
+        .request_async(&http_client)
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => return internal_error(format!("failed to exchange code: {error}")),
+    };
+
+    let id_token = match token_response.id_token() {
+        Some(token) => token,
+        None => return internal_error("missing id_token in response".to_string()),
+    };
+
+    let nonce = Nonce::new(nonce_value);
+    let claims = match id_token.claims(&client.id_token_verifier(), &nonce) {
+        Ok(claims) => claims,
+        Err(error) => return internal_error(format!("failed to verify id_token: {error}")),
+    };
+
+    let subject = claims.subject().as_str().to_string();
+    if session.insert("user_sub", subject.clone()).await.is_err() {
+        return internal_error("failed to store session".to_string());
+    }
+
+    let _ = crate::upsert_user_login(&state.database_url, &subject).await;
+
+    Redirect::to("/admin").into_response()
+}
+
+async fn admin_logout(session: Session) -> Response {
+    let _ = session.clear().await;
+    Redirect::to("/admin/login").into_response()
+}
+
+fn build_http_client() -> Result<reqwest::Client, String> {
+    reqwest::ClientBuilder::new()
+        .redirect(Policy::none())
+        .build()
+        .map_err(|error| error.to_string())
+}
+
+async fn build_oidc_client(
+    state: &AdminState,
+    http_client: &reqwest::Client,
+) -> Result<OidcClient, String> {
+    let discovery_url = state
+        .oidc_discovery_url
+        .clone()
+        .ok_or_else(|| "missing discovery url".to_string())?;
+    let client_id = state
+        .oidc_client_id
+        .clone()
+        .ok_or_else(|| "missing client id".to_string())?;
+    let frontend_url = state
+        .oidc_frontend_url
+        .clone()
+        .ok_or_else(|| "missing frontend url".to_string())?;
+
+    let provider_metadata = CoreProviderMetadata::discover_async(
+        IssuerUrl::new(discovery_url).map_err(|error| error.to_string())?,
+        http_client,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+
+    let redirect_url = format!(
+        "{}/admin/login/callback",
+        frontend_url.trim_end_matches('/')
+    );
+    let client =
+        CoreClient::from_provider_metadata(provider_metadata, ClientId::new(client_id), None)
+            .set_redirect_uri(RedirectUrl::new(redirect_url).map_err(|error| error.to_string())?);
+
+    Ok(client)
 }
 
 async fn admin_site_content_list(
@@ -637,19 +855,34 @@ async fn admin_site_content_source(
     Path((_site_id, content_id)): Path<(String, String)>,
 ) -> Response {
     match get_content(&state.database_url, &content_id).await {
-        Ok(content) => AdminPageTemplate {
-            title: "Content Source".to_string(),
-            heading: format!("Source: {}", content.title),
-            message: "Edit raw markdown and metadata, then save to create a revision.".to_string(),
-            rows: vec![],
-            links: vec![link(
-                &format!("/admin/site/{}/content/{}", content.site_id, content.id),
-                "Back to content",
-            )],
-            inline_body: admin_site_content_source_form_html(&content),
-            pre_body: String::new(),
+        Ok(content) => {
+            let assets_html =
+                match render_asset_embed_library(&state.database_url, &content.site_id).await {
+                    Ok(html) => html,
+                    Err(error) => {
+                        return internal_error(format!("failed to load assets: {error}"));
+                    }
+                };
+
+            AdminPageTemplate {
+                title: "Content Source".to_string(),
+                heading: format!("Source: {}", content.title),
+                message: "Edit raw markdown and metadata, then save to create a revision."
+                    .to_string(),
+                rows: vec![],
+                links: vec![link(
+                    &format!("/admin/site/{}/content/{}", content.site_id, content.id),
+                    "Back to content",
+                )],
+                inline_body: format!(
+                    "{}{}",
+                    admin_site_content_source_form_html(&content),
+                    assets_html
+                ),
+                pre_body: String::new(),
+            }
+            .into_response()
         }
-        .into_response(),
         Err(error) => internal_error(format!("failed to load source for {content_id}: {error}")),
     }
 }
@@ -752,6 +985,55 @@ fn admin_site_content_source_form_html(content: &crate::entities::content_item::
     )
 }
 
+async fn render_asset_embed_library(database_url: &str, site_id: &str) -> Result<String, String> {
+    let assets = list_assets(database_url, site_id).await?;
+    if assets.is_empty() {
+        return Ok(
+            "<section class=\"embed-library\"><h2>Media Embeds</h2><p>No assets uploaded.</p></section>"
+                .to_string(),
+        );
+    }
+
+    let mut rows = String::new();
+    for asset in assets {
+        let variants = list_asset_variants(database_url, &asset.id).await?;
+        let mut variant_links = Vec::new();
+        variant_links.push(format!(
+            "<code>![{}](/media/images/{})</code>",
+            escape_html(&asset.original_filename),
+            escape_html(&asset.storage_basename)
+        ));
+        for variant in variants {
+            if variant.filename == asset.storage_basename {
+                continue;
+            }
+            variant_links.push(format!(
+                "<code>![{}](/media/images/{})</code>",
+                escape_html(&asset.original_filename),
+                escape_html(&variant.filename)
+            ));
+        }
+
+        rows.push_str(&format!(
+            "<li><strong>{}</strong> ({})<div class=\"embed-snippets\">{}</div></li>",
+            escape_html(&asset.original_filename),
+            escape_html(&asset.mime_type),
+            variant_links.join("<br/>")
+        ));
+    }
+
+    Ok(format!(
+        r#"
+      <section class="embed-library">
+        <h2>Media Embeds</h2>
+        <p>Use these snippets to embed assets.</p>
+        <ul>{}</ul>
+      </section>
+    "#,
+        rows
+    ))
+}
+
 async fn admin_site_content_advanced(
     State(state): State<AdminState>,
     Path((_site_id, content_id)): Path<(String, String)>,
@@ -819,6 +1101,17 @@ async fn admin_site_content_revisions(
 ) -> Response {
     match list_revisions(&state.database_url, &content_id).await {
         Ok(revisions) => {
+            let diff_links = revisions
+                .iter()
+                .filter(|revision| revision.revision_number > 1)
+                .map(|revision| {
+                    format!(
+                        "<li><a href=\"/admin/site/{}/content/{}/revisions/{}\">Diff revision {}</a></li>",
+                        site_id, content_id, revision.id, revision.revision_number
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
             let rows = revisions
                 .into_iter()
                 .map(|revision| AdminRow {
@@ -839,7 +1132,14 @@ async fn admin_site_content_revisions(
                     &format!("/admin/site/{site_id}/content/{content_id}"),
                     "Back to content",
                 )],
-                inline_body: String::new(),
+                inline_body: if diff_links.is_empty() {
+                    "<p>No diffs available for the first revision.</p>".to_string()
+                } else {
+                    format!(
+                        "<section class=\"revision-diffs\"><h2>Revision Diffs</h2><ul>{}</ul></section>",
+                        diff_links
+                    )
+                },
                 pre_body: String::new(),
             }
             .into_response()
@@ -848,6 +1148,86 @@ async fn admin_site_content_revisions(
             "failed to load revisions for {content_id}: {error}"
         )),
     }
+}
+
+async fn admin_site_revision_diff(
+    State(state): State<AdminState>,
+    Path((site_id, content_id, revision_id)): Path<(String, String, String)>,
+) -> Response {
+    let revision = match get_revision(&state.database_url, &revision_id).await {
+        Ok(revision) => revision,
+        Err(error) => {
+            return internal_error(format!("failed to load revision {revision_id}: {error}"));
+        }
+    };
+
+    if revision.content_id != content_id || revision.site_id != site_id {
+        return internal_error("revision does not belong to requested content".to_string());
+    }
+
+    let previous = if revision.revision_number > 1 {
+        match get_revision_by_number(
+            &state.database_url,
+            &revision.content_id,
+            revision.revision_number - 1,
+        )
+        .await
+        {
+            Ok(previous) => previous,
+            Err(error) => {
+                return internal_error(format!("failed to load previous revision: {error}"));
+            }
+        }
+    } else {
+        None
+    };
+
+    let diff_text = if let Some(previous) = previous {
+        let previous_label = format!("rev-{}", previous.revision_number);
+        let current_label = format!("rev-{}", revision.revision_number);
+        TextDiff::from_lines(&previous.page_content, &revision.page_content)
+            .unified_diff()
+            .header(&previous_label, &current_label)
+            .to_string()
+    } else {
+        "No previous revision available.".to_string()
+    };
+
+    AdminPageTemplate {
+        title: "Revision Diff".to_string(),
+        heading: format!("Diff for rev-{}", revision.revision_number),
+        message: format!(
+            "Comparing revision {} for content {}.",
+            revision.revision_number, revision.content_id
+        ),
+        rows: vec![
+            AdminRow {
+                label: "revision_id".to_string(),
+                value: revision.id,
+            },
+            AdminRow {
+                label: "created_at".to_string(),
+                value: revision.created_at,
+            },
+            AdminRow {
+                label: "editor_sub".to_string(),
+                value: revision.editor_sub,
+            },
+        ],
+        links: vec![
+            link(
+                &format!("/admin/site/{}/content/{}/revisions", site_id, content_id),
+                "Back to revisions",
+            ),
+            link(
+                &format!("/admin/site/{}/content/{}", site_id, content_id),
+                "Back to content",
+            ),
+        ],
+        inline_body: String::new(),
+        pre_body: diff_text,
+    }
+    .into_response()
 }
 
 async fn admin_site_tags(State(state): State<AdminState>, Path(site_id): Path<String>) -> Response {

@@ -1,7 +1,10 @@
 use chrono::{DateTime, Datelike, SecondsFormat, Utc};
+use quick_xml::Reader;
+use quick_xml::events::Event;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, Database, DatabaseBackend, DbErr,
-    EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set, Statement,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, Database, DatabaseBackend,
+    DatabaseConnection, DbErr, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
+    Statement,
 };
 use serde_json::json;
 use std::collections::HashSet;
@@ -10,6 +13,7 @@ use std::path::Path;
 use std::result::Result as StdResult;
 use tera::{Context, Tera};
 use tokio::fs;
+use url::Url;
 use uuid::Uuid;
 
 use crate::cli::{
@@ -271,10 +275,23 @@ pub async fn render_site(
         } else {
             "page.html"
         };
+        let tags = load_tag_names(&db, &item.id).await?;
+        let tag_links = render_tag_links(&tags);
         let mut context = Context::new();
         context.insert("title", &item.title);
         context.insert("content", &html);
         context.insert("slug", &item.slug);
+        context.insert("site_title", &site.full_title);
+        context.insert("page_type", &item.page_type);
+        context.insert("created_at", &item.created_at);
+        context.insert("published_at", &item.published_at);
+        context.insert("content_id", &item.id);
+        context.insert(
+            "primary_url",
+            &format!("/{}", content_primary_route(item).trim_matches('/')),
+        );
+        context.insert("tags", &tags);
+        context.insert("tag_links", &tag_links);
         let rendered = render_template(&tera, template, &context)?;
 
         for route in routes {
@@ -564,6 +581,44 @@ fn sanitize_tag_slug(tag_name: &str) -> String {
     } else {
         slug
     }
+}
+
+async fn load_tag_names(
+    db: &DatabaseConnection,
+    content_id: &str,
+) -> StdResult<Vec<String>, String> {
+    let links = entities::content_tag::Entity::find()
+        .filter(entities::content_tag::Column::ContentId.eq(content_id.to_owned()))
+        .all(db)
+        .await
+        .map_err(|error: DbErr| error.to_string())?;
+
+    if links.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let tag_ids = links
+        .into_iter()
+        .map(|link| link.tag_id)
+        .collect::<Vec<_>>();
+    let tags = entities::tag::Entity::find()
+        .filter(entities::tag::Column::Id.is_in(tag_ids))
+        .all(db)
+        .await
+        .map_err(|error: DbErr| error.to_string())?;
+
+    Ok(tags.into_iter().map(|tag| tag.name).collect())
+}
+
+fn render_tag_links(tags: &[String]) -> String {
+    if tags.is_empty() {
+        return String::new();
+    }
+    let links = tags
+        .iter()
+        .map(|tag| format!("<a href=\"/tags/{}/\">{}</a>", sanitize_tag_slug(tag), tag))
+        .collect::<Vec<_>>();
+    links.join(", ")
 }
 
 fn render_rss_items_xml(content_items: &[entities::content_item::Model]) -> String {
@@ -914,6 +969,213 @@ pub async fn search_content(
     Ok(items)
 }
 
+#[derive(Default, Clone)]
+struct WordpressItem {
+    post_id: Option<String>,
+    post_type: Option<String>,
+    title: Option<String>,
+    slug: Option<String>,
+    content: Option<String>,
+    status: Option<String>,
+    post_date_gmt: Option<String>,
+    link: Option<String>,
+}
+
+pub async fn import_wordpress(
+    database_url: &str,
+    site_id: &str,
+    file_path: &str,
+    creator_sub: &str,
+) -> StdResult<usize, String> {
+    let xml = fs::read_to_string(file_path)
+        .await
+        .map_err(|error| error.to_string())?;
+    let items = parse_wordpress_wxr(xml.as_str())?;
+    let mut imported = 0usize;
+
+    for item in items {
+        let post_type = item.post_type.unwrap_or_else(|| "post".to_string());
+        if post_type != "post" && post_type != "page" {
+            continue;
+        }
+
+        let title = item.title.unwrap_or_else(|| "Untitled".to_string());
+        let slug = item
+            .slug
+            .filter(|slug| !slug.trim().is_empty())
+            .unwrap_or_else(|| normalize_slug(&title));
+        let content = item.content.unwrap_or_default();
+        let status = item.status.unwrap_or_else(|| "draft".to_string());
+        let draft = status != "publish";
+        let published_at = item
+            .post_date_gmt
+            .as_deref()
+            .and_then(wordpress_date_to_rfc3339);
+
+        let content_model = create_content(
+            database_url,
+            NewContent {
+                site_id: site_id.to_string(),
+                page_type: post_type,
+                title,
+                slug,
+                page_content: content,
+                draft,
+                creator_sub: creator_sub.to_string(),
+                published_at,
+            },
+        )
+        .await?;
+
+        if let Some(post_id) = item.post_id {
+            let alias_path = format!("/?p={post_id}");
+            let _ = create_alias(
+                database_url,
+                NewAlias {
+                    content_id: content_model.id.clone(),
+                    site_id: site_id.to_string(),
+                    alias_path,
+                    kind: "alias".to_string(),
+                },
+            )
+            .await;
+        }
+
+        if let Some(link) = item.link
+            && let Some(alias_path) = wordpress_link_to_alias(&link)
+        {
+            let _ = create_alias(
+                database_url,
+                NewAlias {
+                    content_id: content_model.id.clone(),
+                    site_id: site_id.to_string(),
+                    alias_path,
+                    kind: "alias".to_string(),
+                },
+            )
+            .await;
+        }
+
+        imported = imported.saturating_add(1);
+    }
+
+    Ok(imported)
+}
+
+fn parse_wordpress_wxr(xml: &str) -> StdResult<Vec<WordpressItem>, String> {
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut items = Vec::new();
+    let mut current = WordpressItem::default();
+    let mut current_tag = String::new();
+    let mut in_item = false;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(event)) => {
+                let name = String::from_utf8_lossy(event.name().as_ref()).to_string();
+                if name == "item" {
+                    in_item = true;
+                    current = WordpressItem::default();
+                } else if in_item {
+                    current_tag = name;
+                }
+            }
+            Ok(Event::End(event)) => {
+                let name = String::from_utf8_lossy(event.name().as_ref()).to_string();
+                if name == "item" && in_item {
+                    in_item = false;
+                    items.push(current.clone());
+                    current = WordpressItem::default();
+                }
+                current_tag.clear();
+            }
+            Ok(Event::Text(event)) => {
+                if !in_item {
+                    buf.clear();
+                    continue;
+                }
+                let text = String::from_utf8_lossy(event.as_ref()).to_string();
+                assign_wordpress_field(&mut current, current_tag.as_str(), text.trim());
+            }
+            Ok(Event::CData(event)) => {
+                if !in_item {
+                    buf.clear();
+                    continue;
+                }
+                let text = String::from_utf8_lossy(event.as_ref()).to_string();
+                assign_wordpress_field(&mut current, current_tag.as_str(), text.as_str());
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => return Err(error.to_string()),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(items)
+}
+
+fn assign_wordpress_field(item: &mut WordpressItem, tag: &str, value: &str) {
+    match tag {
+        "title" => item.title = Some(value.to_string()),
+        "link" => item.link = Some(value.to_string()),
+        "wp:post_id" => item.post_id = Some(value.to_string()),
+        "wp:post_name" => item.slug = Some(value.to_string()),
+        "wp:post_type" => item.post_type = Some(value.to_string()),
+        "wp:status" => item.status = Some(value.to_string()),
+        "wp:post_date_gmt" => item.post_date_gmt = Some(value.to_string()),
+        "content:encoded" => item.content = Some(value.to_string()),
+        _ => {}
+    }
+}
+
+fn wordpress_date_to_rfc3339(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed == "0000-00-00 00:00:00" {
+        return None;
+    }
+    Some(format!("{}Z", trimmed.replace(' ', "T")))
+}
+
+fn wordpress_link_to_alias(link: &str) -> Option<String> {
+    if let Ok(url) = Url::parse(link) {
+        let mut path = url.path().to_string();
+        if let Some(query) = url.query() {
+            path.push('?');
+            path.push_str(query);
+        }
+        if !path.starts_with('/') {
+            path.insert(0, '/');
+        }
+        if path.is_empty() { None } else { Some(path) }
+    } else if link.starts_with('/') {
+        Some(link.to_string())
+    } else {
+        None
+    }
+}
+
+fn normalize_slug(value: &str) -> String {
+    let mut slug = String::new();
+    let mut previous_dash = false;
+    for c in value.to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c);
+            previous_dash = false;
+        } else if !previous_dash {
+            slug.push('-');
+            previous_dash = true;
+        }
+    }
+    let slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        "post".to_string()
+    } else {
+        slug
+    }
+}
+
 /// Returns a single content item by id.
 pub async fn get_content(
     database_url: &str,
@@ -1197,6 +1459,46 @@ pub async fn list_revisions(
     Ok(revisions)
 }
 
+/// Returns a single revision by id.
+pub async fn get_revision(
+    database_url: &str,
+    revision_id: &str,
+) -> StdResult<entities::content_revision::Model, String> {
+    let db = Database::connect(database_url)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let revision = entities::content_revision::Entity::find_by_id(revision_id)
+        .one(&db)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "revision not found".to_string())?;
+
+    let _ = db.close().await;
+    Ok(revision)
+}
+
+/// Returns a revision by number, if present.
+pub async fn get_revision_by_number(
+    database_url: &str,
+    content_id: &str,
+    revision_number: i32,
+) -> StdResult<Option<entities::content_revision::Model>, String> {
+    let db = Database::connect(database_url)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let revision = entities::content_revision::Entity::find()
+        .filter(entities::content_revision::Column::ContentId.eq(content_id.to_owned()))
+        .filter(entities::content_revision::Column::RevisionNumber.eq(revision_number))
+        .one(&db)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let _ = db.close().await;
+    Ok(revision)
+}
+
 pub fn content_primary_route(content: &entities::content_item::Model) -> String {
     let slug = content.slug.trim_matches('/').to_string();
     if content.page_type != "post" {
@@ -1255,6 +1557,44 @@ pub async fn list_users(database_url: &str) -> StdResult<Vec<entities::user::Mod
 
     let _ = db.close().await;
     Ok(users)
+}
+
+/// Ensures a user exists and updates last_login_at.
+pub async fn upsert_user_login(
+    database_url: &str,
+    subject: &str,
+) -> StdResult<entities::user::Model, String> {
+    let db = Database::connect(database_url)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let existing = entities::user::Entity::find()
+        .filter(entities::user::Column::Subject.eq(subject.to_string()))
+        .one(&db)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let user = if let Some(existing) = existing {
+        let mut active = existing.into_active_model();
+        active.last_login_at = Set(Some(utc_now()));
+        active
+            .update(&db)
+            .await
+            .map_err(|error| error.to_string())?
+    } else {
+        entities::user::ActiveModel {
+            id: Set(uuid_v7()),
+            subject: Set(subject.to_string()),
+            created_at: Set(utc_now()),
+            last_login_at: Set(Some(utc_now())),
+        }
+        .insert(&db)
+        .await
+        .map_err(|error| error.to_string())?
+    };
+
+    let _ = db.close().await;
+    Ok(user)
 }
 
 /// Creates one site membership record.
@@ -2016,6 +2356,26 @@ pub async fn execute(
                 for row in tags {
                     println!("{}\t{}", row.id, row.name);
                 }
+                Ok(())
+            }
+            ContentCommands::ImportWordpress {
+                site_id,
+                file_path,
+                creator_sub,
+            } => {
+                let imported =
+                    import_wordpress(database_url, &site_id, &file_path, &creator_sub).await?;
+                let _ = log_audit_event(
+                    database_url,
+                    &creator_sub,
+                    "import_wordpress",
+                    "content_item",
+                    &site_id,
+                    Some(&site_id),
+                    Some(&format!("{}", json!({"imported": imported}))),
+                )
+                .await?;
+                println!("imported {} wordpress items", imported);
                 Ok(())
             }
         },

@@ -32,3 +32,9 @@ ul {
   line-height: 1.65;
   margin-top: 0.5rem;
 }
+
+.meta {
+  color: #5b6479;
+  margin: 0.25rem 0;
+  font-size: 0.9rem;
+}

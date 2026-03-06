@@ -12,13 +12,19 @@ chrono = "0.4.44"
 clap = { version = "4.5.60", features = ["derive", "env"] }
 image = "0.25.9"
 markdown = "1.0.0"
+openidconnect = { version = "4.0.1", features = ["reqwest"] }
+quick-xml = "0.39.2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 sea-orm = { version = "1.1.19", features = [
     "runtime-tokio-rustls",
     "sqlx-sqlite",
 ] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+similar = "2.7.0"
 tera = "1.20.1"
 tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros"] }
+tower-sessions = "0.15.0"
 tracing = { version = "0.1.44", features = ["log"] }
+url = "2.5.8"
 uuid = { version = "1.22.0", features = ["v7"] }
