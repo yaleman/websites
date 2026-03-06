@@ -85,6 +85,13 @@ pub const SCHEMA_SQL: &[&str] = &[
         kind TEXT NOT NULL CHECK(kind IN ('primary', 'alias'))
     );",
     "CREATE INDEX IF NOT EXISTS idx_content_revision_alias_revision_id ON content_revision_alias(revision_id);",
+    "CREATE TABLE IF NOT EXISTS content_revision_tag (
+        id TEXT PRIMARY KEY,
+        revision_id TEXT NOT NULL REFERENCES content_revision(id) ON DELETE CASCADE,
+        tag_id TEXT NOT NULL REFERENCES tag(id) ON DELETE CASCADE,
+        UNIQUE(revision_id, tag_id)
+    );",
+    "CREATE INDEX IF NOT EXISTS idx_content_revision_tag_revision_id ON content_revision_tag(revision_id);",
     "CREATE TABLE IF NOT EXISTS asset (
         id TEXT PRIMARY KEY,
         site_id TEXT NOT NULL REFERENCES site(id) ON DELETE CASCADE,
