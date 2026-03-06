@@ -1,19 +1,26 @@
-use std::collections::HashSet;
-use std::io::ErrorKind;
-use std::path::Path;
-use std::result::Result as StdResult;
-
 use chrono::{DateTime, Datelike, SecondsFormat, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseBackend, DbErr, EntityTrait,
     IntoActiveModel, QueryFilter, QueryOrder, Set, Statement,
 };
+use serde_json::json;
+use std::collections::HashSet;
+use std::io::ErrorKind;
+use std::path::Path;
+use std::result::Result as StdResult;
 use tokio::fs;
 use uuid::Uuid;
 
-pub mod entities;
+use crate::cli::{
+    AssetCommands, AuditCommands, Commands, ContentCommands, OidcConfig, ServeCommands,
+    SiteCommands, UserCommands,
+};
 
+pub mod cli;
+pub mod entities;
+pub mod middleware;
 pub mod migration;
+pub mod web;
 
 pub struct NewContent {
     pub site_id: String,
@@ -1345,4 +1352,645 @@ pub async fn list_asset_variants(
 
     let _ = db.close().await;
     Ok(variants)
+}
+
+pub async fn execute(
+    command: Commands,
+    database_url: &str,
+    oidc: &OidcConfig,
+) -> Result<(), String> {
+    match command {
+        Commands::Init => {
+            ensure_schema(database_url).await?;
+            println!("database initialized: {}", database_url);
+            Ok(())
+        }
+        Commands::ShowConfig => {
+            println!("tls_cert_path={}", cli_value(&oidc.tls_cert_path));
+            println!("tls_key_path={}", cli_value(&oidc.tls_key_path));
+            println!("frontend_url={}", cli_value(&oidc.frontend_url));
+            println!("oidc_client_id={}", cli_value(&oidc.oidc_client_id));
+            println!("oidc_discovery_url={}", cli_value(&oidc.oidc_discovery_url));
+            Ok(())
+        }
+        Commands::Site { command } => match command {
+            SiteCommands::Create {
+                short_name,
+                full_title,
+                template_name,
+            } => {
+                let site = create_site(database_url, short_name, full_title, template_name).await?;
+                let _ = log_audit_event(
+                    database_url,
+                    "system",
+                    "create_site",
+                    "site",
+                    &site.id,
+                    Some(&site.id),
+                    Some(&format!(
+                        "{}",
+                        json!(
+                            {"short_name":&site.short_name,"full_title":&site.full_title}
+                        )
+                    )),
+                )
+                .await?;
+                println!("created site: {} ({})", site.id, site.short_name);
+                Ok(())
+            }
+            SiteCommands::List => {
+                let sites = list_sites(database_url).await?;
+                if sites.is_empty() {
+                    println!("no sites");
+                    return Ok(());
+                }
+
+                println!("short_name\tfull_title\ttemplate_name");
+                for site in sites {
+                    println!(
+                        "{}\t{}\t{}",
+                        site.short_name, site.full_title, site.template_name
+                    );
+                }
+                Ok(())
+            }
+            SiteCommands::MemberAdd {
+                site_id,
+                user_id,
+                role,
+            } => {
+                let membership = create_membership(
+                    database_url,
+                    NewMembership {
+                        site_id,
+                        user_id,
+                        role,
+                    },
+                )
+                .await?;
+                let _ = log_audit_event(
+                    database_url,
+                    "system",
+                    "create_membership",
+                    "site_membership",
+                    &membership.id,
+                    Some(&membership.site_id),
+                    Some(&format!("{}", json!(
+                         {"site_id":&membership.site_id,"user_id":&membership.user_id,"role":&membership.role}
+                    ))),
+                )
+                .await?;
+                println!("created membership: {} {}", membership.id, membership.role);
+                Ok(())
+            }
+            SiteCommands::MemberList { site_id } => {
+                let memberships = list_memberships(database_url, &site_id).await?;
+                if memberships.is_empty() {
+                    println!("no memberships");
+                    return Ok(());
+                }
+
+                println!("id\tsite_id\tuser_id\trole");
+                for row in memberships {
+                    println!("{}\t{}\t{}\t{}", row.id, row.site_id, row.user_id, row.role);
+                }
+                Ok(())
+            }
+            SiteCommands::TagCreate { site_id, name } => {
+                let tag = create_tag(database_url, NewTag { site_id, name }).await?;
+                let _ = log_audit_event(
+                    database_url,
+                    "system",
+                    "create_tag",
+                    "tag",
+                    &tag.id,
+                    Some(&tag.site_id),
+                    Some(&format!("{}", json!({"name":&tag.name}))),
+                )
+                .await?;
+                println!("created tag: {} {}", tag.id, tag.name);
+                Ok(())
+            }
+            SiteCommands::TagList { site_id } => {
+                let tags = list_tags(database_url, &site_id).await?;
+                if tags.is_empty() {
+                    println!("no tags");
+                    return Ok(());
+                }
+
+                println!("id\tname");
+                for row in tags {
+                    println!("{}\t{}", row.id, row.name);
+                }
+                Ok(())
+            }
+            SiteCommands::Render {
+                site_id,
+                templates_dir,
+                rendered_dir,
+            } => {
+                let files_written =
+                    render_site(database_url, &site_id, &templates_dir, &rendered_dir).await?;
+                println!("rendered site {} files {}", site_id, files_written);
+                Ok(())
+            }
+        },
+        Commands::User { command } => match command {
+            UserCommands::Create { subject } => {
+                let user = create_user(database_url, NewUser { subject }).await?;
+                let _ = log_audit_event(
+                    database_url,
+                    "system",
+                    "create_user",
+                    "user",
+                    &user.id,
+                    None,
+                    Some(&format!("{}", json!({"subject":&user.subject}))),
+                )
+                .await?;
+                println!("created user: {} {}", user.id, user.subject);
+                Ok(())
+            }
+            UserCommands::List => {
+                let users = list_users(database_url).await?;
+                if users.is_empty() {
+                    println!("no users");
+                    return Ok(());
+                }
+
+                println!("id\tsubject\tlast_login_at");
+                for row in users {
+                    println!("{}\t{}\t{:?}", row.id, row.subject, row.last_login_at);
+                }
+                Ok(())
+            }
+        },
+        Commands::Asset { command } => match command {
+            AssetCommands::Create {
+                site_id,
+                uploader_sub,
+                original_filename,
+                storage_basename,
+                mime_type,
+                byte_length,
+                width,
+                height,
+            } => {
+                let asset = create_asset(
+                    database_url,
+                    NewAsset {
+                        site_id,
+                        uploader_sub,
+                        original_filename,
+                        storage_basename,
+                        mime_type,
+                        byte_length,
+                        width,
+                        height,
+                    },
+                )
+                .await?;
+                let _ = log_audit_event(
+                    database_url,
+                    &asset.uploader_sub,
+                    "create_asset",
+                    "asset",
+                    &asset.id,
+                    Some(&asset.site_id),
+                    Some(&format!(
+                        "{}",
+                        json!({"original_filename":&asset.original_filename,"storage_basename":&asset.storage_basename})
+                    )),
+                )
+                .await?;
+                println!("created asset: {} {}", asset.id, asset.original_filename);
+                Ok(())
+            }
+            AssetCommands::List { site_id } => {
+                let assets = list_assets(database_url, &site_id).await?;
+                if assets.is_empty() {
+                    println!("no assets");
+                    return Ok(());
+                }
+
+                println!("id\toriginal_filename\tstorage_basename\tmime_type");
+                for row in assets {
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        row.id, row.original_filename, row.storage_basename, row.mime_type
+                    );
+                }
+                Ok(())
+            }
+            AssetCommands::VariantCreate {
+                asset_id,
+                variant_kind,
+                filename,
+                mime_type,
+                byte_length,
+                width,
+                height,
+            } => {
+                let variant = create_asset_variant(
+                    database_url,
+                    NewAssetVariant {
+                        asset_id,
+                        variant_kind,
+                        filename,
+                        mime_type,
+                        byte_length,
+                        width,
+                        height,
+                    },
+                )
+                .await?;
+                let _ = log_audit_event(
+                    database_url,
+                    "system",
+                    "create_asset_variant",
+                    "asset_variant",
+                    &variant.id,
+                    Some(&variant.asset_id),
+                    Some(&format!(
+                        "{}",
+                        json!({"variant_kind":&variant.variant_kind,"filename":&variant.filename})
+                    )),
+                )
+                .await?;
+                println!("created variant: {} {}", variant.id, variant.filename);
+                Ok(())
+            }
+            AssetCommands::VariantList { asset_id } => {
+                let variants = list_asset_variants(database_url, &asset_id).await?;
+                if variants.is_empty() {
+                    println!("no variants");
+                    return Ok(());
+                }
+
+                println!("id\tasset_id\tvariant_kind\tfilename\tmime_type");
+                for row in variants {
+                    println!(
+                        "{}\t{}\t{}\t{}\t{}",
+                        row.id, row.asset_id, row.variant_kind, row.filename, row.mime_type
+                    );
+                }
+                Ok(())
+            }
+        },
+        Commands::Serve { command } => match command {
+            ServeCommands::Admin { listen } => {
+                web::run_admin_server(database_url, &listen, oidc).await
+            }
+        },
+        Commands::Audit { command } => match command {
+            AuditCommands::List { site_id } => {
+                let events = list_audit_events(database_url, site_id.as_deref()).await?;
+                if events.is_empty() {
+                    println!("no audit events");
+                    return Ok(());
+                }
+
+                println!(
+                    "id\tsite_id\tactor_sub\tevent_type\tentity_type\tentity_id\tcreated_at\tpayload_json"
+                );
+                for event in events {
+                    let site_id = event.site_id.unwrap_or_else(|| "-".to_string());
+                    let payload = event.payload_json.unwrap_or_else(|| "null".to_string());
+                    println!(
+                        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                        event.id,
+                        site_id,
+                        event.actor_sub,
+                        event.event_type,
+                        event.entity_type,
+                        event.entity_id,
+                        event.created_at,
+                        payload
+                    );
+                }
+                Ok(())
+            }
+        },
+        Commands::Content { command } => match command {
+            ContentCommands::Create {
+                site_id,
+                page_type,
+                title,
+                slug,
+                page_content,
+                creator_sub,
+                draft,
+                published_at,
+            } => {
+                let content = create_content(
+                    database_url,
+                    NewContent {
+                        site_id,
+                        page_type,
+                        title,
+                        slug,
+                        page_content,
+                        creator_sub,
+                        draft,
+                        published_at,
+                    },
+                )
+                .await?;
+                let _ = log_audit_event(
+                    database_url,
+                    &content.creator_sub,
+                    "create_content",
+                    "content_item",
+                    &content.id,
+                    Some(&content.site_id),
+                    Some(&format!(
+                        "{}",
+                        json!({
+                            "page_type": &content.page_type,
+                            "slug": &content.slug,
+                            "title": &content.title,
+                            "draft": content.draft
+                        })
+                    )),
+                )
+                .await?;
+                println!("created content: {} {}", content.id, content.title);
+                Ok(())
+            }
+            ContentCommands::List { site_id, page_type } => {
+                let page_filter = page_type.as_deref();
+                let content = list_content(database_url, &site_id, page_filter).await?;
+                if content.is_empty() {
+                    println!("no content");
+                    return Ok(());
+                }
+
+                println!("id\ttitle\tslug\tpage_type\tdraft\tcreated_at\tpublished_at\turl");
+                for row in content {
+                    let published_at = row
+                        .published_at
+                        .as_ref()
+                        .map_or_else(|| "n/a".to_string(), |value| value.clone());
+                    let public_path = content_primary_route(&row);
+                    let public_url = format!("/{}/", public_path.trim_matches('/'));
+                    println!(
+                        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                        row.id,
+                        row.title,
+                        row.slug,
+                        row.page_type,
+                        row.draft,
+                        row.created_at,
+                        published_at,
+                        public_url
+                    );
+                }
+                Ok(())
+            }
+            ContentCommands::AliasCreate {
+                content_id,
+                site_id,
+                alias_path,
+                kind,
+            } => {
+                let alias = create_alias(
+                    database_url,
+                    NewAlias {
+                        content_id,
+                        site_id,
+                        alias_path,
+                        kind,
+                    },
+                )
+                .await?;
+                let _ = log_audit_event(
+                    database_url,
+                    "system",
+                    "create_alias",
+                    "content_alias",
+                    &alias.id,
+                    Some(&alias.site_id),
+                    Some(&format!(
+                        "{}",
+                        json!({
+                            "content_id": &alias.content_id,
+                            "alias_path": &alias.alias_path,
+                            "kind": &alias.kind
+                        })
+                    )),
+                )
+                .await?;
+                println!("created alias: {} {}", alias.id, alias.alias_path);
+                Ok(())
+            }
+            ContentCommands::AliasList {
+                site_id,
+                content_id,
+            } => {
+                let content_filter = content_id.as_deref();
+                let aliases = list_aliases(database_url, &site_id, content_filter).await?;
+                if aliases.is_empty() {
+                    println!("no aliases");
+                    return Ok(());
+                }
+
+                println!("id\tcontent_id\talias_path\tkind");
+                for row in aliases {
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        row.id, row.content_id, row.alias_path, row.kind
+                    );
+                }
+                Ok(())
+            }
+            ContentCommands::Revisions { content_id } => {
+                let revisions = list_revisions(database_url, &content_id).await?;
+                if revisions.is_empty() {
+                    println!("no revisions");
+                    return Ok(());
+                }
+
+                println!("id\trevision_number\ttitle\tdraft\tcreated_at");
+                for row in revisions {
+                    println!(
+                        "{}\t{}\t{}\t{}\t{}",
+                        row.id, row.revision_number, row.title, row.draft, row.created_at
+                    );
+                }
+                Ok(())
+            }
+            ContentCommands::RevisionAliases { revision_id } => {
+                let aliases = list_revision_aliases(database_url, &revision_id).await?;
+                if aliases.is_empty() {
+                    println!("no revision aliases");
+                    return Ok(());
+                }
+
+                println!("id\talias_path\tkind");
+                for row in aliases {
+                    println!("{}\t{}\t{}", row.id, row.alias_path, row.kind);
+                }
+                Ok(())
+            }
+            ContentCommands::RevisionTags { revision_id } => {
+                let tags = list_revision_tags(database_url, &revision_id).await?;
+                if tags.is_empty() {
+                    println!("no revision tags");
+                    return Ok(());
+                }
+
+                println!("id\tname");
+                for row in tags {
+                    println!("{}\t{}", row.id, row.name);
+                }
+                Ok(())
+            }
+            ContentCommands::Inspect { content_id } => {
+                let content = get_content(database_url, &content_id).await?;
+                let aliases =
+                    list_aliases(database_url, &content.site_id, Some(&content_id)).await?;
+                let tags = list_content_tags(database_url, &content_id).await?;
+                let revisions = list_revisions(database_url, &content_id).await?;
+
+                let public_path = content_primary_route(&content);
+                println!("id:\t{}", content.id);
+                println!("site_id:\t{}", content.site_id);
+                println!("title:\t{}", content.title);
+                println!("slug:\t{}", content.slug);
+                println!("page_type:\t{}", content.page_type);
+                println!("draft:\t{}", content.draft);
+                println!(
+                    "published_at:\t{}",
+                    content.published_at.as_deref().unwrap_or("n/a")
+                );
+                println!("created_at:\t{}", content.created_at);
+                println!("updated_at:\t{}", content.last_updated);
+                println!("primary_route:\t/{}", public_path.trim_matches('/'));
+                println!("aliases:");
+                if aliases.is_empty() {
+                    println!("\t(none)");
+                } else {
+                    for alias in aliases {
+                        println!("\t{}\t{}", alias.kind, alias.alias_path);
+                    }
+                }
+                println!("tags:");
+                if tags.is_empty() {
+                    println!("\t(none)");
+                } else {
+                    for tag in tags {
+                        println!("\t{}", tag.name);
+                    }
+                }
+                println!("revisions:\t{}", revisions.len());
+                if let Some(latest_revision) = revisions.first() {
+                    println!(
+                        "latest_revision:\t{} @ {}",
+                        latest_revision.revision_number, latest_revision.created_at
+                    );
+                }
+                Ok(())
+            }
+            ContentCommands::Update {
+                content_id,
+                page_type,
+                title,
+                slug,
+                page_content,
+                draft,
+                published_at,
+                editor_sub,
+            } => {
+                let content = update_content(
+                    database_url,
+                    UpdateContent {
+                        content_id,
+                        page_type,
+                        title,
+                        slug,
+                        page_content,
+                        draft,
+                        published_at,
+                        editor_sub,
+                    },
+                )
+                .await?;
+                let _ = log_audit_event(
+                    database_url,
+                    &content.creator_sub,
+                    "update_content",
+                    "content_item",
+                    &content.id,
+                    Some(&content.site_id),
+                    Some(&format!(
+                        "{}",
+                        json!({
+                            "content_id": &content.id,
+                            "page_type": &content.page_type,
+                            "slug": &content.slug,
+                            "title": &content.title
+                        })
+                    )),
+                )
+                .await?;
+                println!("updated content: {} {}", content.id, content.title);
+                Ok(())
+            }
+            ContentCommands::TagAdd {
+                content_id,
+                site_id,
+                tag_name,
+            } => {
+                let content_tag = add_content_tag(
+                    database_url,
+                    NewContentTag {
+                        content_id,
+                        site_id,
+                        tag_name,
+                    },
+                )
+                .await?;
+                let _ = log_audit_event(
+                    database_url,
+                    "system",
+                    "add_content_tag",
+                    "content_tag",
+                    &content_tag.id,
+                    Some(&content_tag.content_id),
+                    Some(&format!(
+                        "{}",
+                        json!({
+                            "content_id": &content_tag.content_id,
+                            "tag_id": &content_tag.tag_id
+                        })
+                    )),
+                )
+                .await?;
+                println!(
+                    "linked content tag: {} {}",
+                    content_tag.id, content_tag.tag_id
+                );
+                Ok(())
+            }
+            ContentCommands::TagList { content_id } => {
+                let tags = list_content_tags(database_url, &content_id).await?;
+                if tags.is_empty() {
+                    println!("no tags");
+                    return Ok(());
+                }
+
+                println!("id\tname");
+                for row in tags {
+                    println!("{}\t{}", row.id, row.name);
+                }
+                Ok(())
+            }
+        },
+    }
+}
+
+fn cli_value(value: &Option<String>) -> String {
+    value
+        .as_deref()
+        .map_or_else(|| "<unset>".to_string(), |value| value.to_string())
 }
