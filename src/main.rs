@@ -22,7 +22,7 @@ struct Cli {
     #[arg(
         short = 'd',
         long = "database-url",
-        default_value = "sqlite://./database.sqlite",
+        default_value = "sqlite://./database.sqlite?mode=rwc",
         help = "SQLite database URL for the management database"
     )]
     database_url: String,
@@ -345,7 +345,11 @@ enum ContentCommands {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    let command = cli.command.unwrap_or(Commands::Init);
+    let command = cli.command.unwrap_or(Commands::Serve {
+        command: ServeCommands::Admin {
+            listen: "127.0.0.1:3000".to_string(),
+        },
+    });
 
     if let Err(error) = execute(command, &cli.database_url, &cli.oidc).await {
         eprintln!("error: {}", error);
