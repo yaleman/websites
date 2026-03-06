@@ -1,9 +1,10 @@
 use askama::Template;
+use askama_web::WebTemplate;
 use axum::http::StatusCode;
 use axum::{
     Router,
     extract::{Path, State},
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::get,
 };
 use websites::{
@@ -21,7 +22,7 @@ struct AdminState {
     oidc_discovery_url: Option<String>,
 }
 
-#[derive(Template)]
+#[derive(Template, WebTemplate)]
 #[template(path = "admin/page.html")]
 struct AdminPageTemplate {
     title: String,
@@ -59,32 +60,36 @@ pub async fn run_admin_server(
     };
 
     let app = Router::new()
+        .route("/", get(admin_root))
         .route("/admin", get(admin_index))
         .route("/admin/sites", get(admin_sites))
         .route("/admin/sites/new", get(admin_sites_new))
         .route("/admin/login", get(admin_login))
         .route("/admin/logout", get(admin_logout))
-        .route("/admin/site/:site_id/content", get(admin_site_content_list))
         .route(
-            "/admin/site/:site_id/content/:content_id",
+            "/admin/site/{site_id}/content",
+            get(admin_site_content_list),
+        )
+        .route(
+            "/admin/site/{site_id}/content/{content_id}",
             get(admin_site_content_detail),
         )
         .route(
-            "/admin/site/:site_id/content/:content_id/source",
+            "/admin/site/{site_id}/content/{content_id}/source",
             get(admin_site_content_source),
         )
         .route(
-            "/admin/site/:site_id/content/:content_id/advanced",
+            "/admin/site/{site_id}/content/{content_id}/advanced",
             get(admin_site_content_advanced),
         )
         .route(
-            "/admin/site/:site_id/content/:content_id/revisions",
+            "/admin/site/{site_id}/content/{content_id}/revisions",
             get(admin_site_content_revisions),
         )
-        .route("/admin/site/:site_id/tags", get(admin_site_tags))
-        .route("/admin/site/:site_id/assets", get(admin_site_assets))
-        .route("/admin/site/:site_id/settings", get(admin_site_settings))
-        .route("/admin/site/:site_id/render", get(admin_site_render))
+        .route("/admin/site/{site_id}/tags", get(admin_site_tags))
+        .route("/admin/site/{site_id}/assets", get(admin_site_assets))
+        .route("/admin/site/{site_id}/settings", get(admin_site_settings))
+        .route("/admin/site/{site_id}/render", get(admin_site_render))
         .route("/admin/assets/style.css", get(admin_style_css))
         .with_state(state);
 
@@ -99,6 +104,10 @@ pub async fn run_admin_server(
         .map_err(|error| error.to_string())
 }
 
+async fn admin_root() -> Redirect {
+    Redirect::to("/admin")
+}
+
 async fn admin_style_css() -> impl IntoResponse {
     (
         [(axum::http::header::CONTENT_TYPE, "text/css; charset=utf-8")],
@@ -106,7 +115,7 @@ async fn admin_style_css() -> impl IntoResponse {
     )
 }
 
-async fn admin_index(State(state): State<AdminState>) -> Response {
+async fn admin_index(State(state): State<AdminState>) -> AdminPageTemplate {
     let mut links = vec![
         link("/admin/sites", "Sites"),
         link("/admin/login", "Login"),
@@ -134,7 +143,6 @@ async fn admin_index(State(state): State<AdminState>) -> Response {
         links,
         pre_body: String::new(),
     }
-    .into_response()
 }
 
 async fn admin_sites(State(state): State<AdminState>) -> Response {
@@ -586,13 +594,4 @@ fn link(href: &str, label: &str) -> AdminLink {
 
 fn internal_error(error: String) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, error).into_response()
-}
-
-impl IntoResponse for AdminPageTemplate {
-    fn into_response(self) -> Response {
-        match self.render() {
-            Ok(rendered) => rendered.into_response(),
-            Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
-        }
-    }
 }
