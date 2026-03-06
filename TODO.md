@@ -15,7 +15,7 @@
   - [x] Add `show-config` command
 - [ ] Implement web authentication + OIDC login/logout flow
   - Requires session store + OIDC integration
-- [ ] Add admin route set
+- [x] Add admin route set
   - `/admin`
   - `/admin/sites`
   - `/admin/sites/new`
@@ -30,7 +30,7 @@
   - `/admin/site/<site_id>/assets`
   - `/admin/site/<site_id>/settings`
   - `/admin/site/<site_id>/render`
-- [ ] Serve admin UI via server-rendered HTML (no SPA dependency)
+- [x] Serve admin UI via server-rendered HTML (no SPA dependency)
 
 ## Phase 2 — Content features
 

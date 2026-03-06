@@ -1,5 +1,6 @@
 pub mod asset;
 pub mod asset_variant;
+pub mod audit_event;
 pub mod content_alias;
 pub mod content_item;
 pub mod content_revision;

@@ -1,0 +1,37 @@
+body {
+  font-family: "Inter", Arial, sans-serif;
+  max-width: 920px;
+  margin: 1.5rem auto;
+  line-height: 1.35;
+  padding: 0 1rem;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  border: 1px solid #aaa;
+  padding: 0.5rem;
+  text-align: left;
+}
+
+nav a {
+  margin-right: 0.8rem;
+}
+
+pre {
+  border: 1px solid #aaa;
+  background: #f6f6f6;
+  padding: 0.8rem;
+  overflow: auto;
+}
+
+.message {
+  margin-bottom: 1rem;
+  background: #eef;
+  padding: 0.6rem;
+  border: 1px solid #99b;
+}
