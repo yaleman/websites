@@ -2768,6 +2768,7 @@ dependencies = [
  "clap",
  "markdown",
  "sea-orm",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",

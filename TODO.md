@@ -38,6 +38,8 @@
 ## Phase 2 — Content features
 
 - [x] Hook admin actions to `audit_event` logging table
+- [x] Implement server-rendered site create flow at `/admin/sites/new`
+- [x] Implement server-rendered content create flow at `/admin/site/<site_id>/content/new`
 - [ ] Implement media upload pipeline and derivative generation (thumbnail creation)
 - [ ] Add source-mode editor flow
 - [ ] Add scheduled publishing capabilities (beyond `published_at` field)
