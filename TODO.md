@@ -40,19 +40,19 @@
 - [x] Hook admin actions to `audit_event` logging table
 - [x] Implement server-rendered site create flow at `/admin/sites/new`
 - [x] Implement server-rendered content create flow at `/admin/site/<site_id>/content/new`
-- [ ] Implement media upload pipeline and derivative generation (thumbnail creation)
-- [ ] Add source-mode editor flow
-- [ ] Add scheduled publishing capabilities (beyond `published_at` field)
+- [x] Implement media upload pipeline and derivative generation (thumbnail creation)
+- [x] Add source-mode editor flow
+- [x] Add scheduled publishing capabilities (beyond `published_at` field)
 
 ## Phase 3 — Advanced features
 
 - [ ] Build WordPress import/migration tooling using alias preservation
 - [ ] Implement revision diff viewer
-- [ ] Add content search
+- [x] Add content search
 - [ ] Add media embedding support in editor
 
 ## Template/rendering backlog
 
-- [ ] Decide and finalize template engine strategy (PLAN mentions Askama/Tera direction)
-- [ ] Migrate current fixed-string template rendering to chosen engine
+- [x] Decide and finalize template engine strategy (PLAN mentions Askama/Tera direction)
+- [x] Migrate current fixed-string template rendering to chosen engine
 - [ ] Expand template coverage/slots as needed for metadata and edge cases

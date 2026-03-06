@@ -1,13 +1,14 @@
 use chrono::{DateTime, Datelike, SecondsFormat, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseBackend, DbErr, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, Set, Statement,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, Database, DatabaseBackend, DbErr,
+    EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set, Statement,
 };
 use serde_json::json;
 use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::result::Result as StdResult;
+use tera::{Context, Tera};
 use tokio::fs;
 use uuid::Uuid;
 
@@ -198,6 +199,11 @@ pub async fn render_site(
         .all(&db)
         .await
         .map_err(|error| error.to_string())?;
+    let now = Utc::now();
+    let content_items = content_items
+        .into_iter()
+        .filter(|item| content_is_publishable_at(item, now))
+        .collect::<Vec<_>>();
 
     let template_root = Path::new(templates_dir).join(site.template_name.clone());
     let post_template = load_template(&template_root, "post.html", DEFAULT_POST_TEMPLATE).await?;
@@ -207,6 +213,21 @@ pub async fn render_site(
     let rss_template = load_template(&template_root, "rss.xml", DEFAULT_RSS_TEMPLATE).await?;
     let atom_template = load_template(&template_root, "atom.xml", DEFAULT_ATOM_TEMPLATE).await?;
     let tag_template = load_template(&template_root, "tag.html", DEFAULT_TAG_TEMPLATE).await?;
+
+    let mut tera = Tera::default();
+    tera.autoescape_on(vec![]);
+    tera.add_raw_template("post.html", &post_template)
+        .map_err(|error| error.to_string())?;
+    tera.add_raw_template("page.html", &page_template)
+        .map_err(|error| error.to_string())?;
+    tera.add_raw_template("index.html", &index_template)
+        .map_err(|error| error.to_string())?;
+    tera.add_raw_template("rss.xml", &rss_template)
+        .map_err(|error| error.to_string())?;
+    tera.add_raw_template("atom.xml", &atom_template)
+        .map_err(|error| error.to_string())?;
+    tera.add_raw_template("tag.html", &tag_template)
+        .map_err(|error| error.to_string())?;
 
     let rendered_root = Path::new(rendered_dir).join(site.short_name.clone());
     let tmp_root = Path::new(rendered_dir).join(format!("{}.tmp", site.short_name));
@@ -244,14 +265,17 @@ pub async fn render_site(
             routes.insert(alias.alias_path);
         }
 
-        let template = if item.page_type == "post" {
-            post_template.as_str()
-        } else {
-            page_template.as_str()
-        };
-
         let html = markdown::to_html(&item.page_content);
-        let rendered = apply_content_template(template, &item.title, &html, &item.slug);
+        let template = if item.page_type == "post" {
+            "post.html"
+        } else {
+            "page.html"
+        };
+        let mut context = Context::new();
+        context.insert("title", &item.title);
+        context.insert("content", &html);
+        context.insert("slug", &item.slug);
+        let rendered = render_template(&tera, template, &context)?;
 
         for route in routes {
             let route = route.trim_end_matches('/').trim_start_matches('/');
@@ -278,8 +302,10 @@ pub async fn render_site(
         ));
     }
 
-    let rendered_index =
-        apply_index_template(index_template.as_str(), &site.full_title, &index_rows);
+    let mut index_context = Context::new();
+    index_context.insert("site", &site.full_title);
+    index_context.insert("items", &index_rows);
+    let rendered_index = render_template(&tera, "index.html", &index_context)?;
     fs::create_dir_all(&tmp_root)
         .await
         .map_err(|error| error.to_string())?;
@@ -295,19 +321,28 @@ pub async fn render_site(
         .collect::<Vec<_>>();
 
     let rss_items = render_rss_items_xml(&post_items);
-    let rendered_rss = apply_rss_template(rss_template.as_str(), &site.full_title, &rss_items);
+    let mut rss_context = Context::new();
+    rss_context.insert("site", &site.full_title);
+    rss_context.insert("link", "/");
+    rss_context.insert("updated", &Utc::now().to_rfc2822());
+    rss_context.insert("items", &rss_items);
+    let rendered_rss = render_template(&tera, "rss.xml", &rss_context)?;
     fs::write(tmp_root.join("rss.xml"), rendered_rss.as_bytes())
         .await
         .map_err(|error| error.to_string())?;
     files_written = files_written.saturating_add(1);
 
     let atom_entries = render_atom_entries_xml(&post_items);
-    let rendered_atom = apply_atom_template(
-        atom_template.as_str(),
-        &site.full_title,
-        &post_items,
-        &atom_entries,
-    );
+    let updated = post_items
+        .first()
+        .map(content_publish_timestamp)
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
+    let mut atom_context = Context::new();
+    atom_context.insert("site", &site.full_title);
+    atom_context.insert("link", "/");
+    atom_context.insert("updated", &updated);
+    atom_context.insert("entries", &atom_entries);
+    let rendered_atom = render_template(&tera, "atom.xml", &atom_context)?;
     fs::write(tmp_root.join("atom.xml"), rendered_atom.as_bytes())
         .await
         .map_err(|error| error.to_string())?;
@@ -345,7 +380,10 @@ pub async fn render_site(
             }
         }
 
-        let tag_output = apply_tag_template(&tag_template, &tag.name, &tag_rows);
+        let mut tag_context = Context::new();
+        tag_context.insert("tag", &tag.name);
+        tag_context.insert("items", &tag_rows);
+        let tag_output = render_template(&tera, "tag.html", &tag_context)?;
         let tag_slug = sanitize_tag_slug(&tag.name);
         let tag_path = tmp_root.join("tags").join(tag_slug);
 
@@ -501,23 +539,9 @@ async fn copy_file_if_exists(source: &Path, destination: &Path) -> StdResult<boo
     }
 }
 
-fn apply_content_template(template: &str, title: &str, content: &str, slug: &str) -> String {
-    template
-        .replace("{{title}}", title)
-        .replace("{{content}}", content)
-        .replace("{{slug}}", slug)
-}
-
-fn apply_index_template(template: &str, site: &str, items: &str) -> String {
-    template
-        .replace("{{site}}", site)
-        .replace("{{items}}", items)
-}
-
-fn apply_tag_template(template: &str, tag_name: &str, items: &str) -> String {
-    template
-        .replace("{{tag}}", tag_name)
-        .replace("{{items}}", items)
+fn render_template(tera: &Tera, name: &str, context: &Context) -> StdResult<String, String> {
+    tera.render(name, context)
+        .map_err(|error| error.to_string())
 }
 
 fn sanitize_tag_slug(tag_name: &str) -> String {
@@ -559,15 +583,6 @@ fn render_rss_items_xml(content_items: &[entities::content_item::Model]) -> Stri
     rows
 }
 
-fn apply_rss_template(template: &str, site: &str, items: &str) -> String {
-    let updated = Utc::now().to_rfc2822();
-    template
-        .replace("{{site}}", site)
-        .replace("{{link}}", "/")
-        .replace("{{updated}}", updated.as_str())
-        .replace("{{items}}", items)
-}
-
 fn render_atom_entries_xml(content_items: &[entities::content_item::Model]) -> String {
     let mut rows = String::new();
     for item in content_items {
@@ -584,24 +599,6 @@ fn render_atom_entries_xml(content_items: &[entities::content_item::Model]) -> S
         ));
     }
     rows
-}
-
-fn apply_atom_template(
-    template: &str,
-    site: &str,
-    content_items: &[entities::content_item::Model],
-    entries: &str,
-) -> String {
-    let updated = content_items
-        .first()
-        .map(content_publish_timestamp)
-        .unwrap_or_else(|| Utc::now().to_rfc3339());
-
-    template
-        .replace("{{site}}", site)
-        .replace("{{link}}", "/")
-        .replace("{{updated}}", updated.as_str())
-        .replace("{{entries}}", entries)
 }
 
 fn escape_xml_text(input: &str) -> String {
@@ -624,6 +621,16 @@ fn content_publish_timestamp_rfc2822(content: &entities::content_item::Model) ->
     DateTime::parse_from_rfc3339(content_publish_timestamp(content).as_str())
         .map(|timestamp| timestamp.to_rfc2822())
         .unwrap_or_else(|_| Utc::now().to_rfc2822())
+}
+
+fn content_is_publishable_at(content: &entities::content_item::Model, now: DateTime<Utc>) -> bool {
+    let timestamp = content
+        .published_at
+        .as_deref()
+        .unwrap_or(content.created_at.as_str());
+    DateTime::parse_from_rfc3339(timestamp)
+        .map(|value| value.with_timezone(&Utc) <= now)
+        .unwrap_or(true)
 }
 
 /// Creates a site record and returns the persisted row.
@@ -879,6 +886,32 @@ pub async fn list_content(
     let content = query.all(&db).await.map_err(|error| error.to_string())?;
     let _ = db.close().await;
     Ok(content)
+}
+
+/// Search content for a site by title, slug, or body substring.
+pub async fn search_content(
+    database_url: &str,
+    site_id: &str,
+    query: &str,
+) -> StdResult<Vec<entities::content_item::Model>, String> {
+    let db = Database::connect(database_url)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let condition = Condition::any()
+        .add(entities::content_item::Column::Title.contains(query))
+        .add(entities::content_item::Column::Slug.contains(query))
+        .add(entities::content_item::Column::PageContent.contains(query));
+
+    let items = entities::content_item::Entity::find()
+        .filter(entities::content_item::Column::SiteId.eq(site_id.to_owned()))
+        .filter(condition)
+        .all(&db)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let _ = db.close().await;
+    Ok(items)
 }
 
 /// Returns a single content item by id.
