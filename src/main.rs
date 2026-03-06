@@ -4,9 +4,9 @@ use websites::{
     NewAlias, NewAsset, NewAssetVariant, NewContent, NewContentTag, NewMembership, NewTag, NewUser,
     UpdateContent, add_content_tag, content_primary_route, create_alias, create_asset,
     create_asset_variant, create_content, create_membership, create_site, create_tag, create_user,
-    ensure_schema, list_aliases, list_asset_variants, list_assets, list_content, list_content_tags,
-    list_memberships, list_revision_aliases, list_revision_tags, list_revisions, list_sites,
-    list_tags, list_users, render_site, update_content,
+    ensure_schema, get_content, list_aliases, list_asset_variants, list_assets, list_content,
+    list_content_tags, list_memberships, list_revision_aliases, list_revision_tags, list_revisions,
+    list_sites, list_tags, list_users, render_site, update_content,
 };
 
 #[derive(Debug, Parser)]
@@ -270,6 +270,11 @@ enum ContentCommands {
     RevisionTags {
         #[arg(long)]
         revision_id: String,
+    },
+    /// Show a full content detail with derived URL, aliases, tags, and revision count.
+    Inspect {
+        #[arg(long)]
+        content_id: String,
     },
     /// Update a content item and create a new revision.
     Update {
@@ -659,6 +664,52 @@ async fn execute(command: Commands, database_url: &str, oidc: &OidcConfig) -> Re
                 println!("id\tname");
                 for row in tags {
                     println!("{}\t{}", row.id, row.name);
+                }
+                Ok(())
+            }
+            ContentCommands::Inspect { content_id } => {
+                let content = get_content(database_url, &content_id).await?;
+                let aliases =
+                    list_aliases(database_url, &content.site_id, Some(&content_id)).await?;
+                let tags = list_content_tags(database_url, &content_id).await?;
+                let revisions = list_revisions(database_url, &content_id).await?;
+
+                let public_path = content_primary_route(&content);
+                println!("id:\t{}", content.id);
+                println!("site_id:\t{}", content.site_id);
+                println!("title:\t{}", content.title);
+                println!("slug:\t{}", content.slug);
+                println!("page_type:\t{}", content.page_type);
+                println!("draft:\t{}", content.draft);
+                println!(
+                    "published_at:\t{}",
+                    content.published_at.as_deref().unwrap_or("n/a")
+                );
+                println!("created_at:\t{}", content.created_at);
+                println!("updated_at:\t{}", content.last_updated);
+                println!("primary_route:\t/{}", public_path.trim_matches('/'));
+                println!("aliases:");
+                if aliases.is_empty() {
+                    println!("\t(none)");
+                } else {
+                    for alias in aliases {
+                        println!("\t{}\t{}", alias.kind, alias.alias_path);
+                    }
+                }
+                println!("tags:");
+                if tags.is_empty() {
+                    println!("\t(none)");
+                } else {
+                    for tag in tags {
+                        println!("\t{}", tag.name);
+                    }
+                }
+                println!("revisions:\t{}", revisions.len());
+                if let Some(latest_revision) = revisions.first() {
+                    println!(
+                        "latest_revision:\t{} @ {}",
+                        latest_revision.revision_number, latest_revision.created_at
+                    );
                 }
                 Ok(())
             }

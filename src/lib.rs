@@ -819,6 +819,25 @@ pub async fn list_content(
     Ok(content)
 }
 
+/// Returns a single content item by id.
+pub async fn get_content(
+    database_url: &str,
+    content_id: &str,
+) -> StdResult<entities::content_item::Model, String> {
+    let db = Database::connect(database_url)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let content = entities::content_item::Entity::find_by_id(content_id)
+        .one(&db)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "content not found".to_string())?;
+
+    let _ = db.close().await;
+    Ok(content)
+}
+
 /// Creates a content alias entry.
 pub async fn create_alias(
     database_url: &str,
