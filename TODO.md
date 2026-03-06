@@ -1,6 +1,7 @@
 # TODO (from PLAN.md)
 
 ## Legend
+
 - [ ] Pending
 - [x] Done
 
@@ -13,6 +14,8 @@
   - `WEBSITES_OIDC_CLIENT_ID`
   - `WEBSITES_OIDC_DISCOVERY_URL`
   - [x] Add `show-config` command
+- [x] Make admin UI the default runtime action
+- [x] Redirect `/` to `/admin`
 - [ ] Implement web authentication + OIDC login/logout flow
   - Requires session store + OIDC integration
 - [x] Add admin route set
