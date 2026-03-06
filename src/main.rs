@@ -2,9 +2,9 @@ use clap::{Args, Parser, Subcommand};
 
 use websites::{
     NewAlias, NewAsset, NewAssetVariant, NewContent, NewContentTag, NewMembership, NewTag, NewUser,
-    UpdateContent, add_content_tag, create_alias, create_asset, create_asset_variant,
-    create_content, create_membership, create_site, create_tag, create_user, ensure_schema,
-    list_aliases, list_asset_variants, list_assets, list_content, list_content_tags,
+    UpdateContent, add_content_tag, content_primary_route, create_alias, create_asset,
+    create_asset_variant, create_content, create_membership, create_site, create_tag, create_user,
+    ensure_schema, list_aliases, list_asset_variants, list_assets, list_content, list_content_tags,
     list_memberships, list_revision_aliases, list_revision_tags, list_revisions, list_sites,
     list_tags, list_users, render_site, update_content,
 };
@@ -520,11 +520,24 @@ async fn execute(command: Commands, database_url: &str, _oidc: &OidcConfig) -> R
                     return Ok(());
                 }
 
-                println!("id\ttitle\tslug\tpage_type\tdraft");
+                println!("id\ttitle\tslug\tpage_type\tdraft\tcreated_at\tpublished_at\turl");
                 for row in content {
+                    let published_at = row
+                        .published_at
+                        .as_ref()
+                        .map_or_else(|| "n/a".to_string(), |value| value.clone());
+                    let public_path = content_primary_route(&row);
+                    let public_url = format!("/{}/", public_path.trim_matches('/'));
                     println!(
-                        "{}\t{}\t{}\t{}\t{}",
-                        row.id, row.title, row.slug, row.page_type, row.draft
+                        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                        row.id,
+                        row.title,
+                        row.slug,
+                        row.page_type,
+                        row.draft,
+                        row.created_at,
+                        published_at,
+                        public_url
                     );
                 }
                 Ok(())
@@ -575,11 +588,11 @@ async fn execute(command: Commands, database_url: &str, _oidc: &OidcConfig) -> R
                     return Ok(());
                 }
 
-                println!("id\trevision_number\ttitle\tdraft");
+                println!("id\trevision_number\ttitle\tdraft\tcreated_at");
                 for row in revisions {
                     println!(
-                        "{}\t{}\t{}\t{}",
-                        row.id, row.revision_number, row.title, row.draft
+                        "{}\t{}\t{}\t{}\t{}",
+                        row.id, row.revision_number, row.title, row.draft, row.created_at
                     );
                 }
                 Ok(())
