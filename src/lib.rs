@@ -728,6 +728,23 @@ pub async fn update_content(
     .await
     .map_err(|error| error.to_string())?;
 
+    let content_tags = entities::content_tag::Entity::find()
+        .filter(entities::content_tag::Column::ContentId.eq(content.id.clone()))
+        .all(&db)
+        .await
+        .map_err(|error: DbErr| error.to_string())?;
+
+    for content_tag in content_tags {
+        entities::content_revision_tag::ActiveModel {
+            id: Set(uuid_v7()),
+            revision_id: Set(revision.id.clone()),
+            tag_id: Set(content_tag.tag_id),
+        }
+        .insert(&db)
+        .await
+        .map_err(|error: DbErr| error.to_string())?;
+    }
+
     let aliases = entities::content_alias::Entity::find()
         .filter(entities::content_alias::Column::ContentId.eq(content.id.clone()))
         .all(&db)
@@ -962,6 +979,40 @@ pub async fn list_revision_aliases(
 
     let _ = db.close().await;
     Ok(revision_aliases)
+}
+
+/// Returns all tags captured for a specific content revision.
+pub async fn list_revision_tags(
+    database_url: &str,
+    revision_id: &str,
+) -> StdResult<Vec<entities::tag::Model>, String> {
+    let db = Database::connect(database_url)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let links = entities::content_revision_tag::Entity::find()
+        .filter(entities::content_revision_tag::Column::RevisionId.eq(revision_id.to_owned()))
+        .all(&db)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    if links.is_empty() {
+        let _ = db.close().await;
+        return Ok(Vec::new());
+    }
+
+    let tag_ids = links
+        .into_iter()
+        .map(|link| link.tag_id)
+        .collect::<Vec<_>>();
+    let tags = entities::tag::Entity::find()
+        .filter(entities::tag::Column::Id.is_in(tag_ids))
+        .all(&db)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let _ = db.close().await;
+    Ok(tags)
 }
 
 /// Returns all revisions for a content item sorted by revision number.
