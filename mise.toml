@@ -1,0 +1,15 @@
+[tools]
+pnpm = "latest"
+
+[tasks.check]
+depends = ["rust_clippy", "rust_fmt", "rust_test"]
+
+
+[tasks.rust_clippy]
+run = "cargo clippy --all-targets --all-features  --quiet -- -D warnings"
+
+[tasks.rust_fmt]
+run = "cargo fmt --all --"
+
+[tasks.rust_test]
+run = "cargo test --all --quiet"
