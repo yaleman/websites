@@ -5,8 +5,8 @@ use websites::{
     UpdateContent, add_content_tag, create_alias, create_asset, create_asset_variant,
     create_content, create_membership, create_site, create_tag, create_user, ensure_schema,
     list_aliases, list_asset_variants, list_assets, list_content, list_content_tags,
-    list_memberships, list_revisions, list_sites, list_tags, list_users, render_site,
-    update_content,
+    list_memberships, list_revision_aliases, list_revisions, list_sites, list_tags, list_users,
+    render_site, update_content,
 };
 
 #[derive(Debug, Parser)]
@@ -227,6 +227,11 @@ enum ContentCommands {
     Revisions {
         #[arg(long)]
         content_id: String,
+    },
+    /// Show aliases captured for a revision.
+    RevisionAliases {
+        #[arg(long)]
+        revision_id: String,
     },
     /// Update a content item and create a new revision.
     Update {
@@ -565,6 +570,19 @@ async fn execute(command: Commands, database_url: &str, _oidc: &OidcConfig) -> R
                         "{}\t{}\t{}\t{}",
                         row.id, row.revision_number, row.title, row.draft
                     );
+                }
+                Ok(())
+            }
+            ContentCommands::RevisionAliases { revision_id } => {
+                let aliases = list_revision_aliases(database_url, &revision_id).await?;
+                if aliases.is_empty() {
+                    println!("no revision aliases");
+                    return Ok(());
+                }
+
+                println!("id\talias_path\tkind");
+                for row in aliases {
+                    println!("{}\t{}\t{}", row.id, row.alias_path, row.kind);
                 }
                 Ok(())
             }
