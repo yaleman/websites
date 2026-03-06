@@ -39,6 +39,35 @@ button {
   margin-top: 1rem;
 }
 
+.embed-library {
+  margin-top: 1.5rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid #c4c4c4;
+}
+
+.embed-library ul {
+  list-style: none;
+  padding: 0;
+}
+
+.embed-library li {
+  margin-bottom: 0.8rem;
+}
+
+.embed-snippets code {
+  display: inline-block;
+  margin-top: 0.3rem;
+}
+
+.revision-diffs ul {
+  list-style: none;
+  padding: 0;
+}
+
+.revision-diffs li {
+  margin-bottom: 0.4rem;
+}
+
 .inline-body form {
   margin-top: 0;
 }

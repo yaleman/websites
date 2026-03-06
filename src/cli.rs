@@ -328,4 +328,13 @@ pub enum ContentCommands {
         #[arg(long)]
         content_id: String,
     },
+    /// Import content from a WordPress WXR XML export.
+    ImportWordpress {
+        #[arg(long)]
+        site_id: String,
+        #[arg(long, value_name = "FILE")]
+        file_path: String,
+        #[arg(long)]
+        creator_sub: String,
+    },
 }

@@ -16,8 +16,9 @@
   - [x] Add `show-config` command
 - [x] Make admin UI the default runtime action
 - [x] Redirect `/` to `/admin`
-- [ ] Implement web authentication + OIDC login/logout flow
+- [x] Implement web authentication + OIDC login/logout flow
   - Requires session store + OIDC integration
+  - [x] Session-backed login/logout flow wired
 - [x] Add admin route set
   - `/admin`
   - `/admin/sites`
@@ -46,13 +47,13 @@
 
 ## Phase 3 — Advanced features
 
-- [ ] Build WordPress import/migration tooling using alias preservation
-- [ ] Implement revision diff viewer
+- [x] Build WordPress import/migration tooling using alias preservation
+- [x] Implement revision diff viewer
 - [x] Add content search
-- [ ] Add media embedding support in editor
+- [x] Add media embedding support in editor
 
 ## Template/rendering backlog
 
 - [x] Decide and finalize template engine strategy (PLAN mentions Askama/Tera direction)
 - [x] Migrate current fixed-string template rendering to chosen engine
-- [ ] Expand template coverage/slots as needed for metadata and edge cases
+- [x] Expand template coverage/slots as needed for metadata and edge cases
