@@ -197,6 +197,8 @@ enum ContentCommands {
         creator_sub: String,
         #[arg(long, default_value_t = false)]
         draft: bool,
+        #[arg(long)]
+        published_at: Option<String>,
     },
     /// List content for a site.
     List {
@@ -247,6 +249,8 @@ enum ContentCommands {
         page_content: Option<String>,
         #[arg(long)]
         draft: Option<bool>,
+        #[arg(long)]
+        published_at: Option<String>,
         #[arg(long)]
         editor_sub: String,
     },
@@ -484,6 +488,7 @@ async fn execute(command: Commands, database_url: &str, _oidc: &OidcConfig) -> R
                 page_content,
                 creator_sub,
                 draft,
+                published_at,
             } => {
                 let content = create_content(
                     database_url,
@@ -495,6 +500,7 @@ async fn execute(command: Commands, database_url: &str, _oidc: &OidcConfig) -> R
                         page_content,
                         creator_sub,
                         draft,
+                        published_at,
                     },
                 )
                 .await?;
@@ -593,6 +599,7 @@ async fn execute(command: Commands, database_url: &str, _oidc: &OidcConfig) -> R
                 slug,
                 page_content,
                 draft,
+                published_at,
                 editor_sub,
             } => {
                 let content = update_content(
@@ -604,6 +611,7 @@ async fn execute(command: Commands, database_url: &str, _oidc: &OidcConfig) -> R
                         slug,
                         page_content,
                         draft,
+                        published_at,
                         editor_sub,
                     },
                 )
