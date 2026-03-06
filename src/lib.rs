@@ -106,6 +106,8 @@ pub async fn ensure_schema(database_url: &str) -> StdResult<(), String> {
 const DEFAULT_POST_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{title}}</title></head><body><h1>{{title}}</h1><article>{{content}}</article></body></html>";
 const DEFAULT_PAGE_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{title}}</title></head><body><h1>{{title}}</h1><article>{{content}}</article></body></html>";
 const DEFAULT_INDEX_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{site}}</title></head><body><h1>{{site}}</h1><ul>{{items}}</ul></body></html>";
+const DEFAULT_RSS_TEMPLATE: &str = "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel><title>{{site}}</title>{{items}}</channel></rss>";
+const DEFAULT_ATOM_TEMPLATE: &str = "<?xml version=\"1.0\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><title>{{site}}</title><updated>{{updated}}</updated>{{entries}}</feed>";
 
 /// Renders all published content for a site into ./rendered/<site_short_name>.
 pub async fn render_site(
@@ -127,6 +129,7 @@ pub async fn render_site(
     let content_items = entities::content_item::Entity::find()
         .filter(entities::content_item::Column::SiteId.eq(site.id.clone()))
         .filter(entities::content_item::Column::Draft.eq(false))
+        .order_by_desc(entities::content_item::Column::CreatedAt)
         .all(&db)
         .await
         .map_err(|error| error.to_string())?;
@@ -136,6 +139,8 @@ pub async fn render_site(
     let page_template = load_template(&template_root, "page.html", DEFAULT_PAGE_TEMPLATE).await?;
     let index_template =
         load_template(&template_root, "index.html", DEFAULT_INDEX_TEMPLATE).await?;
+    let rss_template = load_template(&template_root, "rss.xml", DEFAULT_RSS_TEMPLATE).await?;
+    let atom_template = load_template(&template_root, "atom.xml", DEFAULT_ATOM_TEMPLATE).await?;
 
     let rendered_root = Path::new(rendered_dir).join(site.short_name.clone());
     let tmp_root = Path::new(rendered_dir).join(format!("{}.tmp", site.short_name));
@@ -160,9 +165,9 @@ pub async fn render_site(
     let mut files_written = 0usize;
     let mut index_rows = String::new();
 
-    for item in content_items {
+    for item in &content_items {
         let mut routes = HashSet::new();
-        routes.insert(content_primary_route(&item));
+        routes.insert(content_primary_route(item));
 
         let aliases = entities::content_alias::Entity::find()
             .filter(entities::content_alias::Column::ContentId.eq(item.id.clone()))
@@ -199,7 +204,7 @@ pub async fn render_site(
             files_written = files_written.saturating_add(1);
         }
 
-        let primary_route = content_primary_route(&item);
+        let primary_route = content_primary_route(item);
         index_rows.push_str(&format!(
             "<li><a href=\"/{}/\">{}</a></li>",
             primary_route.trim_matches('/'),
@@ -213,6 +218,31 @@ pub async fn render_site(
         .await
         .map_err(|error| error.to_string())?;
     fs::write(tmp_root.join("index.html"), rendered_index)
+        .await
+        .map_err(|error| error.to_string())?;
+    files_written = files_written.saturating_add(1);
+
+    let post_items = content_items
+        .iter()
+        .filter(|item| item.page_type == "post")
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let rss_items = render_rss_items_xml(&post_items);
+    let rendered_rss = apply_rss_template(rss_template.as_str(), &site.full_title, &rss_items);
+    fs::write(tmp_root.join("rss.xml"), rendered_rss.as_bytes())
+        .await
+        .map_err(|error| error.to_string())?;
+    files_written = files_written.saturating_add(1);
+
+    let atom_entries = render_atom_entries_xml(&post_items);
+    let rendered_atom = apply_atom_template(
+        atom_template.as_str(),
+        &site.full_title,
+        &post_items,
+        &atom_entries,
+    );
+    fs::write(tmp_root.join("atom.xml"), rendered_atom.as_bytes())
         .await
         .map_err(|error| error.to_string())?;
     files_written = files_written.saturating_add(1);
@@ -371,6 +401,61 @@ fn apply_index_template(template: &str, site: &str, items: &str) -> String {
     template
         .replace("{{site}}", site)
         .replace("{{items}}", items)
+}
+
+fn render_rss_items_xml(content_items: &[entities::content_item::Model]) -> String {
+    let mut rows = String::new();
+    for item in content_items {
+        let link = format!("/{}/", content_primary_route(item).trim_matches('/'));
+        rows.push_str(&format!(
+            "<item><title>{}</title><link>{}</link><guid>{}</guid></item>",
+            item.title, link, link
+        ));
+    }
+    rows
+}
+
+fn apply_rss_template(template: &str, site: &str, items: &str) -> String {
+    template
+        .replace("{{site}}", site)
+        .replace("{{items}}", items)
+}
+
+fn render_atom_entries_xml(content_items: &[entities::content_item::Model]) -> String {
+    let mut rows = String::new();
+    for item in content_items {
+        let link = format!("/{}/", content_primary_route(item).trim_matches('/'));
+        let updated = content_publish_timestamp(item);
+        rows.push_str(&format!(
+            "<entry><title>{}</title><link href=\"{}\"/><updated>{}</updated><id>{}</id></entry>",
+            item.title, link, updated, item.id
+        ));
+    }
+    rows
+}
+
+fn apply_atom_template(
+    template: &str,
+    site: &str,
+    content_items: &[entities::content_item::Model],
+    entries: &str,
+) -> String {
+    let updated = content_items
+        .first()
+        .map(content_publish_timestamp)
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
+
+    template
+        .replace("{{site}}", site)
+        .replace("{{updated}}", updated.as_str())
+        .replace("{{entries}}", entries)
+}
+
+fn content_publish_timestamp(content: &entities::content_item::Model) -> String {
+    content
+        .published_at
+        .clone()
+        .unwrap_or_else(|| content.created_at.clone())
 }
 
 /// Creates a site record and returns the persisted row.
