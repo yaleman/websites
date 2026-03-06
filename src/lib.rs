@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::result::Result as StdResult;
 
@@ -216,6 +217,24 @@ pub async fn render_site(
         .map_err(|error| error.to_string())?;
     files_written = files_written.saturating_add(1);
 
+    let template_assets = template_root.join("assets");
+    copy_directory_recursive(
+        &template_assets,
+        &tmp_root.join("assets"),
+        &mut files_written,
+    )
+    .await?;
+
+    let uploads_root = Path::new("uploads/media-storage");
+    copy_media_variants(
+        &db,
+        &site.id,
+        uploads_root,
+        &tmp_root.join("media/images"),
+        &mut files_written,
+    )
+    .await?;
+
     if fs::metadata(&rendered_root).await.is_ok() {
         fs::remove_dir_all(&rendered_root)
             .await
@@ -238,6 +257,106 @@ async fn load_template(
     match fs::read_to_string(&template_path).await {
         Ok(template) => Ok(template),
         Err(_) => Ok(fallback.to_string()),
+    }
+}
+
+async fn copy_directory_recursive(
+    source: &Path,
+    destination: &Path,
+    files_written: &mut usize,
+) -> StdResult<(), String> {
+    let mut dirs = vec![(source.to_path_buf(), destination.to_path_buf())];
+
+    while let Some((source_path, destination_path)) = dirs.pop() {
+        let mut source_dir = match fs::read_dir(&source_path).await {
+            Ok(dir) => dir,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.to_string()),
+        };
+
+        fs::create_dir_all(&destination_path)
+            .await
+            .map_err(|error| error.to_string())?;
+
+        while let Some(entry) = source_dir
+            .next_entry()
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            let next_source = entry.path();
+            let next_destination = destination_path.join(entry.file_name());
+            let metadata = entry.metadata().await.map_err(|error| error.to_string())?;
+
+            if metadata.is_dir() {
+                dirs.push((next_source, next_destination));
+            } else if metadata.is_file() {
+                copy_file_if_exists(&next_source, &next_destination).await?;
+                *files_written = files_written.saturating_add(1);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn copy_media_variants(
+    db: &sea_orm::DatabaseConnection,
+    site_id: &str,
+    source_root: &Path,
+    destination_root: &Path,
+    files_written: &mut usize,
+) -> StdResult<(), String> {
+    let assets = entities::asset::Entity::find()
+        .filter(entities::asset::Column::SiteId.eq(site_id.to_string()))
+        .all(db)
+        .await
+        .map_err(|error: DbErr| error.to_string())?;
+
+    let mut media_files = HashSet::new();
+    for asset in assets.iter() {
+        media_files.insert(asset.storage_basename.clone());
+    }
+
+    let asset_ids = assets.into_iter().map(|asset| asset.id).collect::<Vec<_>>();
+    if !asset_ids.is_empty() {
+        let variants = entities::asset_variant::Entity::find()
+            .filter(entities::asset_variant::Column::AssetId.is_in(asset_ids))
+            .all(db)
+            .await
+            .map_err(|error: DbErr| error.to_string())?;
+
+        for variant in variants {
+            media_files.insert(variant.filename);
+        }
+    }
+
+    for filename in media_files {
+        let source = source_root.join(&filename);
+        let destination = destination_root.join(filename);
+        if copy_file_if_exists(&source, &destination).await? {
+            *files_written = files_written.saturating_add(1);
+        }
+    }
+
+    Ok(())
+}
+
+async fn copy_file_if_exists(source: &Path, destination: &Path) -> StdResult<bool, String> {
+    match fs::metadata(source).await {
+        Ok(metadata) if metadata.is_file() => {
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+
+            fs::copy(source, destination)
+                .await
+                .map_err(|error| error.to_string())?;
+
+            Ok(true)
+        }
+        _ => Ok(false),
     }
 }
 
