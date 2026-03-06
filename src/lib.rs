@@ -23,6 +23,7 @@ pub struct NewContent {
     pub page_content: String,
     pub draft: bool,
     pub creator_sub: String,
+    pub published_at: Option<String>,
 }
 
 pub struct NewAlias {
@@ -81,6 +82,7 @@ pub struct UpdateContent {
     pub slug: Option<String>,
     pub page_content: Option<String>,
     pub draft: Option<bool>,
+    pub published_at: Option<String>,
     pub editor_sub: String,
 }
 
@@ -603,7 +605,14 @@ pub async fn create_content(
         page_content,
         draft,
         creator_sub,
+        published_at,
     } = input;
+
+    let published_at = if !draft {
+        Some(published_at.unwrap_or_else(utc_now))
+    } else {
+        published_at
+    };
 
     let content = entities::content_item::ActiveModel {
         id: Set(content_id.clone()),
@@ -616,7 +625,7 @@ pub async fn create_content(
         creator_sub: Set(creator_sub),
         created_at: Set(now.clone()),
         last_updated: Set(now.clone()),
-        published_at: Set(None),
+        published_at: Set(published_at),
     }
     .insert(&db)
     .await
@@ -660,6 +669,15 @@ pub async fn update_content(
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "content not found".to_string())?;
 
+    let publish_now = input.draft == Some(false) && existing.draft;
+    let published_at = if let Some(published_at) = input.published_at {
+        Some(published_at)
+    } else if publish_now {
+        Some(now.clone())
+    } else {
+        existing.published_at.clone()
+    };
+
     let mut active = existing.clone().into_active_model();
     if let Some(page_type) = input.page_type {
         active.page_type = Set(page_type);
@@ -676,6 +694,7 @@ pub async fn update_content(
     if let Some(draft) = input.draft {
         active.draft = Set(draft);
     }
+    active.published_at = Set(published_at);
     active.last_updated = Set(now.clone());
 
     let content: entities::content_item::Model = active
