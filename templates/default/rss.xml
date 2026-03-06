@@ -2,6 +2,9 @@
 <rss version="2.0">
   <channel>
     <title>{{site}}</title>
+    <description>{{site}} RSS</description>
+    <link>{{link}}</link>
+    <lastBuildDate>{{updated}}</lastBuildDate>
     {{items}}
   </channel>
 </rss>

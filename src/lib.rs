@@ -483,29 +483,42 @@ fn sanitize_tag_slug(tag_name: &str) -> String {
 fn render_rss_items_xml(content_items: &[entities::content_item::Model]) -> String {
     let mut rows = String::new();
     for item in content_items {
-        let link = format!("/{}/", content_primary_route(item).trim_matches('/'));
+        let route = content_primary_route(item);
+        let route = route.trim_matches('/');
+        let link = format!("/{route}/");
+        let summary = escape_xml_text(item.page_content.as_str());
+        let pub_date = content_publish_timestamp_rfc2822(item);
+        let title = escape_xml_text(item.title.as_str());
         rows.push_str(&format!(
-            "<item><title>{}</title><link>{}</link><guid>{}</guid></item>",
-            item.title, link, link
+            "<item><title>{}</title><link>{}</link><guid isPermaLink=\"false\">{}</guid><pubDate>{}</pubDate><description>{}</description></item>",
+            title, link, item.id, pub_date, summary
         ));
     }
     rows
 }
 
 fn apply_rss_template(template: &str, site: &str, items: &str) -> String {
+    let updated = Utc::now().to_rfc2822();
     template
         .replace("{{site}}", site)
+        .replace("{{link}}", "/")
+        .replace("{{updated}}", updated.as_str())
         .replace("{{items}}", items)
 }
 
 fn render_atom_entries_xml(content_items: &[entities::content_item::Model]) -> String {
     let mut rows = String::new();
     for item in content_items {
-        let link = format!("/{}/", content_primary_route(item).trim_matches('/'));
+        let route = content_primary_route(item);
+        let route = route.trim_matches('/');
+        let link = format!("/{route}/");
         let updated = content_publish_timestamp(item);
+        let title = escape_xml_text(item.title.as_str());
+        let published = content_publish_timestamp_rfc2822(item);
+        let summary = escape_xml_text(item.page_content.as_str());
         rows.push_str(&format!(
-            "<entry><title>{}</title><link href=\"{}\"/><updated>{}</updated><id>{}</id></entry>",
-            item.title, link, updated, item.id
+            "<entry><title>{}</title><link href=\"{}\"/><id>{}</id><published>{}</published><updated>{}</updated><summary>{}</summary></entry>",
+            title, link, item.id, published, updated, summary
         ));
     }
     rows
@@ -524,8 +537,18 @@ fn apply_atom_template(
 
     template
         .replace("{{site}}", site)
+        .replace("{{link}}", "/")
         .replace("{{updated}}", updated.as_str())
         .replace("{{entries}}", entries)
+}
+
+fn escape_xml_text(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 fn content_publish_timestamp(content: &entities::content_item::Model) -> String {
@@ -533,6 +556,12 @@ fn content_publish_timestamp(content: &entities::content_item::Model) -> String 
         .published_at
         .clone()
         .unwrap_or_else(|| content.created_at.clone())
+}
+
+fn content_publish_timestamp_rfc2822(content: &entities::content_item::Model) -> String {
+    DateTime::parse_from_rfc3339(content_publish_timestamp(content).as_str())
+        .map(|timestamp| timestamp.to_rfc2822())
+        .unwrap_or_else(|_| Utc::now().to_rfc2822())
 }
 
 /// Creates a site record and returns the persisted row.
