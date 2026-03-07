@@ -3,14 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{ title }}</title>
+    <title>{% block title %}{{ title }}{% endblock title %}</title>
     <link rel="stylesheet" href="/admin/assets/admin.css" />
     <link rel="stylesheet" href="/admin/assets/editor.css" />
     <script src="/admin/assets/editor.js" defer></script>
+    {% block header %}
+    {% endblock %}
   </head>
   <body>
     <main>
-      <h1>{{ heading }}</h1>
+      <h1 class="page-title">{{ heading }}</h1>
       <nav>
         <a href="/admin">Dashboard</a>
         <a href="/admin/sites">Sites</a>

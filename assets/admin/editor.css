@@ -1,112 +1,118 @@
 .editor-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  padding: 0.4rem;
-  border: 1px solid #b8b8b8;
-  border-radius: 6px 6px 0 0;
-  background: #f6f7fb;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.4rem;
+	padding: 0.4rem;
+	border: 1px solid #b8b8b8;
+	border-radius: 6px 6px 0 0;
+	background: #f6f7fb;
 }
 
 .editor-toolbar__group {
-  display: flex;
-  gap: 0.35rem;
-  padding-right: 0.5rem;
-  border-right: 1px solid #d6d6d6;
+	display: flex;
+	gap: 0.35rem;
+	padding-right: 0.5rem;
+	border-right: 1px solid #d6d6d6;
 }
 
 .editor-toolbar__group:last-child {
-  border-right: 0;
-  padding-right: 0;
+	border-right: 0;
+	padding-right: 0;
 }
 
 .editor-button {
-  border: 1px solid #c2c2c2;
-  background: #ffffff;
-  border-radius: 4px;
-  padding: 0.2rem 0.5rem;
-  font-size: 0.85rem;
-  line-height: 1.2;
-  cursor: pointer;
+	border: 1px solid #c2c2c2;
+	background: #ffffff;
+	color: black;
+	border-radius: 4px;
+	padding: 0.2rem 0.5rem;
+	font-size: 0.85rem;
+	line-height: 1.2;
+	cursor: pointer;
 }
 
 .editor-button:hover,
 .editor-button:focus {
-  border-color: #6a7ae8;
-  box-shadow: 0 0 0 2px rgba(106, 122, 232, 0.2);
-  outline: none;
+	border-color: #6a7ae8;
+	box-shadow: 0 0 0 2px rgba(106, 122, 232, 0.2);
+	outline: none;
 }
 
 .editor-button.is-active {
-  border-color: #6a7ae8;
-  background: #e8ecff;
+	border-color: #6a7ae8;
+	background: #e8ecff;
 }
 
 .editor-toolbar + .editor-shell {
-  border-top: 0;
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
+	border-top: 0;
+	border-top-left-radius: 0;
+	border-top-right-radius: 0;
 }
 
 .editor-image-tools {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 0.75rem;
-  padding: 0.6rem;
-  border: 1px solid #b8b8b8;
-  border-top: 0;
-  background: #fff;
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	gap: 0.75rem;
+	padding: 0.6rem;
+	border: 1px solid #b8b8b8;
+	border-top: 0;
+	background: #fff;
 }
 
 .editor-image-tools + .editor-shell {
-  border-top: 0;
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
+	border-top: 0;
+	border-top-left-radius: 0;
+	border-top-right-radius: 0;
 }
 
 .editor-shell {
-  border: 1px solid #b8b8b8;
-  border-radius: 6px;
-  min-height: 320px;
-  padding: 0.35rem 0.5rem;
-  background: #fff;
+	border: 1px solid #b8b8b8;
+	border-radius: 6px;
+	min-height: 320px;
+	padding: 0.35rem 0.5rem;
+	background: #fff;
 }
 
+.editor-toolbar + .editor-shell {
+	border-top: 0;
+	border-top-left-radius: 0;
+	border-top-right-radius: 0;
+}
 .editor-shell .ProseMirror {
-  min-height: 300px;
+	min-height: 300px;
 }
 
 .editor-shell .ProseMirror:focus {
-  outline: none;
+	outline: none;
 }
 
 .editor-preview[hidden] {
-  display: none;
+	display: none;
 }
 
 .editor-preview {
-  margin-top: 0.75rem;
-  border: 1px solid #b8b8b8;
-  border-radius: 6px;
-  background: #fff;
+	margin-top: 0.75rem;
+	border: 1px solid #b8b8b8;
+	border-radius: 6px;
+	background: #fff;
 }
 
 .editor-preview__header {
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid #d6d6d6;
-  background: #f6f7fb;
+	padding: 0.5rem 0.75rem;
+	border-bottom: 1px solid #d6d6d6;
+	background: #f6f7fb;
 }
 
 .editor-preview__header h2 {
-  margin: 0;
-  font-size: 1rem;
+	margin: 0;
+	font-size: 1rem;
 }
 
 .editor-preview__body {
-  padding: 0.75rem;
-  min-height: 220px;
+	padding: 0.75rem;
+	min-height: 220px;
 }
 
 .editor-preview__body :first-child {
-  margin-top: 0;
+	margin-top: 0;
 }
