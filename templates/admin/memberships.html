@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="/admin/assets/admin.css" />
+    <link rel="stylesheet" href="/admin/assets/editor.css" />
+    <script src="/admin/assets/editor.js" defer></script>
+  </head>
+  <body>
+    <main class="content-editor">
+      <header class="content-editor__header">
+        <h1>Memberships {{ site_short_name }}</h1>
+        <p class="message">{{ message }}</p>
+        <nav>
+          <a href="/admin">Dashboard</a>
+          <a href="/admin/sites">Sites</a>
+          <a href="{{ content_href }}">Back to content</a>
+          <a href="{{ settings_href }}">Site settings</a>
+        </nav>
+      </header>
+
+      <section class="content-editor__meta">
+        <div class="meta-card">
+          <span class="meta-label">Site ID</span>
+          <span class="meta-value">{{ site_id }}</span>
+        </div>
+      </section>
+
+      <section>
+        <h2>Existing memberships</h2>
+        {% if memberships.is_empty() %}
+        <p>No memberships yet.</p>
+        {% else %}
+        <table>
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Role</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for membership in memberships %}
+            <tr>
+              <td>{{ membership.subject }}</td>
+              <td>
+                <form method="post" action="{{ membership.update_href }}">
+                  <select name="role">
+                    <option value="viewer" {% if membership.role == "viewer" %}selected{% endif %}>
+                      Viewer
+                    </option>
+                    <option value="author" {% if membership.role == "author" %}selected{% endif %}>
+                      Author
+                    </option>
+                    <option value="editor" {% if membership.role == "editor" %}selected{% endif %}>
+                      Editor
+                    </option>
+                    <option value="owner" {% if membership.role == "owner" %}selected{% endif %}>
+                      Owner
+                    </option>
+                  </select>
+                  <button type="submit">Update</button>
+                </form>
+              </td>
+              <td>
+                <form method="post" action="{{ membership.remove_href }}">
+                  <button type="submit">Remove</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+      </section>
+
+      <section>
+        <h2>Add membership</h2>
+        <form method="post" action="{{ create_href }}">
+          <label for="subject">User subject</label>
+          <input id="subject" name="subject" required />
+
+          <label for="role">Role</label>
+          <select id="role" name="role" required>
+            <option value="viewer">Viewer</option>
+            <option value="author">Author</option>
+            <option value="editor">Editor</option>
+            <option value="owner">Owner</option>
+          </select>
+
+          <button type="submit">Add member</button>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>
