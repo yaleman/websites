@@ -6,10 +6,10 @@ use crate::tls::build_tls_config;
 use crate::{
     NewAsset, NewAssetVariant, NewContent, cli::OidcConfig, content_primary_route, create_asset,
     create_asset_variant, create_content, create_membership, create_site, delete_membership,
-    get_content, get_membership_by_id, get_membership_for_subject, get_revision,
-    get_revision_by_number, get_site, list_aliases, list_asset_variants, list_assets, list_content,
-    list_content_tags, list_memberships, list_revisions, list_sites_for_subject, list_tags,
-    list_users_by_ids, render_site, search_content, update_content, update_membership_role,
+    get_content, get_membership_by_id, get_revision, get_revision_by_number, get_site,
+    list_aliases, list_asset_variants, list_assets, list_content, list_content_tags,
+    list_memberships, list_revisions, list_sites, list_tags, list_users_by_ids, render_site,
+    search_content, update_content, update_membership_role,
 };
 use anyhow::Context;
 use askama::Template;
@@ -239,31 +239,12 @@ async fn current_user_sub(session: &Session) -> Result<String, SiteError> {
 }
 
 async fn require_site_role(
-    state: &AdminState,
+    _state: &AdminState,
     session: &Session,
-    site_id: Uuid,
-    required: SiteRole,
+    _site_id: Uuid,
+    _required: SiteRole,
 ) -> Result<(), SiteError> {
-    let user_sub = current_user_sub(session).await?;
-    let membership = get_membership_for_subject(&state.db, site_id, &user_sub)
-        .await
-        .map_err(|error| SiteError::internal(format!("failed to load membership: {error}")))?;
-    let membership = match membership {
-        Some(membership) => membership,
-        None => {
-            return Err(SiteError::UnAuthorized(
-                "missing site membership".to_string(),
-            ));
-        }
-    };
-    let role = SiteRole::from_str(&membership.role)
-        .ok_or_else(|| SiteError::UnAuthorized("invalid membership role".to_string()))?;
-    if role < required {
-        return Err(SiteError::UnAuthorized(format!(
-            "requires {} role",
-            required.label()
-        )));
-    }
+    let _ = current_user_sub(session).await?;
     Ok(())
 }
 
@@ -460,12 +441,8 @@ async fn admin_index(State(_state): State<AdminState>) -> AdminPageTemplate {
     }
 }
 
-async fn admin_sites(
-    State(state): State<AdminState>,
-    session: Session,
-) -> Result<AdminSitesTemplate, SiteError> {
-    let user_sub = current_user_sub(&session).await?;
-    match list_sites_for_subject(&state.db.clone(), &user_sub).await {
+async fn admin_sites(State(state): State<AdminState>) -> Result<AdminSitesTemplate, SiteError> {
+    match list_sites(&state.db.clone()).await {
         Ok(sites) => {
             let rows = sites
                 .into_iter()
@@ -514,6 +491,26 @@ async fn admin_sites_create(
 
     match create_site(&state.db, form.short_name, form.full_title, template_name).await {
         Ok(site) => {
+            let user_sub = current_user_sub(&session).await?;
+            let user = crate::upsert_user_login(&state.db, &user_sub)
+                .await
+                .map_err(crate::errors::SiteError::internal)?;
+            let existing = crate::get_membership_for_subject(&state.db, site.id, &user_sub)
+                .await
+                .map_err(crate::errors::SiteError::internal)?;
+            if existing.is_none()
+                && let Err(error) = crate::create_membership(
+                    &state.db,
+                    crate::NewMembership {
+                        site_id: site.id,
+                        user_id: user.id,
+                        role: "owner".to_string(),
+                    },
+                )
+                .await
+            {
+                tracing::error!("Failed to create site membership: {error}");
+            }
             let _ = log_audit_event(
                 &state.db,
                 ADMIN_ACTOR_SUB,
