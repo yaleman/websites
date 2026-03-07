@@ -400,6 +400,18 @@ test.describe("content new editor", () => {
       await expect(
         page.locator('.ProseMirror img[src="https://example.com/test.png"]'),
       ).toBeVisible();
+      await page.locator(".ProseMirror").click();
+      await page.keyboard.type("Preview check");
+      await expect(
+        page.locator("[data-editor-preview]"),
+      ).toBeHidden();
+      await page.getByRole("button", { name: "Preview" }).click();
+      await expect(
+        page.locator("[data-editor-preview]"),
+      ).toBeVisible();
+      await expect(
+        page.locator("[data-editor-preview-body]"),
+      ).toContainText("Preview check");
 
       await page.goto(
         `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/memberships`,

@@ -37,6 +37,11 @@
   outline: none;
 }
 
+.editor-button.is-active {
+  border-color: #6a7ae8;
+  background: #e8ecff;
+}
+
 .editor-toolbar + .editor-shell {
   border-top: 0;
   border-top-left-radius: 0;
@@ -73,4 +78,35 @@
 
 .editor-shell .ProseMirror:focus {
   outline: none;
+}
+
+.editor-preview[hidden] {
+  display: none;
+}
+
+.editor-preview {
+  margin-top: 0.75rem;
+  border: 1px solid #b8b8b8;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.editor-preview__header {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #d6d6d6;
+  background: #f6f7fb;
+}
+
+.editor-preview__header h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.editor-preview__body {
+  padding: 0.75rem;
+  min-height: 220px;
+}
+
+.editor-preview__body :first-child {
+  margin-top: 0;
 }

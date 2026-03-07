@@ -77,6 +77,11 @@
             <button type="button" class="editor-button" data-command="ol">Numbered</button>
             <button type="button" class="editor-button" data-command="quote">Quote</button>
           </div>
+          <div class="editor-toolbar__group">
+            <button type="button" class="editor-button" data-command="preview" aria-pressed="false">
+              Preview
+            </button>
+          </div>
         </div>
         <div class="editor-image-tools">
           <div class="form-field">
@@ -90,6 +95,12 @@
         </div>
         <div id="editor" class="editor-shell"></div>
         <textarea id="page_content" name="page_content" rows="14" class="editor-source"></textarea>
+        <section class="editor-preview" data-editor-preview hidden>
+          <div class="editor-preview__header">
+            <h2>Preview</h2>
+          </div>
+          <div class="editor-preview__body" data-editor-preview-body></div>
+        </section>
 
         <label class="inline-checkbox">
           <input id="draft" name="draft" type="checkbox" value="true" />
