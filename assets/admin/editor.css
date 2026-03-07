@@ -43,6 +43,22 @@
   border-top-right-radius: 0;
 }
 
+.editor-image-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+  padding: 0.6rem;
+  border: 1px solid #b8b8b8;
+  border-top: 0;
+  background: #fff;
+}
+
+.editor-image-tools + .editor-shell {
+  border-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
 .editor-shell {
   border: 1px solid #b8b8b8;
   border-radius: 6px;

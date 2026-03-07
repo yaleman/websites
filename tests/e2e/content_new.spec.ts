@@ -392,6 +392,14 @@ test.describe("content new editor", () => {
       await expect(page.locator("#tags")).toBeVisible();
       await expect(page.locator("#tags option", { hasText: "news" })).toBeVisible();
       await page.locator("#tags").selectOption("news");
+      await expect(page.locator("#image_url")).toBeVisible();
+      await expect(page.locator("#image_alt")).toBeVisible();
+      await page.fill("#image_url", "https://example.com/test.png");
+      await page.fill("#image_alt", "Test image");
+      await page.getByRole("button", { name: "Image" }).click();
+      await expect(
+        page.locator('.ProseMirror img[src="https://example.com/test.png"]'),
+      ).toBeVisible();
 
       await page.goto(
         `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/memberships`,
