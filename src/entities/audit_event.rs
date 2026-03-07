@@ -1,4 +1,4 @@
-use sea_orm::{ActiveValue::Set, entity::prelude::*};
+use sea_orm::{ActiveValue::Set, ConnectionTrait, entity::prelude::*};
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "audit_event")]
@@ -20,8 +20,8 @@ pub enum Relation {}
 impl ActiveModelBehavior for ActiveModel {}
 
 /// Records an audit event for administrative actions.
-pub async fn log_audit_event(
-    db: &DatabaseConnection,
+pub async fn log_audit_event<C: ConnectionTrait>(
+    db: &C,
     actor_sub: &str,
     event_type: &str,
     entity_type: &str,

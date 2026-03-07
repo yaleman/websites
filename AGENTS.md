@@ -5,6 +5,7 @@
 - Use Cargo tooling for dependency changes only (`cargo add`, `cargo remove`).
 - Do not use the SeaORM CLI.
 - All DB schema changes must be made through migration files in the db crate.
+- If more than one database modification is needed, wrap them in a transaction so failures roll back all changes.
 - Any change to system design must include an update to this file.
 - A task is not complete until `mise check` passes.
 - Commit changes once a user request is confirmed complete.

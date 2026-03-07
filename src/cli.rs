@@ -3,6 +3,7 @@ use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand};
+use sea_orm::TransactionTrait;
 use serde_json::json;
 use url::Url;
 use uuid::Uuid;
@@ -374,20 +375,29 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 full_title,
                 template_name,
             } => {
-                let site = create_site(db_ref, short_name, full_title, template_name).await?;
-                let _ = log_audit_event(
-                    db_ref,
-                    "system",
-                    "create_site",
-                    "site",
-                    &site.id.to_string(),
-                    Some(site.id),
-                    Some(json!({
-                        "short_name": &site.short_name,
-                        "full_title": &site.full_title
-                    })),
-                )
-                .await?;
+                let site = db_ref
+                    .transaction::<_, _, String>(|txn| {
+                        Box::pin(async move {
+                            let site =
+                                create_site(txn, short_name, full_title, template_name).await?;
+                            log_audit_event(
+                                txn,
+                                "system",
+                                "create_site",
+                                "site",
+                                &site.id.to_string(),
+                                Some(site.id),
+                                Some(json!({
+                                    "short_name": &site.short_name,
+                                    "full_title": &site.full_title
+                                })),
+                            )
+                            .await?;
+                            Ok(site)
+                        })
+                    })
+                    .await
+                    .map_err(|error| format!("failed to create site: {error}"))?;
                 println!("created site: {} ({})", site.id, site.short_name);
                 Ok(())
             }
@@ -414,29 +424,37 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
             } => {
                 let site_id = parse_uuid(&site_id, "site_id")?;
                 let user_id = parse_uuid(&user_id, "user_id")?;
-                let membership = create_membership(
-                    db_ref,
-                    NewMembership {
-                        site_id,
-                        user_id,
-                        role,
-                    },
-                )
-                .await?;
-                let _ = log_audit_event(
-                    db_ref,
-                    "system",
-                    "create_membership",
-                    "site_membership",
-                    &membership.id.to_string(),
-                    Some(membership.site_id),
-                    Some(json!({
-                        "site_id": membership.site_id.to_string(),
-                        "user_id": membership.user_id.to_string(),
-                        "role": membership.role
-                    })),
-                )
-                .await?;
+                let membership = db_ref
+                    .transaction::<_, _, String>(|txn| {
+                        Box::pin(async move {
+                            let membership = create_membership(
+                                txn,
+                                NewMembership {
+                                    site_id,
+                                    user_id,
+                                    role,
+                                },
+                            )
+                            .await?;
+                            log_audit_event(
+                                txn,
+                                "system",
+                                "create_membership",
+                                "site_membership",
+                                &membership.id.to_string(),
+                                Some(membership.site_id),
+                                Some(json!({
+                                    "site_id": membership.site_id.to_string(),
+                                    "user_id": membership.user_id.to_string(),
+                                    "role": membership.role
+                                })),
+                            )
+                            .await?;
+                            Ok(membership)
+                        })
+                    })
+                    .await
+                    .map_err(|error| format!("failed to create membership: {error}"))?;
                 println!("created membership: {} {}", membership.id, membership.role);
                 Ok(())
             }
@@ -456,17 +474,25 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
             }
             SiteCommands::TagCreate { site_id, name } => {
                 let site_id = parse_uuid(&site_id, "site_id")?;
-                let tag = create_tag(db_ref, NewTag { site_id, name }).await?;
-                let _ = log_audit_event(
-                    db_ref,
-                    "system",
-                    "create_tag",
-                    "tag",
-                    &tag.id.to_string(),
-                    Some(tag.site_id),
-                    Some(json!({"name": &tag.name})),
-                )
-                .await?;
+                let tag = db_ref
+                    .transaction::<_, _, String>(|txn| {
+                        Box::pin(async move {
+                            let tag = create_tag(txn, NewTag { site_id, name }).await?;
+                            log_audit_event(
+                                txn,
+                                "system",
+                                "create_tag",
+                                "tag",
+                                &tag.id.to_string(),
+                                Some(tag.site_id),
+                                Some(json!({"name": &tag.name})),
+                            )
+                            .await?;
+                            Ok(tag)
+                        })
+                    })
+                    .await
+                    .map_err(|error| format!("failed to create tag: {error}"))?;
                 println!("created tag: {} {}", tag.id, tag.name);
                 Ok(())
             }
@@ -498,17 +524,25 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
         },
         Commands::User { command } => match command {
             UserCommands::Create { subject } => {
-                let user = create_user(db_ref, NewUser { subject }).await?;
-                let _ = log_audit_event(
-                    db_ref,
-                    "system",
-                    "create_user",
-                    "user",
-                    &user.id.to_string(),
-                    None,
-                    Some(json!({"subject": &user.subject})),
-                )
-                .await?;
+                let user = db_ref
+                    .transaction::<_, _, String>(|txn| {
+                        Box::pin(async move {
+                            let user = create_user(txn, NewUser { subject }).await?;
+                            log_audit_event(
+                                txn,
+                                "system",
+                                "create_user",
+                                "user",
+                                &user.id.to_string(),
+                                None,
+                                Some(json!({"subject": &user.subject})),
+                            )
+                            .await?;
+                            Ok(user)
+                        })
+                    })
+                    .await
+                    .map_err(|error| format!("failed to create user: {error}"))?;
                 println!("created user: {} {}", user.id, user.subject);
                 Ok(())
             }
@@ -538,33 +572,41 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 height,
             } => {
                 let site_id = parse_uuid(&site_id, "site_id")?;
-                let asset = create_asset(
-                    db_ref,
-                    NewAsset {
-                        site_id,
-                        uploader_sub,
-                        original_filename,
-                        storage_basename,
-                        mime_type,
-                        byte_length,
-                        width,
-                        height,
-                    },
-                )
-                .await?;
-                let _ = log_audit_event(
-                    db_ref,
-                    &asset.uploader_sub,
-                    "create_asset",
-                    "asset",
-                    &asset.id.to_string(),
-                    Some(asset.site_id),
-                    Some(json!({
-                        "original_filename": &asset.original_filename,
-                        "storage_basename": &asset.storage_basename
-                    })),
-                )
-                .await?;
+                let asset = db_ref
+                    .transaction::<_, _, String>(|txn| {
+                        Box::pin(async move {
+                            let asset = create_asset(
+                                txn,
+                                NewAsset {
+                                    site_id,
+                                    uploader_sub,
+                                    original_filename,
+                                    storage_basename,
+                                    mime_type,
+                                    byte_length,
+                                    width,
+                                    height,
+                                },
+                            )
+                            .await?;
+                            log_audit_event(
+                                txn,
+                                &asset.uploader_sub,
+                                "create_asset",
+                                "asset",
+                                &asset.id.to_string(),
+                                Some(asset.site_id),
+                                Some(json!({
+                                    "original_filename": &asset.original_filename,
+                                    "storage_basename": &asset.storage_basename
+                                })),
+                            )
+                            .await?;
+                            Ok(asset)
+                        })
+                    })
+                    .await
+                    .map_err(|error| format!("failed to create asset: {error}"))?;
                 println!("created asset: {} {}", asset.id, asset.original_filename);
                 Ok(())
             }
@@ -595,32 +637,40 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 height,
             } => {
                 let asset_id = parse_uuid(&asset_id, "asset_id")?;
-                let variant = create_asset_variant(
-                    db_ref,
-                    NewAssetVariant {
-                        asset_id,
-                        variant_kind,
-                        filename,
-                        mime_type,
-                        byte_length,
-                        width,
-                        height,
-                    },
-                )
-                .await?;
-                let _ = log_audit_event(
-                    db_ref,
-                    "system",
-                    "create_asset_variant",
-                    "asset_variant",
-                    &variant.id.to_string(),
-                    Some(variant.asset_id),
-                    Some(json!({
-                        "variant_kind": &variant.variant_kind,
-                        "filename": &variant.filename
-                    })),
-                )
-                .await?;
+                let variant = db_ref
+                    .transaction::<_, _, String>(|txn| {
+                        Box::pin(async move {
+                            let variant = create_asset_variant(
+                                txn,
+                                NewAssetVariant {
+                                    asset_id,
+                                    variant_kind,
+                                    filename,
+                                    mime_type,
+                                    byte_length,
+                                    width,
+                                    height,
+                                },
+                            )
+                            .await?;
+                            log_audit_event(
+                                txn,
+                                "system",
+                                "create_asset_variant",
+                                "asset_variant",
+                                &variant.id.to_string(),
+                                Some(variant.asset_id),
+                                Some(json!({
+                                    "variant_kind": &variant.variant_kind,
+                                    "filename": &variant.filename
+                                })),
+                            )
+                            .await?;
+                            Ok(variant)
+                        })
+                    })
+                    .await
+                    .map_err(|error| format!("failed to create asset variant: {error}"))?;
                 println!("created variant: {} {}", variant.id, variant.filename);
                 Ok(())
             }
@@ -702,35 +752,43 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 let site_id = parse_uuid(&site_id, "site_id")?;
                 let page_type = PageType::from_str(&page_type)?;
                 let published_at = parse_optional_datetime(published_at, "published_at")?;
-                let content = create_content(
-                    db_ref,
-                    NewContent {
-                        site_id,
-                        page_type,
-                        title,
-                        slug,
-                        page_content,
-                        creator_sub,
-                        draft,
-                        published_at,
-                    },
-                )
-                .await?;
-                let _ = log_audit_event(
-                    db_ref,
-                    &content.creator_sub,
-                    "create_content",
-                    "content_item",
-                    &content.id.to_string(),
-                    Some(content.site_id),
-                    Some(json!({
-                        "page_type": content.page_type.to_string(),
-                        "slug": &content.slug,
-                        "title": &content.title,
-                        "draft": content.draft
-                    })),
-                )
-                .await?;
+                let content = db_ref
+                    .transaction::<_, _, String>(|txn| {
+                        Box::pin(async move {
+                            let content = create_content(
+                                txn,
+                                NewContent {
+                                    site_id,
+                                    page_type,
+                                    title,
+                                    slug,
+                                    page_content,
+                                    creator_sub,
+                                    draft,
+                                    published_at,
+                                },
+                            )
+                            .await?;
+                            log_audit_event(
+                                txn,
+                                &content.creator_sub,
+                                "create_content",
+                                "content_item",
+                                &content.id.to_string(),
+                                Some(content.site_id),
+                                Some(json!({
+                                    "page_type": content.page_type.to_string(),
+                                    "slug": &content.slug,
+                                    "title": &content.title,
+                                    "draft": content.draft
+                                })),
+                            )
+                            .await?;
+                            Ok(content)
+                        })
+                    })
+                    .await
+                    .map_err(|error| format!("failed to create content: {error}"))?;
                 println!("created content: {} {}", content.id, content.title);
                 Ok(())
             }
@@ -773,30 +831,38 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
             } => {
                 let content_id = parse_uuid(&content_id, "content_id")?;
                 let site_id = parse_uuid(&site_id, "site_id")?;
-                let alias = create_alias(
-                    db_ref,
-                    NewAlias {
-                        content_id,
-                        site_id,
-                        alias_path,
-                        kind,
-                    },
-                )
-                .await?;
-                let _ = log_audit_event(
-                    db_ref,
-                    "system",
-                    "create_alias",
-                    "content_alias",
-                    &alias.id.to_string(),
-                    Some(alias.site_id),
-                    Some(json!({
-                        "content_id": alias.content_id.to_string(),
-                        "alias_path": &alias.alias_path,
-                        "kind": &alias.kind
-                    })),
-                )
-                .await?;
+                let alias = db_ref
+                    .transaction::<_, _, String>(|txn| {
+                        Box::pin(async move {
+                            let alias = create_alias(
+                                txn,
+                                NewAlias {
+                                    content_id,
+                                    site_id,
+                                    alias_path,
+                                    kind,
+                                },
+                            )
+                            .await?;
+                            log_audit_event(
+                                txn,
+                                "system",
+                                "create_alias",
+                                "content_alias",
+                                &alias.id.to_string(),
+                                Some(alias.site_id),
+                                Some(json!({
+                                    "content_id": alias.content_id.to_string(),
+                                    "alias_path": &alias.alias_path,
+                                    "kind": &alias.kind
+                                })),
+                            )
+                            .await?;
+                            Ok(alias)
+                        })
+                    })
+                    .await
+                    .map_err(|error| format!("failed to create alias: {error}"))?;
                 println!("created alias: {} {}", alias.id, alias.alias_path);
                 Ok(())
             }
@@ -937,35 +1003,43 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 let content_id = parse_uuid(&content_id, "content_id")?;
                 let page_type = page_type.as_deref().map(PageType::from_str).transpose()?;
                 let published_at = parse_optional_datetime(published_at, "published_at")?;
-                let content = update_content(
-                    db_ref,
-                    UpdateContent {
-                        content_id,
-                        page_type,
-                        title,
-                        slug,
-                        page_content,
-                        draft,
-                        published_at,
-                        editor_sub,
-                    },
-                )
-                .await?;
-                let _ = log_audit_event(
-                    db_ref,
-                    &content.creator_sub,
-                    "update_content",
-                    "content_item",
-                    &content.id.to_string(),
-                    Some(content.site_id),
-                    Some(json!({
-                        "content_id": content.id.to_string(),
-                        "page_type": content.page_type.to_string(),
-                        "slug": &content.slug,
-                        "title": &content.title
-                    })),
-                )
-                .await?;
+                let content = db_ref
+                    .transaction::<_, _, String>(|txn| {
+                        Box::pin(async move {
+                            let content = update_content(
+                                txn,
+                                UpdateContent {
+                                    content_id,
+                                    page_type,
+                                    title,
+                                    slug,
+                                    page_content,
+                                    draft,
+                                    published_at,
+                                    editor_sub,
+                                },
+                            )
+                            .await?;
+                            log_audit_event(
+                                txn,
+                                &content.creator_sub,
+                                "update_content",
+                                "content_item",
+                                &content.id.to_string(),
+                                Some(content.site_id),
+                                Some(json!({
+                                    "content_id": content.id.to_string(),
+                                    "page_type": content.page_type.to_string(),
+                                    "slug": &content.slug,
+                                    "title": &content.title
+                                })),
+                            )
+                            .await?;
+                            Ok(content)
+                        })
+                    })
+                    .await
+                    .map_err(|error| format!("failed to update content: {error}"))?;
                 println!("updated content: {} {}", content.id, content.title);
                 Ok(())
             }
@@ -976,28 +1050,36 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
             } => {
                 let content_id = parse_uuid(&content_id, "content_id")?;
                 let site_id = parse_uuid(&site_id, "site_id")?;
-                let content_tag = add_content_tag(
-                    db_ref,
-                    NewContentTag {
-                        content_id,
-                        site_id,
-                        tag_name,
-                    },
-                )
-                .await?;
-                let _ = log_audit_event(
-                    db_ref,
-                    "system",
-                    "add_content_tag",
-                    "content_tag",
-                    &content_tag.id.to_string(),
-                    Some(content_tag.content_id),
-                    Some(json!({
-                        "content_id": content_tag.content_id.to_string(),
-                        "tag_id": content_tag.tag_id.to_string()
-                    })),
-                )
-                .await?;
+                let content_tag = db_ref
+                    .transaction::<_, _, String>(|txn| {
+                        Box::pin(async move {
+                            let content_tag = add_content_tag(
+                                txn,
+                                NewContentTag {
+                                    content_id,
+                                    site_id,
+                                    tag_name,
+                                },
+                            )
+                            .await?;
+                            log_audit_event(
+                                txn,
+                                "system",
+                                "add_content_tag",
+                                "content_tag",
+                                &content_tag.id.to_string(),
+                                Some(content_tag.content_id),
+                                Some(json!({
+                                    "content_id": content_tag.content_id.to_string(),
+                                    "tag_id": content_tag.tag_id.to_string()
+                                })),
+                            )
+                            .await?;
+                            Ok(content_tag)
+                        })
+                    })
+                    .await
+                    .map_err(|error| format!("failed to add content tag: {error}"))?;
                 println!(
                     "linked content tag: {} {}",
                     content_tag.id, content_tag.tag_id
@@ -1024,17 +1106,26 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 creator_sub,
             } => {
                 let site_id = parse_uuid(&site_id, "site_id")?;
-                let imported = import_wordpress(db_ref, site_id, &file_path, &creator_sub).await?;
-                let _ = log_audit_event(
-                    db_ref,
-                    &creator_sub,
-                    "import_wordpress",
-                    "content_item",
-                    &site_id.to_string(),
-                    Some(site_id),
-                    Some(json!({"imported": imported})),
-                )
-                .await?;
+                let imported = db_ref
+                    .transaction::<_, _, String>(|txn| {
+                        Box::pin(async move {
+                            let imported =
+                                import_wordpress(txn, site_id, &file_path, &creator_sub).await?;
+                            log_audit_event(
+                                txn,
+                                &creator_sub,
+                                "import_wordpress",
+                                "content_item",
+                                &site_id.to_string(),
+                                Some(site_id),
+                                Some(json!({"imported": imported})),
+                            )
+                            .await?;
+                            Ok(imported)
+                        })
+                    })
+                    .await
+                    .map_err(|error| format!("failed to import wordpress: {error}"))?;
                 println!("imported {} wordpress items", imported);
                 Ok(())
             }

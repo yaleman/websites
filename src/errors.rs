@@ -1,5 +1,6 @@
 use axum::{Json, response::IntoResponse};
 
+#[derive(Debug)]
 pub enum SiteError {
     NotFound,
     Internal(String),
@@ -22,6 +23,16 @@ impl IntoResponse for SiteError {
             SiteError::UnAuthorized(msg) => {
                 (axum::http::StatusCode::UNAUTHORIZED, msg).into_response()
             }
+        }
+    }
+}
+
+impl std::fmt::Display for SiteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SiteError::NotFound => write!(f, "not found"),
+            SiteError::Internal(msg) => write!(f, "internal error: {msg}"),
+            SiteError::UnAuthorized(msg) => write!(f, "unauthorized: {msg}"),
         }
     }
 }
