@@ -1,3 +1,7 @@
+use crate::cli::{
+    AssetCommands, AuditCommands, Commands, ContentCommands, OidcConfig, ServeCommands,
+    SiteCommands, UserCommands,
+};
 use chrono::{DateTime, Datelike, SecondsFormat, Utc};
 use quick_xml::Reader;
 use quick_xml::events::Event;
@@ -16,16 +20,13 @@ use tokio::fs;
 use url::Url;
 use uuid::Uuid;
 
-use crate::cli::{
-    AssetCommands, AuditCommands, Commands, ContentCommands, OidcConfig, ServeCommands,
-    SiteCommands, UserCommands,
-};
-
 pub mod cli;
 pub mod entities;
 pub mod errors;
 pub mod middleware;
 pub mod migration;
+pub mod telemetry;
+pub mod tls;
 pub mod web;
 
 pub struct NewContent {
@@ -1588,9 +1589,9 @@ pub async fn execute(
             Ok(())
         }
         Commands::ShowConfig => {
-            println!("tls_cert_path={}", cli_value(&oidc.tls_cert_path));
-            println!("tls_key_path={}", cli_value(&oidc.tls_key_path));
-            println!("frontend_url={}", cli_value(&oidc.frontend_url));
+            println!("tls_cert_path={:?}", &oidc.tls_cert_path.display());
+            println!("tls_key_path={:?}", &oidc.tls_key_path.display());
+            println!("frontend_url={}", &oidc.frontend_url);
             println!("oidc_client_id={}", cli_value(&oidc.oidc_client_id));
             println!("oidc_discovery_url={}", cli_value(&oidc.oidc_discovery_url));
             Ok(())
@@ -1860,9 +1861,9 @@ pub async fn execute(
             }
         },
         Commands::Serve { command } => match command {
-            ServeCommands::Admin { listen } => {
-                web::run_admin_server(db.clone(), &listen, oidc).await
-            }
+            ServeCommands::Admin { listen } => web::run_admin_server(db.clone(), &listen, oidc)
+                .await
+                .map_err(|err| err.to_string()),
         },
         Commands::Audit { command } => match command {
             AuditCommands::List { site_id } => {
