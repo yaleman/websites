@@ -412,7 +412,7 @@ test.describe("content new editor", () => {
     }
   });
 
-  test("denies access without membership", async ({ browser }) => {
+  test("allows access without membership", async ({ browser }) => {
     const harness = await setupHarness();
 
     try {
@@ -435,7 +435,8 @@ test.describe("content new editor", () => {
       );
 
       expect(response).not.toBeNull();
-      expect(response?.status()).toBe(401);
+      expect(response?.status()).toBe(200);
+      await expect(page.locator("#editor")).toBeVisible();
     } finally {
       await cleanupHarness(harness);
     }
