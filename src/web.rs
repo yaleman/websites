@@ -65,10 +65,27 @@ struct AdminPageTemplate {
     pre_body: String,
 }
 
+#[derive(Template, WebTemplate)]
+#[template(path = "admin/sites.html")]
+struct AdminSitesTemplate {
+    title: String,
+    heading: String,
+    message: String,
+    sites: Vec<AdminSiteRow>,
+    links: Vec<AdminLink>,
+}
+
 #[derive(Debug)]
 struct AdminRow {
     label: String,
     value: String,
+}
+
+#[derive(Debug)]
+struct AdminSiteRow {
+    short_name: String,
+    full_title: String,
+    content_href: String,
 }
 
 #[derive(Debug)]
@@ -269,28 +286,24 @@ async fn admin_index(State(_state): State<AdminState>) -> AdminPageTemplate {
     }
 }
 
-async fn admin_sites(State(state): State<AdminState>) -> Result<AdminPageTemplate, SiteError> {
+async fn admin_sites(State(state): State<AdminState>) -> Result<AdminSitesTemplate, SiteError> {
     match list_sites(&state.db.clone()).await {
         Ok(sites) => {
             let rows = sites
                 .into_iter()
-                .map(|site| AdminRow {
-                    label: site.short_name,
-                    value: format!(
-                        "{0} ({1}) [content: /admin/site/{0}/content, tags: /admin/site/{0}/tags, assets: /admin/site/{0}/assets, settings: /admin/site/{0}/settings, render: /admin/site/{0}/render]",
-                        site.id, site.full_title
-                    ),
+                .map(|site| AdminSiteRow {
+                    short_name: site.short_name,
+                    full_title: site.full_title,
+                    content_href: format!("/admin/site/{}/content", site.id),
                 })
                 .collect();
 
-            Ok(AdminPageTemplate {
+            Ok(AdminSitesTemplate {
                 title: "Sites".to_string(),
                 heading: "Managed Sites".to_string(),
                 message: "Manage sites and browse site zones from here.".to_string(),
-                rows,
                 links: vec![link("/admin/sites/new", "New site")],
-                inline_body: String::new(),
-                pre_body: String::new(),
+                sites: rows,
             })
         }
         Err(error) => Err(SiteError::internal(format!(

@@ -1,0 +1,23 @@
+{% extends "base_template.html" %}
+{% block body %}
+{% if !sites.is_empty() %}
+<table>
+  <thead>
+    <tr>
+      <th>Site</th>
+      <th>Title</th>
+      <th>Content</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for site in sites %}
+    <tr>
+      <td>{{ site.short_name }}</td>
+      <td>{{ site.full_title }}</td>
+      <td><a href="{{ site.content_href }}">View content</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}
