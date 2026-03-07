@@ -7,10 +7,10 @@ use sea_orm::{
     Statement,
 };
 use serde_json::json;
-use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::result::Result as StdResult;
+use std::{collections::HashSet, sync::Arc};
 use tera::{Context, Tera};
 use tokio::fs;
 use url::Url;
@@ -23,6 +23,7 @@ use crate::cli::{
 
 pub mod cli;
 pub mod entities;
+pub mod errors;
 pub mod middleware;
 pub mod migration;
 pub mod web;
@@ -99,11 +100,7 @@ pub struct UpdateContent {
 }
 
 /// Runs all schema statements required by the current platform specification.
-pub async fn ensure_schema(database_url: &str) -> StdResult<(), String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
+pub async fn ensure_schema(db: &DatabaseConnection) -> StdResult<(), String> {
     for statement in migration::SCHEMA_SQL {
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
@@ -113,13 +110,12 @@ pub async fn ensure_schema(database_url: &str) -> StdResult<(), String> {
         .map_err(|error: DbErr| error.to_string())?;
     }
 
-    let _ = db.close().await;
     Ok(())
 }
 
 /// Records an audit event for administrative actions.
 pub async fn log_audit_event(
-    database_url: &str,
+    db: &DatabaseConnection,
     actor_sub: &str,
     event_type: &str,
     entity_type: &str,
@@ -127,10 +123,6 @@ pub async fn log_audit_event(
     site_id: Option<&str>,
     payload_json: Option<&str>,
 ) -> StdResult<entities::audit_event::Model, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let model = entities::audit_event::ActiveModel {
         id: Set(uuid_v7()),
         site_id: Set(site_id.map(ToString::to_string)),
@@ -142,20 +134,16 @@ pub async fn log_audit_event(
         payload_json: Set(payload_json.map(ToString::to_string)),
     };
 
-    let model = model.insert(&db).await.map_err(|error| error.to_string())?;
-    let _ = db.close().await;
+    let model = model.insert(db).await.map_err(|error| error.to_string())?;
+
     Ok(model)
 }
 
 /// Returns audit events, optionally filtered by site_id.
 pub async fn list_audit_events(
-    database_url: &str,
+    db: &DatabaseConnection,
     site_id: Option<&str>,
 ) -> StdResult<Vec<entities::audit_event::Model>, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let query = entities::audit_event::Entity::find();
     let query = if let Some(site_id) = site_id {
         query.filter(entities::audit_event::Column::SiteId.eq(site_id.to_owned()))
@@ -164,11 +152,10 @@ pub async fn list_audit_events(
     };
     let events = query
         .order_by_desc(entities::audit_event::Column::CreatedAt)
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error| error.to_string())?;
 
-    let _ = db.close().await;
     Ok(events)
 }
 
@@ -181,17 +168,13 @@ const DEFAULT_TAG_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"u
 
 /// Renders all published content for a site into ./rendered/<site_short_name>.
 pub async fn render_site(
-    database_url: &str,
+    db: &DatabaseConnection,
     site_id: &str,
     templates_dir: &str,
     rendered_dir: &str,
 ) -> StdResult<usize, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let site = entities::site::Entity::find_by_id(site_id.to_owned())
-        .one(&db)
+        .one(db)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "site not found".to_string())?;
@@ -200,7 +183,7 @@ pub async fn render_site(
         .filter(entities::content_item::Column::SiteId.eq(site.id.clone()))
         .filter(entities::content_item::Column::Draft.eq(false))
         .order_by_desc(entities::content_item::Column::CreatedAt)
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error| error.to_string())?;
     let now = Utc::now();
@@ -262,7 +245,7 @@ pub async fn render_site(
 
         let aliases = entities::content_alias::Entity::find()
             .filter(entities::content_alias::Column::ContentId.eq(item.id.clone()))
-            .all(&db)
+            .all(db)
             .await
             .map_err(|error: DbErr| error.to_string())?;
         for alias in aliases {
@@ -275,7 +258,7 @@ pub async fn render_site(
         } else {
             "page.html"
         };
-        let tags = load_tag_names(&db, &item.id).await?;
+        let tags = load_tag_names(db, &item.id).await?;
         let tag_links = render_tag_links(&tags);
         let mut context = Context::new();
         context.insert("title", &item.title);
@@ -367,7 +350,7 @@ pub async fn render_site(
 
     let tags = entities::tag::Entity::find()
         .filter(entities::tag::Column::SiteId.eq(site.id.clone()))
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error: DbErr| error.to_string())?;
 
@@ -375,13 +358,13 @@ pub async fn render_site(
         let mut tag_rows = String::new();
         let links = entities::content_tag::Entity::find()
             .filter(entities::content_tag::Column::TagId.eq(tag.id.clone()))
-            .all(&db)
+            .all(db)
             .await
             .map_err(|error: DbErr| error.to_string())?;
 
         for link in links {
             if let Some(content) = entities::content_item::Entity::find_by_id(link.content_id)
-                .one(&db)
+                .one(db)
                 .await
                 .map_err(|error| error.to_string())?
             {
@@ -423,7 +406,7 @@ pub async fn render_site(
 
     let uploads_root = Path::new("uploads/media-storage");
     copy_media_variants(
-        &db,
+        db,
         &site.id,
         uploads_root,
         &tmp_root.join("media/images"),
@@ -440,7 +423,6 @@ pub async fn render_site(
         .await
         .map_err(|error| error.to_string())?;
 
-    let _ = db.close().await;
     Ok(files_written)
 }
 
@@ -690,15 +672,11 @@ fn content_is_publishable_at(content: &entities::content_item::Model, now: DateT
 
 /// Creates a site record and returns the persisted row.
 pub async fn create_site(
-    database_url: &str,
+    db: &DatabaseConnection,
     short_name: String,
     full_title: String,
     template_name: String,
 ) -> StdResult<entities::site::Model, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let model = entities::site::ActiveModel {
         id: Set(uuid_v7()),
@@ -709,24 +687,18 @@ pub async fn create_site(
         updated_at: Set(now),
     };
 
-    let model = model.insert(&db).await.map_err(|error| error.to_string())?;
-    let _ = db.close().await;
+    let model = model.insert(db).await.map_err(|error| error.to_string())?;
 
     Ok(model)
 }
 
 /// Returns all sites ordered by short name.
-pub async fn list_sites(database_url: &str) -> StdResult<Vec<entities::site::Model>, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
+pub async fn list_sites(db: &DatabaseConnection) -> StdResult<Vec<entities::site::Model>, String> {
     let sites = entities::site::Entity::find()
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error| error.to_string())?;
 
-    let _ = db.close().await;
     Ok(sites)
 }
 
@@ -740,13 +712,9 @@ fn utc_now() -> String {
 
 /// Creates one content record and one revision snapshot in the same operation.
 pub async fn create_content(
-    database_url: &str,
+    db: &DatabaseConnection,
     input: NewContent,
 ) -> StdResult<entities::content_item::Model, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let now = utc_now();
     let content_id = uuid_v7();
     let revision_id = uuid_v7();
@@ -780,7 +748,7 @@ pub async fn create_content(
         last_updated: Set(now.clone()),
         published_at: Set(published_at),
     }
-    .insert(&db)
+    .insert(db)
     .await
     .map_err(|error| error.to_string())?;
 
@@ -797,27 +765,23 @@ pub async fn create_content(
         editor_sub: Set(content.creator_sub.clone()),
         created_at: Set(now.clone()),
     }
-    .insert(&db)
+    .insert(db)
     .await
     .map_err(|error| error.to_string())?;
 
     drop(revision);
-    let _ = db.close().await;
+
     Ok(content)
 }
 
 /// Updates a content row and appends a revision snapshot.
 pub async fn update_content(
-    database_url: &str,
+    db: &DatabaseConnection,
     input: UpdateContent,
 ) -> StdResult<entities::content_item::Model, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let now = utc_now();
     let existing = entities::content_item::Entity::find_by_id(&input.content_id)
-        .one(&db)
+        .one(db)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "content not found".to_string())?;
@@ -851,13 +815,13 @@ pub async fn update_content(
     active.last_updated = Set(now.clone());
 
     let content: entities::content_item::Model = active
-        .update(&db)
+        .update(db)
         .await
         .map_err(|error: DbErr| error.to_string())?;
 
     let revisions = entities::content_revision::Entity::find()
         .filter(entities::content_revision::Column::ContentId.eq(input.content_id.as_str()))
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error: DbErr| error.to_string())?;
     let revision_number = i32::try_from(revisions.len())
@@ -877,13 +841,13 @@ pub async fn update_content(
         editor_sub: Set(input.editor_sub),
         created_at: Set(now),
     }
-    .insert(&db)
+    .insert(db)
     .await
     .map_err(|error| error.to_string())?;
 
     let content_tags = entities::content_tag::Entity::find()
         .filter(entities::content_tag::Column::ContentId.eq(content.id.clone()))
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error: DbErr| error.to_string())?;
 
@@ -893,14 +857,14 @@ pub async fn update_content(
             revision_id: Set(revision.id.clone()),
             tag_id: Set(content_tag.tag_id),
         }
-        .insert(&db)
+        .insert(db)
         .await
         .map_err(|error: DbErr| error.to_string())?;
     }
 
     let aliases = entities::content_alias::Entity::find()
         .filter(entities::content_alias::Column::ContentId.eq(content.id.clone()))
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error: DbErr| error.to_string())?;
 
@@ -911,25 +875,20 @@ pub async fn update_content(
             alias_path: Set(alias.alias_path),
             kind: Set(alias.kind),
         }
-        .insert(&db)
+        .insert(db)
         .await
         .map_err(|error: DbErr| error.to_string())?;
     }
 
-    let _ = db.close().await;
     Ok(content)
 }
 
 /// Returns all content records for a site, optionally filtered by page_type.
 pub async fn list_content(
-    database_url: &str,
+    db: &DatabaseConnection,
     site_id: &str,
     page_type: Option<&str>,
 ) -> StdResult<Vec<entities::content_item::Model>, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let query = entities::content_item::Entity::find()
         .filter(entities::content_item::Column::SiteId.eq(site_id.to_owned()));
     let query = if let Some(filter) = page_type {
@@ -938,21 +897,17 @@ pub async fn list_content(
         query
     };
 
-    let content = query.all(&db).await.map_err(|error| error.to_string())?;
-    let _ = db.close().await;
+    let content = query.all(db).await.map_err(|error| error.to_string())?;
+
     Ok(content)
 }
 
 /// Search content for a site by title, slug, or body substring.
 pub async fn search_content(
-    database_url: &str,
+    db: &DatabaseConnection,
     site_id: &str,
     query: &str,
 ) -> StdResult<Vec<entities::content_item::Model>, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let condition = Condition::any()
         .add(entities::content_item::Column::Title.contains(query))
         .add(entities::content_item::Column::Slug.contains(query))
@@ -961,11 +916,10 @@ pub async fn search_content(
     let items = entities::content_item::Entity::find()
         .filter(entities::content_item::Column::SiteId.eq(site_id.to_owned()))
         .filter(condition)
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error| error.to_string())?;
 
-    let _ = db.close().await;
     Ok(items)
 }
 
@@ -982,7 +936,7 @@ struct WordpressItem {
 }
 
 pub async fn import_wordpress(
-    database_url: &str,
+    db: &DatabaseConnection,
     site_id: &str,
     file_path: &str,
     creator_sub: &str,
@@ -1013,7 +967,7 @@ pub async fn import_wordpress(
             .and_then(wordpress_date_to_rfc3339);
 
         let content_model = create_content(
-            database_url,
+            db,
             NewContent {
                 site_id: site_id.to_string(),
                 page_type: post_type,
@@ -1030,7 +984,7 @@ pub async fn import_wordpress(
         if let Some(post_id) = item.post_id {
             let alias_path = format!("/?p={post_id}");
             let _ = create_alias(
-                database_url,
+                db,
                 NewAlias {
                     content_id: content_model.id.clone(),
                     site_id: site_id.to_string(),
@@ -1045,7 +999,7 @@ pub async fn import_wordpress(
             && let Some(alias_path) = wordpress_link_to_alias(&link)
         {
             let _ = create_alias(
-                database_url,
+                db,
                 NewAlias {
                     content_id: content_model.id.clone(),
                     site_id: site_id.to_string(),
@@ -1178,51 +1132,37 @@ fn normalize_slug(value: &str) -> String {
 
 /// Returns a single content item by id.
 pub async fn get_content(
-    database_url: &str,
+    db: &DatabaseConnection,
     content_id: &str,
 ) -> StdResult<entities::content_item::Model, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let content = entities::content_item::Entity::find_by_id(content_id)
-        .one(&db)
+        .one(db)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "content not found".to_string())?;
 
-    let _ = db.close().await;
     Ok(content)
 }
 
 /// Returns a single site by id.
 pub async fn get_site(
-    database_url: &str,
+    db: &DatabaseConnection,
     site_id: &str,
 ) -> StdResult<entities::site::Model, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let model = entities::site::Entity::find_by_id(site_id.to_owned())
-        .one(&db)
+        .one(db)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "site not found".to_string())?;
 
-    let _ = db.close().await;
     Ok(model)
 }
 
 /// Creates a content alias entry.
 pub async fn create_alias(
-    database_url: &str,
+    db: &DatabaseConnection,
     input: NewAlias,
 ) -> StdResult<entities::content_alias::Model, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let model = entities::content_alias::ActiveModel {
         id: Set(uuid_v7()),
         content_id: Set(input.content_id),
@@ -1230,24 +1170,19 @@ pub async fn create_alias(
         alias_path: Set(input.alias_path),
         kind: Set(input.kind),
     }
-    .insert(&db)
+    .insert(db)
     .await
     .map_err(|error| error.to_string())?;
 
-    let _ = db.close().await;
     Ok(model)
 }
 
 /// Returns all content aliases, optionally scoped to content_id.
 pub async fn list_aliases(
-    database_url: &str,
+    db: &DatabaseConnection,
     site_id: &str,
     content_id: Option<&str>,
 ) -> StdResult<Vec<entities::content_alias::Model>, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let query = entities::content_alias::Entity::find()
         .filter(entities::content_alias::Column::SiteId.eq(site_id.to_owned()));
     let query = if let Some(content_id) = content_id {
@@ -1256,74 +1191,60 @@ pub async fn list_aliases(
         query
     };
 
-    let aliases = query.all(&db).await.map_err(|error| error.to_string())?;
-    let _ = db.close().await;
+    let aliases = query.all(db).await.map_err(|error| error.to_string())?;
+
     Ok(aliases)
 }
 
 /// Creates a tag record.
 pub async fn create_tag(
-    database_url: &str,
+    db: &DatabaseConnection,
     input: NewTag,
 ) -> StdResult<entities::tag::Model, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let model = entities::tag::ActiveModel {
         id: Set(uuid_v7()),
         site_id: Set(input.site_id),
         name: Set(input.name),
     };
 
-    let model = model.insert(&db).await.map_err(|error| error.to_string())?;
-    let _ = db.close().await;
+    let model = model.insert(db).await.map_err(|error| error.to_string())?;
+
     Ok(model)
 }
 
 /// Returns all tags for a site.
 pub async fn list_tags(
-    database_url: &str,
+    db: &DatabaseConnection,
     site_id: &str,
 ) -> StdResult<Vec<entities::tag::Model>, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let tags = entities::tag::Entity::find()
         .filter(entities::tag::Column::SiteId.eq(site_id.to_owned()))
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error| error.to_string())?;
 
-    let _ = db.close().await;
     Ok(tags)
 }
 
 /// Adds a tag to content (creates the tag if missing).
 pub async fn add_content_tag(
-    database_url: &str,
+    db: &DatabaseConnection,
     input: NewContentTag,
 ) -> StdResult<entities::content_tag::Model, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let content = entities::content_item::Entity::find_by_id(&input.content_id)
-        .one(&db)
+        .one(db)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "content not found".to_string())?;
 
     if content.site_id != input.site_id {
-        let _ = db.close().await;
         return Err("content does not belong to provided site".to_string());
     }
 
     let tag = if let Some(tag) = entities::tag::Entity::find()
         .filter(entities::tag::Column::SiteId.eq(input.site_id.as_str()))
         .filter(entities::tag::Column::Name.eq(input.tag_name.clone()))
-        .one(&db)
+        .one(db)
         .await
         .map_err(|error| error.to_string())?
     {
@@ -1334,7 +1255,7 @@ pub async fn add_content_tag(
             site_id: Set(input.site_id.clone()),
             name: Set(input.tag_name),
         }
-        .insert(&db)
+        .insert(db)
         .await
         .map_err(|error| error.to_string())?
     };
@@ -1344,31 +1265,25 @@ pub async fn add_content_tag(
         content_id: Set(input.content_id),
         tag_id: Set(tag.id),
     }
-    .insert(&db)
+    .insert(db)
     .await
     .map_err(|error| error.to_string())?;
 
-    let _ = db.close().await;
     Ok(model)
 }
 
 /// Returns tags currently attached to a content item.
 pub async fn list_content_tags(
-    database_url: &str,
+    db: &DatabaseConnection,
     content_id: &str,
 ) -> StdResult<Vec<entities::tag::Model>, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let links = entities::content_tag::Entity::find()
         .filter(entities::content_tag::Column::ContentId.eq(content_id.to_owned()))
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error| error.to_string())?;
 
     if links.is_empty() {
-        let _ = db.close().await;
         return Ok(Vec::new());
     }
 
@@ -1378,50 +1293,39 @@ pub async fn list_content_tags(
         .collect::<Vec<_>>();
     let tags = entities::tag::Entity::find()
         .filter(entities::tag::Column::Id.is_in(tag_ids))
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error| error.to_string())?;
 
-    let _ = db.close().await;
     Ok(tags)
 }
 
 /// Returns all aliases for a specific content revision.
 pub async fn list_revision_aliases(
-    database_url: &str,
+    db: &DatabaseConnection,
     revision_id: &str,
 ) -> StdResult<Vec<entities::content_revision_alias::Model>, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let revision_aliases = entities::content_revision_alias::Entity::find()
         .filter(entities::content_revision_alias::Column::RevisionId.eq(revision_id.to_owned()))
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error| error.to_string())?;
 
-    let _ = db.close().await;
     Ok(revision_aliases)
 }
 
 /// Returns all tags captured for a specific content revision.
 pub async fn list_revision_tags(
-    database_url: &str,
+    db: &DatabaseConnection,
     revision_id: &str,
 ) -> StdResult<Vec<entities::tag::Model>, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let links = entities::content_revision_tag::Entity::find()
         .filter(entities::content_revision_tag::Column::RevisionId.eq(revision_id.to_owned()))
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error| error.to_string())?;
 
     if links.is_empty() {
-        let _ = db.close().await;
         return Ok(Vec::new());
     }
 
@@ -1431,71 +1335,55 @@ pub async fn list_revision_tags(
         .collect::<Vec<_>>();
     let tags = entities::tag::Entity::find()
         .filter(entities::tag::Column::Id.is_in(tag_ids))
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error| error.to_string())?;
 
-    let _ = db.close().await;
     Ok(tags)
 }
 
 /// Returns all revisions for a content item sorted by revision number.
 pub async fn list_revisions(
-    database_url: &str,
+    db: &DatabaseConnection,
     content_id: &str,
 ) -> StdResult<Vec<entities::content_revision::Model>, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let revisions = entities::content_revision::Entity::find()
         .filter(entities::content_revision::Column::ContentId.eq(content_id.to_owned()))
         .order_by_desc(entities::content_revision::Column::RevisionNumber)
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error| error.to_string())?;
 
-    let _ = db.close().await;
     Ok(revisions)
 }
 
 /// Returns a single revision by id.
 pub async fn get_revision(
-    database_url: &str,
+    db: &DatabaseConnection,
     revision_id: &str,
 ) -> StdResult<entities::content_revision::Model, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let revision = entities::content_revision::Entity::find_by_id(revision_id)
-        .one(&db)
+        .one(db)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "revision not found".to_string())?;
 
-    let _ = db.close().await;
     Ok(revision)
 }
 
 /// Returns a revision by number, if present.
 pub async fn get_revision_by_number(
-    database_url: &str,
+    db: &DatabaseConnection,
     content_id: &str,
     revision_number: i32,
 ) -> StdResult<Option<entities::content_revision::Model>, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let revision = entities::content_revision::Entity::find()
         .filter(entities::content_revision::Column::ContentId.eq(content_id.to_owned()))
         .filter(entities::content_revision::Column::RevisionNumber.eq(revision_number))
-        .one(&db)
+        .one(db)
         .await
         .map_err(|error| error.to_string())?;
 
-    let _ = db.close().await;
     Ok(revision)
 }
 
@@ -1525,13 +1413,9 @@ fn content_date_path(value: &str) -> Option<String> {
 
 /// Creates a user record and returns the persisted row.
 pub async fn create_user(
-    database_url: &str,
+    db: &DatabaseConnection,
     input: NewUser,
 ) -> StdResult<entities::user::Model, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let model = entities::user::ActiveModel {
         id: Set(uuid_v7()),
         subject: Set(input.subject),
@@ -1539,48 +1423,36 @@ pub async fn create_user(
         last_login_at: Set(None),
     };
 
-    let model = model.insert(&db).await.map_err(|error| error.to_string())?;
-    let _ = db.close().await;
+    let model = model.insert(db).await.map_err(|error| error.to_string())?;
+
     Ok(model)
 }
 
 /// Returns all users.
-pub async fn list_users(database_url: &str) -> StdResult<Vec<entities::user::Model>, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
+pub async fn list_users(db: &DatabaseConnection) -> StdResult<Vec<entities::user::Model>, String> {
     let users = entities::user::Entity::find()
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error| error.to_string())?;
 
-    let _ = db.close().await;
     Ok(users)
 }
 
 /// Ensures a user exists and updates last_login_at.
 pub async fn upsert_user_login(
-    database_url: &str,
+    db: &DatabaseConnection,
     subject: &str,
 ) -> StdResult<entities::user::Model, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let existing = entities::user::Entity::find()
         .filter(entities::user::Column::Subject.eq(subject.to_string()))
-        .one(&db)
+        .one(db)
         .await
         .map_err(|error| error.to_string())?;
 
     let user = if let Some(existing) = existing {
         let mut active = existing.into_active_model();
         active.last_login_at = Set(Some(utc_now()));
-        active
-            .update(&db)
-            .await
-            .map_err(|error| error.to_string())?
+        active.update(db).await.map_err(|error| error.to_string())?
     } else {
         entities::user::ActiveModel {
             id: Set(uuid_v7()),
@@ -1588,24 +1460,19 @@ pub async fn upsert_user_login(
             created_at: Set(utc_now()),
             last_login_at: Set(Some(utc_now())),
         }
-        .insert(&db)
+        .insert(db)
         .await
         .map_err(|error| error.to_string())?
     };
 
-    let _ = db.close().await;
     Ok(user)
 }
 
 /// Creates one site membership record.
 pub async fn create_membership(
-    database_url: &str,
+    db: &DatabaseConnection,
     input: NewMembership,
 ) -> StdResult<entities::site_membership::Model, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let model = entities::site_membership::ActiveModel {
         id: Set(uuid_v7()),
         site_id: Set(input.site_id),
@@ -1613,39 +1480,30 @@ pub async fn create_membership(
         role: Set(input.role),
     };
 
-    let model = model.insert(&db).await.map_err(|error| error.to_string())?;
-    let _ = db.close().await;
+    let model = model.insert(db).await.map_err(|error| error.to_string())?;
+
     Ok(model)
 }
 
 /// Returns memberships for a site.
 pub async fn list_memberships(
-    database_url: &str,
+    db: &DatabaseConnection,
     site_id: &str,
 ) -> StdResult<Vec<entities::site_membership::Model>, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let memberships = entities::site_membership::Entity::find()
         .filter(entities::site_membership::Column::SiteId.eq(site_id.to_owned()))
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error| error.to_string())?;
 
-    let _ = db.close().await;
     Ok(memberships)
 }
 
 /// Creates an asset record.
 pub async fn create_asset(
-    database_url: &str,
+    db: &DatabaseConnection,
     input: NewAsset,
 ) -> StdResult<entities::asset::Model, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let model = entities::asset::ActiveModel {
         id: Set(uuid_v7()),
         site_id: Set(input.site_id),
@@ -1659,39 +1517,30 @@ pub async fn create_asset(
         created_at: Set(utc_now()),
     };
 
-    let model = model.insert(&db).await.map_err(|error| error.to_string())?;
-    let _ = db.close().await;
+    let model = model.insert(db).await.map_err(|error| error.to_string())?;
+
     Ok(model)
 }
 
 /// Returns all assets for a site.
 pub async fn list_assets(
-    database_url: &str,
+    db: &DatabaseConnection,
     site_id: &str,
 ) -> StdResult<Vec<entities::asset::Model>, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let assets = entities::asset::Entity::find()
         .filter(entities::asset::Column::SiteId.eq(site_id.to_owned()))
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error| error.to_string())?;
 
-    let _ = db.close().await;
     Ok(assets)
 }
 
 /// Creates an asset variant entry.
 pub async fn create_asset_variant(
-    database_url: &str,
+    db: &DatabaseConnection,
     input: NewAssetVariant,
 ) -> StdResult<entities::asset_variant::Model, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let model = entities::asset_variant::ActiveModel {
         id: Set(uuid_v7()),
         asset_id: Set(input.asset_id),
@@ -1703,27 +1552,22 @@ pub async fn create_asset_variant(
         height: Set(input.height),
     };
 
-    let model = model.insert(&db).await.map_err(|error| error.to_string())?;
-    let _ = db.close().await;
+    let model = model.insert(db).await.map_err(|error| error.to_string())?;
+
     Ok(model)
 }
 
 /// Returns all variants for an asset.
 pub async fn list_asset_variants(
-    database_url: &str,
+    db: &DatabaseConnection,
     asset_id: &str,
 ) -> StdResult<Vec<entities::asset_variant::Model>, String> {
-    let db = Database::connect(database_url)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let variants = entities::asset_variant::Entity::find()
         .filter(entities::asset_variant::Column::AssetId.eq(asset_id.to_owned()))
-        .all(&db)
+        .all(db)
         .await
         .map_err(|error| error.to_string())?;
 
-    let _ = db.close().await;
     Ok(variants)
 }
 
@@ -1732,9 +1576,14 @@ pub async fn execute(
     database_url: &str,
     oidc: &OidcConfig,
 ) -> Result<(), String> {
+    let db = Arc::new(
+        Database::connect(database_url)
+            .await
+            .map_err(|error| error.to_string())?,
+    );
     match command {
         Commands::Init => {
-            ensure_schema(database_url).await?;
+            ensure_schema(&db).await?;
             println!("database initialized: {}", database_url);
             Ok(())
         }
@@ -1752,9 +1601,9 @@ pub async fn execute(
                 full_title,
                 template_name,
             } => {
-                let site = create_site(database_url, short_name, full_title, template_name).await?;
+                let site = create_site(&db, short_name, full_title, template_name).await?;
                 let _ = log_audit_event(
-                    database_url,
+                    &db,
                     "system",
                     "create_site",
                     "site",
@@ -1772,7 +1621,7 @@ pub async fn execute(
                 Ok(())
             }
             SiteCommands::List => {
-                let sites = list_sites(database_url).await?;
+                let sites = list_sites(&db).await?;
                 if sites.is_empty() {
                     println!("no sites");
                     return Ok(());
@@ -1793,7 +1642,7 @@ pub async fn execute(
                 role,
             } => {
                 let membership = create_membership(
-                    database_url,
+                    &db,
                     NewMembership {
                         site_id,
                         user_id,
@@ -1802,7 +1651,7 @@ pub async fn execute(
                 )
                 .await?;
                 let _ = log_audit_event(
-                    database_url,
+                    &db,
                     "system",
                     "create_membership",
                     "site_membership",
@@ -1817,7 +1666,7 @@ pub async fn execute(
                 Ok(())
             }
             SiteCommands::MemberList { site_id } => {
-                let memberships = list_memberships(database_url, &site_id).await?;
+                let memberships = list_memberships(&db, &site_id).await?;
                 if memberships.is_empty() {
                     println!("no memberships");
                     return Ok(());
@@ -1830,9 +1679,9 @@ pub async fn execute(
                 Ok(())
             }
             SiteCommands::TagCreate { site_id, name } => {
-                let tag = create_tag(database_url, NewTag { site_id, name }).await?;
+                let tag = create_tag(&db, NewTag { site_id, name }).await?;
                 let _ = log_audit_event(
-                    database_url,
+                    &db,
                     "system",
                     "create_tag",
                     "tag",
@@ -1845,7 +1694,7 @@ pub async fn execute(
                 Ok(())
             }
             SiteCommands::TagList { site_id } => {
-                let tags = list_tags(database_url, &site_id).await?;
+                let tags = list_tags(&db, &site_id).await?;
                 if tags.is_empty() {
                     println!("no tags");
                     return Ok(());
@@ -1863,16 +1712,16 @@ pub async fn execute(
                 rendered_dir,
             } => {
                 let files_written =
-                    render_site(database_url, &site_id, &templates_dir, &rendered_dir).await?;
+                    render_site(&db, &site_id, &templates_dir, &rendered_dir).await?;
                 println!("rendered site {} files {}", site_id, files_written);
                 Ok(())
             }
         },
         Commands::User { command } => match command {
             UserCommands::Create { subject } => {
-                let user = create_user(database_url, NewUser { subject }).await?;
+                let user = create_user(&db, NewUser { subject }).await?;
                 let _ = log_audit_event(
-                    database_url,
+                    &db,
                     "system",
                     "create_user",
                     "user",
@@ -1885,7 +1734,7 @@ pub async fn execute(
                 Ok(())
             }
             UserCommands::List => {
-                let users = list_users(database_url).await?;
+                let users = list_users(&db).await?;
                 if users.is_empty() {
                     println!("no users");
                     return Ok(());
@@ -1910,7 +1759,7 @@ pub async fn execute(
                 height,
             } => {
                 let asset = create_asset(
-                    database_url,
+                    &db,
                     NewAsset {
                         site_id,
                         uploader_sub,
@@ -1924,7 +1773,7 @@ pub async fn execute(
                 )
                 .await?;
                 let _ = log_audit_event(
-                    database_url,
+                    &db,
                     &asset.uploader_sub,
                     "create_asset",
                     "asset",
@@ -1940,7 +1789,7 @@ pub async fn execute(
                 Ok(())
             }
             AssetCommands::List { site_id } => {
-                let assets = list_assets(database_url, &site_id).await?;
+                let assets = list_assets(&db, &site_id).await?;
                 if assets.is_empty() {
                     println!("no assets");
                     return Ok(());
@@ -1965,7 +1814,7 @@ pub async fn execute(
                 height,
             } => {
                 let variant = create_asset_variant(
-                    database_url,
+                    &db,
                     NewAssetVariant {
                         asset_id,
                         variant_kind,
@@ -1978,7 +1827,7 @@ pub async fn execute(
                 )
                 .await?;
                 let _ = log_audit_event(
-                    database_url,
+                    &db,
                     "system",
                     "create_asset_variant",
                     "asset_variant",
@@ -1994,7 +1843,7 @@ pub async fn execute(
                 Ok(())
             }
             AssetCommands::VariantList { asset_id } => {
-                let variants = list_asset_variants(database_url, &asset_id).await?;
+                let variants = list_asset_variants(&db, &asset_id).await?;
                 if variants.is_empty() {
                     println!("no variants");
                     return Ok(());
@@ -2012,12 +1861,12 @@ pub async fn execute(
         },
         Commands::Serve { command } => match command {
             ServeCommands::Admin { listen } => {
-                web::run_admin_server(database_url, &listen, oidc).await
+                web::run_admin_server(db.clone(), &listen, oidc).await
             }
         },
         Commands::Audit { command } => match command {
             AuditCommands::List { site_id } => {
-                let events = list_audit_events(database_url, site_id.as_deref()).await?;
+                let events = list_audit_events(&db, site_id.as_deref()).await?;
                 if events.is_empty() {
                     println!("no audit events");
                     return Ok(());
@@ -2056,7 +1905,7 @@ pub async fn execute(
                 published_at,
             } => {
                 let content = create_content(
-                    database_url,
+                    &db,
                     NewContent {
                         site_id,
                         page_type,
@@ -2070,7 +1919,7 @@ pub async fn execute(
                 )
                 .await?;
                 let _ = log_audit_event(
-                    database_url,
+                    &db,
                     &content.creator_sub,
                     "create_content",
                     "content_item",
@@ -2092,7 +1941,7 @@ pub async fn execute(
             }
             ContentCommands::List { site_id, page_type } => {
                 let page_filter = page_type.as_deref();
-                let content = list_content(database_url, &site_id, page_filter).await?;
+                let content = list_content(&db, &site_id, page_filter).await?;
                 if content.is_empty() {
                     println!("no content");
                     return Ok(());
@@ -2127,7 +1976,7 @@ pub async fn execute(
                 kind,
             } => {
                 let alias = create_alias(
-                    database_url,
+                    &db,
                     NewAlias {
                         content_id,
                         site_id,
@@ -2137,7 +1986,7 @@ pub async fn execute(
                 )
                 .await?;
                 let _ = log_audit_event(
-                    database_url,
+                    &db,
                     "system",
                     "create_alias",
                     "content_alias",
@@ -2161,7 +2010,7 @@ pub async fn execute(
                 content_id,
             } => {
                 let content_filter = content_id.as_deref();
-                let aliases = list_aliases(database_url, &site_id, content_filter).await?;
+                let aliases = list_aliases(&db, &site_id, content_filter).await?;
                 if aliases.is_empty() {
                     println!("no aliases");
                     return Ok(());
@@ -2177,7 +2026,7 @@ pub async fn execute(
                 Ok(())
             }
             ContentCommands::Revisions { content_id } => {
-                let revisions = list_revisions(database_url, &content_id).await?;
+                let revisions = list_revisions(&db.clone(), &content_id).await?;
                 if revisions.is_empty() {
                     println!("no revisions");
                     return Ok(());
@@ -2193,7 +2042,7 @@ pub async fn execute(
                 Ok(())
             }
             ContentCommands::RevisionAliases { revision_id } => {
-                let aliases = list_revision_aliases(database_url, &revision_id).await?;
+                let aliases = list_revision_aliases(&db, &revision_id).await?;
                 if aliases.is_empty() {
                     println!("no revision aliases");
                     return Ok(());
@@ -2206,7 +2055,7 @@ pub async fn execute(
                 Ok(())
             }
             ContentCommands::RevisionTags { revision_id } => {
-                let tags = list_revision_tags(database_url, &revision_id).await?;
+                let tags = list_revision_tags(&db, &revision_id).await?;
                 if tags.is_empty() {
                     println!("no revision tags");
                     return Ok(());
@@ -2219,11 +2068,10 @@ pub async fn execute(
                 Ok(())
             }
             ContentCommands::Inspect { content_id } => {
-                let content = get_content(database_url, &content_id).await?;
-                let aliases =
-                    list_aliases(database_url, &content.site_id, Some(&content_id)).await?;
-                let tags = list_content_tags(database_url, &content_id).await?;
-                let revisions = list_revisions(database_url, &content_id).await?;
+                let content = get_content(&db, &content_id).await?;
+                let aliases = list_aliases(&db, &content.site_id, Some(&content_id)).await?;
+                let tags = list_content_tags(&db, &content_id).await?;
+                let revisions = list_revisions(&db, &content_id).await?;
 
                 let public_path = content_primary_route(&content);
                 println!("id:\t{}", content.id);
@@ -2275,7 +2123,7 @@ pub async fn execute(
                 editor_sub,
             } => {
                 let content = update_content(
-                    database_url,
+                    &db,
                     UpdateContent {
                         content_id,
                         page_type,
@@ -2289,7 +2137,7 @@ pub async fn execute(
                 )
                 .await?;
                 let _ = log_audit_event(
-                    database_url,
+                    &db,
                     &content.creator_sub,
                     "update_content",
                     "content_item",
@@ -2315,7 +2163,7 @@ pub async fn execute(
                 tag_name,
             } => {
                 let content_tag = add_content_tag(
-                    database_url,
+                    &db,
                     NewContentTag {
                         content_id,
                         site_id,
@@ -2324,7 +2172,7 @@ pub async fn execute(
                 )
                 .await?;
                 let _ = log_audit_event(
-                    database_url,
+                    &db,
                     "system",
                     "add_content_tag",
                     "content_tag",
@@ -2346,7 +2194,7 @@ pub async fn execute(
                 Ok(())
             }
             ContentCommands::TagList { content_id } => {
-                let tags = list_content_tags(database_url, &content_id).await?;
+                let tags = list_content_tags(&db, &content_id).await?;
                 if tags.is_empty() {
                     println!("no tags");
                     return Ok(());
@@ -2363,10 +2211,9 @@ pub async fn execute(
                 file_path,
                 creator_sub,
             } => {
-                let imported =
-                    import_wordpress(database_url, &site_id, &file_path, &creator_sub).await?;
+                let imported = import_wordpress(&db, &site_id, &file_path, &creator_sub).await?;
                 let _ = log_audit_event(
-                    database_url,
+                    &db,
                     &creator_sub,
                     "import_wordpress",
                     "content_item",

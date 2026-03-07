@@ -15,3 +15,4 @@
 - In async runtime codepaths, use `tokio::fs` instead of `std::fs` for filesystem operations.
 - Prefer workspace-level dependency declarations and `workspace = true` member usage to keep crate versions aligned.
 - Binaries should parse CLI arguments and environment variables via `clap`.
+- All askama templates should derive `askama_web::WebTemplate` so we don't have to manually implement `IntoResponse`

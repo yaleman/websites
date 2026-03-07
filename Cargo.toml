@@ -7,14 +7,18 @@ edition = "2024"
 
 [dependencies]
 askama = "0.15.4"
-axum = { version = "0.8.8", features = ["multipart"] }
+askama_web = { version = "0.15.1", features = ["axum-0.8", "tracing-0.1"] }
+axum = { version = "0.8.8", features = ["multipart", "macros"] }
 chrono = "0.4.44"
 clap = { version = "4.5.60", features = ["derive", "env"] }
 image = "0.25.9"
 markdown = "1.0.0"
 openidconnect = { version = "4.0.1", features = ["reqwest"] }
 quick-xml = "0.39.2"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "json",
+] }
 sea-orm = { version = "1.1.19", features = [
     "runtime-tokio-rustls",
     "sqlx-sqlite",
