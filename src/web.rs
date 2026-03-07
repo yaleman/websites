@@ -9,7 +9,7 @@ use crate::{
     get_content, get_membership_by_id, get_revision, get_revision_by_number, get_site,
     list_aliases, list_asset_variants, list_assets, list_content, list_content_tags,
     list_memberships, list_revisions, list_sites, list_tags, list_users_by_ids, render_site,
-    search_content, update_content, update_membership_role,
+    search_content, update_content, update_membership_role, update_site_settings,
 };
 use anyhow::Context;
 use askama::Template;
@@ -91,6 +91,19 @@ struct AdminContentNewTemplate {
 }
 
 #[derive(Template, WebTemplate)]
+#[template(path = "admin/site_settings.html")]
+struct AdminSiteSettingsTemplate {
+    title: String,
+    site_id: String,
+    site_short_name: String,
+    message: String,
+    full_title: String,
+    template_name: String,
+    content_href: String,
+    memberships_href: String,
+}
+
+#[derive(Template, WebTemplate)]
 #[template(path = "admin/memberships.html")]
 struct AdminMembershipsTemplate {
     title: String,
@@ -140,6 +153,12 @@ struct CreateSiteForm {
     short_name: String,
     full_title: String,
     template_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateSiteSettingsForm {
+    full_title: String,
+    template_name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -330,7 +349,10 @@ pub async fn run_admin_server(
             "/admin/site/{site_id}/assets/new",
             get(admin_site_assets_new).post(admin_site_assets_create),
         )
-        .route("/admin/site/{site_id}/settings", get(admin_site_settings))
+        .route(
+            "/admin/site/{site_id}/settings",
+            get(admin_site_settings).post(admin_site_settings_update),
+        )
         .route("/admin/site/{site_id}/render", get(admin_site_render))
         .layer(from_fn(require_admin_session));
 
@@ -2222,45 +2244,77 @@ async fn admin_site_settings(
     State(state): State<AdminState>,
     session: Session,
     Path(site_id): Path<String>,
-) -> Result<AdminPageTemplate, SiteError> {
+) -> Result<AdminSiteSettingsTemplate, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
     require_site_role(&state, &session, site_id_uuid, SiteRole::Viewer).await?;
-    get_site(state.db.as_ref(), site_id_uuid)
+    let site = get_site(state.db.as_ref(), site_id_uuid)
         .await
-        .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))
-        .map(|site| {
-            let rows = vec![
-                AdminRow {
-                    label: "id".to_string(),
-                    value: site.id.to_string(),
-                },
-                AdminRow {
-                    label: "short_name".to_string(),
-                    value: site.short_name,
-                },
-                AdminRow {
-                    label: "full_title".to_string(),
-                    value: site.full_title,
-                },
-                AdminRow {
-                    label: "template_name".to_string(),
-                    value: site.template_name,
-                },
-            ];
+        .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
 
-            AdminPageTemplate {
-                title: "Site Settings".to_string(),
-                heading: format!("Site settings {site_id}"),
-                message: "Site metadata and configuration are shown in this view.".to_string(),
-                rows,
-                links: vec![link(
-                    &format!("/admin/site/{site_id}/content"),
-                    "Back to content",
-                )],
-                inline_body: String::new(),
-                pre_body: String::new(),
-            }
+    Ok(AdminSiteSettingsTemplate {
+        title: "Site Settings".to_string(),
+        site_id: site.id.to_string(),
+        site_short_name: site.short_name,
+        message: "Update site metadata and template selection.".to_string(),
+        full_title: site.full_title,
+        template_name: site.template_name,
+        content_href: format!("/admin/site/{site_id}/content"),
+        memberships_href: format!("/admin/site/{site_id}/memberships"),
+    })
+}
+
+async fn admin_site_settings_update(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<String>,
+    Form(form): Form<UpdateSiteSettingsForm>,
+) -> Result<Redirect, SiteError> {
+    let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Owner).await?;
+    let actor = current_user_sub(&session).await?;
+    let full_title = form.full_title.trim().to_string();
+    let template_name = form.template_name.trim().to_string();
+    if full_title.is_empty() {
+        return Err(SiteError::internal("missing full title".to_string()));
+    }
+    if template_name.is_empty() {
+        return Err(SiteError::internal("missing template name".to_string()));
+    }
+
+    state
+        .db
+        .transaction::<_, _, SiteError>(|txn| {
+            let actor = actor.clone();
+            let full_title = full_title.clone();
+            let template_name = template_name.clone();
+            Box::pin(async move {
+                let site = update_site_settings(txn, site_id_uuid, full_title, template_name)
+                    .await
+                    .map_err(|error| {
+                        SiteError::internal(format!("failed to update site: {error}"))
+                    })?;
+                log_audit_event(
+                    txn,
+                    &actor,
+                    "update_site",
+                    "site",
+                    &site.id.to_string(),
+                    Some(site.id),
+                    Some(json!({
+                        "short_name": site.short_name,
+                        "full_title": site.full_title,
+                        "template_name": site.template_name
+                    })),
+                )
+                .await
+                .map_err(|error| SiteError::internal(format!("failed to log audit: {error}")))?;
+                Ok(())
+            })
         })
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to update site: {error}")))?;
+
+    Ok(Redirect::to(&format!("/admin/site/{site_id}/settings")))
 }
 
 async fn admin_site_render(
