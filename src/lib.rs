@@ -1,4 +1,4 @@
-use crate::entities::PageType;
+use crate::{entities::PageType, errors::SiteError};
 use chrono::{DateTime, Datelike, Utc};
 use quick_xml::Reader;
 use quick_xml::events::Event;
@@ -1093,12 +1093,11 @@ fn normalize_slug(value: &str) -> String {
 pub async fn get_content(
     db: &DatabaseConnection,
     content_id: Uuid,
-) -> StdResult<entities::content_item::Model, String> {
+) -> StdResult<entities::content_item::Model, SiteError> {
     let content = entities::content_item::Entity::find_by_id(content_id)
         .one(db)
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "content not found".to_string())?;
+        .await?;
+    let content = content.ok_or(SiteError::NotFound)?;
 
     Ok(content)
 }
