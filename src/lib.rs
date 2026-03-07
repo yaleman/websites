@@ -1543,6 +1543,86 @@ pub async fn delete_membership(
     Ok(())
 }
 
+/// Assigns tags to content and its revision, creating tags as needed.
+pub async fn assign_tags_to_content(
+    db: &DatabaseConnection,
+    site_id: Uuid,
+    content_id: Uuid,
+    revision_id: Uuid,
+    tag_names: Vec<String>,
+) -> StdResult<(), String> {
+    let mut unique = HashSet::new();
+
+    for raw in tag_names {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let normalized = trimmed.to_string();
+        if !unique.insert(normalized.clone()) {
+            continue;
+        }
+
+        let existing_tag = entities::tag::Entity::find()
+            .filter(entities::tag::Column::SiteId.eq(site_id))
+            .filter(entities::tag::Column::Name.eq(normalized.clone()))
+            .one(db)
+            .await
+            .map_err(|error| error.to_string())?;
+        let tag = match existing_tag {
+            Some(tag) => tag,
+            None => {
+                create_tag(
+                    db,
+                    NewTag {
+                        site_id,
+                        name: normalized.clone(),
+                    },
+                )
+                .await?
+            }
+        };
+
+        let existing_content_tag = entities::content_tag::Entity::find()
+            .filter(entities::content_tag::Column::ContentId.eq(content_id))
+            .filter(entities::content_tag::Column::TagId.eq(tag.id))
+            .one(db)
+            .await
+            .map_err(|error| error.to_string())?;
+        if existing_content_tag.is_none() {
+            let content_tag = entities::content_tag::ActiveModel {
+                id: Set(Uuid::now_v7()),
+                content_id: Set(content_id),
+                tag_id: Set(tag.id),
+            };
+            content_tag
+                .insert(db)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+
+        let existing_revision_tag = entities::content_revision_tag::Entity::find()
+            .filter(entities::content_revision_tag::Column::RevisionId.eq(revision_id))
+            .filter(entities::content_revision_tag::Column::TagId.eq(tag.id))
+            .one(db)
+            .await
+            .map_err(|error| error.to_string())?;
+        if existing_revision_tag.is_none() {
+            let revision_tag = entities::content_revision_tag::ActiveModel {
+                id: Set(Uuid::now_v7()),
+                revision_id: Set(revision_id),
+                tag_id: Set(tag.id),
+            };
+            revision_tag
+                .insert(db)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Creates an asset record.
 pub async fn create_asset(
     db: &DatabaseConnection,
