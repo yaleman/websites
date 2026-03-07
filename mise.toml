@@ -2,7 +2,7 @@
 pnpm = "latest"
 
 [tasks.check]
-depends = ["rust_clippy", "rust_fmt", "rust_test"]
+depends = ["rust_clippy", "rust_fmt", "rust_test", "frontend_check"]
 
 
 [tasks.rust_clippy]
@@ -16,6 +16,9 @@ run = "cargo test --all --quiet"
 
 [tasks.frontend_build]
 run = "pnpm run build:admin"
+
+[tasks.frontend_check]
+run = "pnpm install --frozen-lockfile && pnpm exec tsc --noEmit"
 
 [tasks.start]
 depends = ["frontend_build"]
