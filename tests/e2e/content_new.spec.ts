@@ -327,6 +327,92 @@ async function createTag(harness: TestHarness, name: string): Promise<void> {
   );
 }
 
+async function createAssetWithThumbnail(
+  harness: TestHarness,
+  {
+    originalFilename,
+    storageBasename,
+    thumbnailFilename,
+  }: {
+    originalFilename: string;
+    storageBasename: string;
+    thumbnailFilename: string;
+  },
+): Promise<void> {
+  const createResult = await runCommand(
+    "cargo",
+    [
+      "run",
+      "--",
+      "--database-url",
+      harness.dbPath,
+      "--tls-cert-path",
+      harness.tlsCertPath,
+      "--tls-key-path",
+      harness.tlsKeyPath,
+      "--frontend-url",
+      "https://127.0.0.1",
+      "asset",
+      "create",
+      "--site-id",
+      harness.siteId,
+      "--uploader-sub",
+      "test-user",
+      "--original-filename",
+      originalFilename,
+      "--storage-basename",
+      storageBasename,
+      "--mime-type",
+      "image/png",
+      "--byte-length",
+      "128",
+      "--width",
+      "800",
+      "--height",
+      "600",
+    ],
+    { env: harness.env },
+  );
+  const match = createResult.stdout.match(/created asset: ([^ ]+)/);
+  if (!match) {
+    throw new Error(`failed to parse asset id: ${createResult.stdout}`);
+  }
+  const assetId = match[1];
+
+  await runCommand(
+    "cargo",
+    [
+      "run",
+      "--",
+      "--database-url",
+      harness.dbPath,
+      "--tls-cert-path",
+      harness.tlsCertPath,
+      "--tls-key-path",
+      harness.tlsKeyPath,
+      "--frontend-url",
+      "https://127.0.0.1",
+      "asset",
+      "variant-create",
+      "--asset-id",
+      assetId,
+      "--variant-kind",
+      "thumbnail",
+      "--filename",
+      thumbnailFilename,
+      "--mime-type",
+      "image/png",
+      "--byte-length",
+      "64",
+      "--width",
+      "320",
+      "--height",
+      "240",
+    ],
+    { env: harness.env },
+  );
+}
+
 async function seedSession(
   harness: TestHarness,
   subject: string,
@@ -369,6 +455,12 @@ test.describe("content new editor", () => {
       const userId = await createUser(harness, "test-user");
       await addMembership(harness, userId, "owner");
       await createTag(harness, "news");
+      const asset = {
+        originalFilename: "test-image.png",
+        storageBasename: "test-image.png",
+        thumbnailFilename: "test-image_thumb.png",
+      };
+      await createAssetWithThumbnail(harness, asset);
       const sessionId = await seedSession(harness, "test-user");
 
       const context = await browser.newContext({ ignoreHTTPSErrors: true });
@@ -392,13 +484,21 @@ test.describe("content new editor", () => {
       await expect(page.locator("#tags")).toBeVisible();
       await expect(page.locator("#tags option", { hasText: "news" })).toBeVisible();
       await page.locator("#tags").selectOption("news");
-      await expect(page.locator("#image_url")).toBeVisible();
-      await expect(page.locator("#image_alt")).toBeVisible();
-      await page.fill("#image_url", "https://example.com/test.png");
-      await page.fill("#image_alt", "Test image");
       await page.getByRole("button", { name: "Image" }).click();
+      const modal = page.getByRole("dialog", { name: "Insert image" });
+      await expect(modal).toBeVisible();
+      const assetCard = modal.locator(".asset-card", {
+        hasText: asset.originalFilename,
+      });
+      await expect(assetCard).toBeVisible();
+      await assetCard.click();
+      await modal.getByLabel("Alt text").fill("Test image");
+      await modal.getByRole("button", { name: "Insert image" }).click();
+      await expect(modal).toBeHidden();
       await expect(
-        page.locator('.ProseMirror img[src="https://example.com/test.png"]'),
+        page.locator(
+          `.ProseMirror a[href="/media/images/${asset.storageBasename}"] img[src="/media/images/${asset.thumbnailFilename}"]`,
+        ),
       ).toBeVisible();
       await page.locator(".ProseMirror").click();
       await page.keyboard.type("Preview check");

@@ -6,7 +6,363 @@ import StarterKit from "@tiptap/starter-kit";
 import "./editor.css";
 import "./styles.css";
 
-const bindToolbar = (editor: Editor) => {
+type AssetLibraryItem = {
+	id: string;
+	original_filename: string;
+	mime_type: string;
+	width: number | null;
+	height: number | null;
+	created_at: string;
+	original_url: string;
+	thumbnail_url: string | null;
+	has_thumbnail: boolean;
+};
+
+const inferAltFromFilename = (filename: string) => {
+	const trimmed = filename.replace(/\.[^/.]+$/, "");
+	return trimmed.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+};
+
+const formatAssetMeta = (asset: AssetLibraryItem) => {
+	const dimensions =
+		asset.width && asset.height ? `${asset.width}×${asset.height}` : "size n/a";
+	return `${asset.mime_type} • ${dimensions}`;
+};
+
+const createAssetCard = (asset: AssetLibraryItem) => {
+	const button = document.createElement("button");
+	button.type = "button";
+	button.className = "asset-card";
+	button.dataset.assetId = asset.id;
+	button.dataset.assetPayload = JSON.stringify(asset);
+
+	const thumb = document.createElement("div");
+	thumb.className = "asset-card__thumb";
+	const image = document.createElement("img");
+	image.src = asset.thumbnail_url ?? asset.original_url;
+	image.alt = "";
+	image.loading = "lazy";
+	thumb.appendChild(image);
+
+	const name = document.createElement("div");
+	name.className = "asset-card__name";
+	name.textContent = asset.original_filename;
+
+	const meta = document.createElement("div");
+	meta.className = "asset-card__meta";
+	meta.textContent = formatAssetMeta(asset);
+
+	button.appendChild(thumb);
+	button.appendChild(name);
+	button.appendChild(meta);
+	return button;
+};
+
+const renderAssetGrid = (
+	container: HTMLElement,
+	assets: AssetLibraryItem[],
+	message: string,
+) => {
+	container.innerHTML = "";
+	if (assets.length === 0) {
+		const empty = document.createElement("div");
+		empty.className = "asset-empty";
+		empty.textContent = message;
+		container.appendChild(empty);
+		return;
+	}
+	for (const asset of assets) {
+		container.appendChild(createAssetCard(asset));
+	}
+};
+
+const createAssetModal = (editor: Editor) => {
+	const modal = document.querySelector<HTMLElement>("[data-asset-modal]");
+	const configRoot = document.querySelector<HTMLElement>("[data-editor-config]");
+	const siteId = configRoot?.dataset.siteId;
+
+	if (!modal || !siteId) {
+		return { open: () => {} };
+	}
+
+	const closeButtons = modal.querySelectorAll<HTMLElement>(
+		"[data-asset-modal-close]",
+	);
+	const searchInput = modal.querySelector<HTMLInputElement>("[data-asset-search]");
+	const typeSelect = modal.querySelector<HTMLSelectElement>("[data-asset-type]");
+	const recentSection = modal.querySelector<HTMLElement>(
+		"[data-asset-recent-section]",
+	);
+	const resultsSection = modal.querySelector<HTMLElement>(
+		"[data-asset-results-section]",
+	);
+	const recentGrid = modal.querySelector<HTMLElement>("[data-asset-recent]");
+	const resultsGrid = modal.querySelector<HTMLElement>("[data-asset-results]");
+	const altInput = modal.querySelector<HTMLInputElement>("[data-asset-alt]");
+	const externalInput =
+		modal.querySelector<HTMLInputElement>("[data-asset-external]");
+	const insertButton = modal.querySelector<HTMLButtonElement>(
+		"[data-asset-insert]",
+	);
+
+	let selectedAsset: AssetLibraryItem | null = null;
+	let searchTimeout: number | null = null;
+
+	const setModalOpen = (open: boolean) => {
+		if (open) {
+			modal.removeAttribute("hidden");
+			modal.setAttribute("aria-hidden", "false");
+			document.body?.classList.add("modal-open");
+			searchInput?.focus();
+		} else {
+			modal.setAttribute("hidden", "");
+			modal.setAttribute("aria-hidden", "true");
+			document.body?.classList.remove("modal-open");
+		}
+	};
+
+	const setInsertEnabled = () => {
+		if (!insertButton) {
+			return;
+		}
+		const externalUrl = externalInput?.value.trim();
+		insertButton.disabled = !selectedAsset && !externalUrl;
+	};
+
+	const clearSelection = () => {
+		selectedAsset = null;
+		modal.querySelectorAll(".asset-card.is-selected").forEach((card) => {
+			card.classList.remove("is-selected");
+		});
+		setInsertEnabled();
+	};
+
+	const setSelectedAsset = (asset: AssetLibraryItem | null) => {
+		selectedAsset = asset;
+		modal.querySelectorAll(".asset-card").forEach((card) => {
+			card.classList.toggle(
+				"is-selected",
+				card.getAttribute("data-asset-id") === asset?.id,
+			);
+		});
+		if (asset && altInput && !altInput.value.trim()) {
+			altInput.value = inferAltFromFilename(asset.original_filename);
+		}
+		setInsertEnabled();
+	};
+
+	const setSectionVisibility = (showResults: boolean) => {
+		if (recentSection) {
+			recentSection.toggleAttribute("hidden", showResults);
+		}
+		if (resultsSection) {
+			resultsSection.toggleAttribute("hidden", !showResults);
+		}
+	};
+
+	const fetchAssets = async (options: {
+		query?: string;
+		limit: number;
+		type: string;
+	}) => {
+		const url = new URL(
+			`/admin/site/${siteId}/assets/library`,
+			window.location.origin,
+		);
+		if (options.query) {
+			url.searchParams.set("q", options.query);
+		}
+		if (options.type) {
+			url.searchParams.set("type", options.type);
+		}
+		url.searchParams.set("limit", options.limit.toString());
+		const response = await fetch(url.toString(), { credentials: "same-origin" });
+		if (!response.ok) {
+			throw new Error("Failed to fetch assets.");
+		}
+		const payload = (await response.json()) as { assets: AssetLibraryItem[] };
+		return payload.assets ?? [];
+	};
+
+	const loadRecent = async () => {
+		if (!recentGrid) {
+			return;
+		}
+		renderAssetGrid(recentGrid, [], "Loading recent images...");
+		clearSelection();
+		try {
+			const assets = await fetchAssets({
+				limit: 12,
+				type: typeSelect?.value ?? "all",
+			});
+			renderAssetGrid(recentGrid, assets, "No images uploaded yet.");
+			clearSelection();
+		} catch {
+			renderAssetGrid(recentGrid, [], "Unable to load recent images.");
+			clearSelection();
+		}
+	};
+
+	const loadSearch = async (query: string) => {
+		if (!resultsGrid) {
+			return;
+		}
+		renderAssetGrid(resultsGrid, [], "Searching...");
+		clearSelection();
+		try {
+			const assets = await fetchAssets({
+				query,
+				limit: 50,
+				type: typeSelect?.value ?? "all",
+			});
+			renderAssetGrid(resultsGrid, assets, "No matches found.");
+			clearSelection();
+		} catch {
+			renderAssetGrid(resultsGrid, [], "Unable to load search results.");
+			clearSelection();
+		}
+	};
+
+	const scheduleSearch = () => {
+		const query = searchInput?.value.trim() ?? "";
+		if (searchTimeout) {
+			window.clearTimeout(searchTimeout);
+		}
+		searchTimeout = window.setTimeout(() => {
+			if (query) {
+				setSectionVisibility(true);
+				loadSearch(query);
+			} else {
+				setSectionVisibility(false);
+				loadRecent();
+			}
+		}, 300);
+	};
+
+	const handleAssetClick = (event: Event) => {
+		const target = event.target as HTMLElement | null;
+		if (!target) {
+			return;
+		}
+		const card = target.closest<HTMLButtonElement>(".asset-card");
+		if (!card) {
+			return;
+		}
+		const payload = card.dataset.assetPayload;
+		if (!payload) {
+			return;
+		}
+		const asset = JSON.parse(payload) as AssetLibraryItem;
+		setSelectedAsset(asset);
+	};
+
+	const insertSelection = () => {
+		const altText = altInput?.value.trim();
+		const externalUrl = externalInput?.value.trim();
+		if (externalUrl) {
+			const attrs = altText ? { src: externalUrl, alt: altText } : { src: externalUrl };
+			editor.chain().focus().setImage(attrs).run();
+			close();
+			return;
+		}
+
+		if (!selectedAsset) {
+			return;
+		}
+		if (selectedAsset.has_thumbnail && selectedAsset.thumbnail_url) {
+			editor
+				.chain()
+				.focus()
+				.insertContent({
+					type: "image",
+					attrs: {
+						src: selectedAsset.thumbnail_url,
+						alt: altText || null,
+					},
+					marks: [
+						{
+							type: "link",
+							attrs: {
+								href: selectedAsset.original_url,
+							},
+						},
+					],
+				})
+				.run();
+		} else {
+			const attrs = altText
+				? { src: selectedAsset.original_url, alt: altText }
+				: { src: selectedAsset.original_url };
+			editor.chain().focus().setImage(attrs).run();
+		}
+		close();
+	};
+
+	const open = () => {
+		clearSelection();
+		if (searchInput) {
+			searchInput.value = "";
+		}
+		if (altInput) {
+			altInput.value = "";
+		}
+		if (externalInput) {
+			externalInput.value = "";
+		}
+		setSectionVisibility(false);
+		setModalOpen(true);
+		loadRecent();
+	};
+
+	const close = () => {
+		setModalOpen(false);
+		clearSelection();
+	};
+
+	closeButtons.forEach((button) => {
+		button.addEventListener("click", (event) => {
+			event.preventDefault();
+			close();
+		});
+	});
+
+	modal.addEventListener("keydown", (event) => {
+		if (event.key === "Escape") {
+			close();
+		}
+	});
+
+	searchInput?.addEventListener("input", scheduleSearch);
+	searchInput?.addEventListener("keydown", (event) => {
+		if (event.key === "Enter") {
+			event.preventDefault();
+			scheduleSearch();
+		}
+	});
+	typeSelect?.addEventListener("change", scheduleSearch);
+	externalInput?.addEventListener("input", setInsertEnabled);
+	externalInput?.addEventListener("keydown", (event) => {
+		if (event.key === "Enter") {
+			event.preventDefault();
+			insertSelection();
+		}
+	});
+	insertButton?.addEventListener("click", (event) => {
+		event.preventDefault();
+		insertSelection();
+	});
+
+	if (recentGrid) {
+		recentGrid.addEventListener("click", handleAssetClick);
+	}
+	if (resultsGrid) {
+		resultsGrid.addEventListener("click", handleAssetClick);
+	}
+
+	return { open };
+};
+
+const bindToolbar = (editor: Editor, openAssetModal: () => void) => {
 	const toolbar = document.querySelector<HTMLElement>("[data-editor-toolbar]");
 	const previewContainer = document.querySelector<HTMLElement>(
 		"[data-editor-preview]",
@@ -76,25 +432,7 @@ const bindToolbar = (editor: Editor) => {
 				return;
 			}
 			case "image": {
-				const imageUrlInput = document.getElementById(
-					"image_url",
-				) as HTMLInputElement | null;
-				const imageAltInput = document.getElementById(
-					"image_alt",
-				) as HTMLInputElement | null;
-				const src = imageUrlInput?.value.trim() ?? "";
-				if (!src) {
-					return;
-				}
-				const alt = imageAltInput?.value.trim();
-				const attrs = alt ? { src, alt } : { src };
-				editor.chain().focus().setImage(attrs).run();
-				if (imageUrlInput) {
-					imageUrlInput.value = "";
-				}
-				if (imageAltInput) {
-					imageAltInput.value = "";
-				}
+				openAssetModal();
 				return;
 			}
 			case "h2":
@@ -162,19 +500,20 @@ const initEditor = () => {
 			element: root,
 			content: textarea.value || "",
 			contentType: "markdown",
-      extensions: [
-        StarterKit.configure({ link: false }),
-        Image,
-        Link.configure({ openOnClick: false }),
-        Markdown,
-      ],
+			extensions: [
+				StarterKit.configure({ link: false }),
+				Image.configure({ inline: true }),
+				Link.configure({ openOnClick: false }),
+				Markdown,
+			],
 			onUpdate: ({ editor }) => {
 				textarea.value = editor.getMarkdown();
 				previewControls.updatePreview();
 			},
 		});
 
-		previewControls = bindToolbar(editor);
+		const assetModal = createAssetModal(editor);
+		previewControls = bindToolbar(editor, assetModal.open);
 		previewControls.updatePreview();
 		document.body?.classList.add("editor-ready");
 	} catch {
