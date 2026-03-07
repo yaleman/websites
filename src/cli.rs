@@ -7,6 +7,7 @@ use serde_json::json;
 use url::Url;
 use uuid::Uuid;
 
+use crate::entities::audit_event::log_audit_event;
 use crate::*;
 
 #[derive(Debug, Args, Clone)]
