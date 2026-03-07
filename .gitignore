@@ -1,1 +1,5 @@
 /target
+/node_modules
+/admin-ui-assets/editor.js
+/admin-ui-assets/editor.css
+/admin-ui-assets/*.map

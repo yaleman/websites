@@ -30,6 +30,7 @@ use std::io::Cursor;
 use std::path::Path as StdPath;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
+use tower_http::services::ServeDir;
 use tower_sessions::{Expiry, Session, SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
 use uuid::Uuid;
@@ -119,8 +120,6 @@ const DEFAULT_TEMPLATE_NAME: &str = "default";
 const UPLOAD_ROOT: &str = "./uploads/media-storage";
 const THUMBNAIL_MAX_SIZE: u32 = 320;
 
-const ADMIN_STYLE: &str = include_str!("../templates/admin/assets/style.css");
-
 pub async fn run_admin_server(
     database_url: &str,
     listen: &str,
@@ -192,7 +191,7 @@ pub async fn run_admin_server(
         .route("/admin/login", get(admin_login))
         .route("/admin/login/callback", get(admin_login_callback))
         .route("/admin/logout", get(admin_logout))
-        .route("/admin/assets/style.css", get(admin_style_css))
+        .nest_service("/admin/assets", ServeDir::new("admin-ui-assets"))
         .merge(protected_routes)
         .layer(session_layer)
         .layer(from_fn(log_requests))
@@ -224,13 +223,6 @@ async fn require_admin_session(session: Session, request: Request, next: Next) -
     } else {
         Redirect::to("/admin/login").into_response()
     }
-}
-
-async fn admin_style_css() -> impl IntoResponse {
-    (
-        [(axum::http::header::CONTENT_TYPE, "text/css; charset=utf-8")],
-        ADMIN_STYLE,
-    )
 }
 
 async fn admin_index(State(state): State<AdminState>) -> AdminPageTemplate {
@@ -982,7 +974,8 @@ fn admin_site_content_source_form_html(content: &crate::entities::content_item::
         <input id="published_at" name="published_at" value="{published_at}" />
 
         <label for="page_content">Content</label>
-        <textarea id="page_content" name="page_content" rows="14">{content_body}</textarea>
+        <div id="editor" class="editor-shell"></div>
+        <textarea id="page_content" name="page_content" rows="14" class="editor-source">{content_body}</textarea>
 
         <button type="submit">Save content</button>
       </form>

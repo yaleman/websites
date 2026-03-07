@@ -115,3 +115,7 @@ pre {
   padding: 0.6rem;
   border: 1px solid #99b;
 }
+
+.editor-source {
+  min-height: 280px;
+}
