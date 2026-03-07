@@ -14,6 +14,11 @@ pub const SCHEMA_SQL: &[&str] = &[
         created_at TEXT NOT NULL,
         last_login_at TEXT
     );",
+    "CREATE TABLE IF NOT EXISTS tower_sessions (
+        id TEXT PRIMARY KEY NOT NULL,
+        data BLOB NOT NULL,
+        expiry_date INTEGER NOT NULL
+    );",
     "CREATE TABLE IF NOT EXISTS site_membership (
         id TEXT PRIMARY KEY,
         site_id TEXT NOT NULL REFERENCES site(id) ON DELETE CASCADE,
