@@ -1,4 +1,10 @@
-# Ruminate Agent Rules
+# Agent Rules
+
+This is a web-based system for managing content of websites.
+
+## System Overview
+
+The system manages site metadata, content, tags, assets, and memberships in a SQLite database through SeaORM. Content is stored as Markdown and can be rendered into static output using templates and media assets, enabling a publish step that generates static files. The admin interface is primarily server-rendered with Askama templates, with JavaScript used for the rich-text editor and other progressive enhancements. Authentication is handled via session storage with optional OIDC integration for login, and operational workflows are available through a CLI for initialization, imports, and admin tasks.
 
 ## Required Process
 
