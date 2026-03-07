@@ -1,54 +1,30 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{ template_data.page_title }}</title>
-    <link rel="stylesheet" href="/admin/assets/admin.css" />
-    <link rel="stylesheet" href="/admin/assets/editor.css" />
-  </head>
-  <body>
-    <main class="content-editor">
-      <header class="content-editor__header">
-        <h1>Site settings {{ template_data.page_title }}</h1>
-        {% if let Some(page_message) = template_data.page_message %}
-        <p class="message">{{ page_message }}</p>
-        {% endif %}
-        <nav>
-          <a href="/admin">Dashboard</a>
-          <a href="/admin/sites">Sites</a>
-          <a href="/admin/site/{{ site_id }}/content">Back to content</a>
-          <a href="/admin/site/{{ site_id }}/memberships">Memberships</a>
-        </nav>
-      </header>
+{% extends "base_template.html" %}
+{% block body %}
+<section class="content-editor__meta">
+  <div class="meta-card">
+    <span class="meta-label">Site ID</span>
+    <span class="meta-value">{{ site_id }}</span>
+  </div>
+  <div class="meta-card">
+    <span class="meta-label">Short Name</span>
+    <span class="meta-value">{{ site_short_name }}</span>
+  </div>
+</section>
 
-      <section class="content-editor__meta">
-        <div class="meta-card">
-          <span class="meta-label">Site ID</span>
-          <span class="meta-value">{{ site_id }}</span>
-        </div>
-        <div class="meta-card">
-          <span class="meta-label">Short Name</span>
-          <span class="meta-value">{{ site_short_name }}</span>
-        </div>
-      </section>
+<form method="post" action class="editor-form">
+  <div class="form-grid">
+    <div class="form-field">
+      <label for="full_title">Full Title</label>
+      <input id="full_title" name="full_title" value="{{ full_title }}" required />
+    </div>
+    <div class="form-field">
+      <label for="template_name">Template Name</label>
+      <input id="template_name" name="template_name" value="{{ template_name }}" required />
+    </div>
+  </div>
 
-      <form method="post" action class="editor-form">
-        <div class="form-grid">
-          <div class="form-field">
-            <label for="full_title">Full Title</label>
-            <input id="full_title" name="full_title" value="{{ full_title }}" required />
-          </div>
-          <div class="form-field">
-            <label for="template_name">Template Name</label>
-            <input id="template_name" name="template_name" value="{{ template_name }}" required />
-          </div>
-        </div>
-
-        <div class="form-actions">
-          <button type="submit">Save settings</button>
-        </div>
-      </form>
-    </main>
-  </body>
-</html>
+  <div class="form-actions">
+    <button type="submit">Save settings</button>
+  </div>
+</form>
+{% endblock %}

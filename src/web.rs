@@ -97,16 +97,13 @@ struct AdminTagsTemplate {
     links: Vec<AdminLink>,
     inline_body: String,
     pre_body: String,
-    site_id: Uuid,
 }
 
 #[derive(Template, WebTemplate)]
 #[template(path = "sites.html")]
 struct AdminSitesTemplate {
-    template_data: AdminTemplateData,
-    // title: String,
+    template_shared: AdminTemplateData,
     heading: String,
-    // message: String,
     sites: Vec<crate::entities::site::Model>,
     links: Vec<AdminLink>,
 }
@@ -114,12 +111,7 @@ struct AdminSitesTemplate {
 #[derive(Template, WebTemplate)]
 #[template(path = "content_new.html")]
 struct AdminContentNewTemplate {
-    // title: String,
-    site_id: String,
-    site_short_name: String,
-    message: String,
-    // content_href: String,
-    // settings_href: String,
+    template_shared: AdminTemplateData,
     tags: Vec<AdminTagOption>,
     links: Vec<AdminLink>,
     heading: String,
@@ -133,7 +125,9 @@ struct AdminTemplateData {
 #[derive(Template, WebTemplate)]
 #[template(path = "site_settings.html")]
 struct AdminSiteSettingsTemplate {
-    template_data: AdminTemplateData,
+    template_shared: AdminTemplateData,
+    heading: String,
+    links: Vec<AdminLink>,
     site_id: Uuid,
     site_short_name: String,
     full_title: String,
@@ -143,13 +137,12 @@ struct AdminSiteSettingsTemplate {
 #[derive(Template, WebTemplate)]
 #[template(path = "memberships.html")]
 struct AdminMembershipsTemplate {
-    template_data: AdminTemplateData,
-    // title: String,
+    template_shared: AdminTemplateData,
+    heading: String,
+    links: Vec<AdminLink>,
     site_id: Uuid,
     site_short_name: String,
-    // message: String,
-    // settings_href: String,
-    // create_href: String,
+    create_href: String,
     memberships: Vec<AdminMembershipRow>,
 }
 
@@ -489,7 +482,7 @@ async fn admin_index(State(_state): State<AdminState>) -> AdminIndexTemplate {
 async fn admin_sites(State(state): State<AdminState>) -> Result<AdminSitesTemplate, SiteError> {
     match list_sites(state.db.as_ref()).await {
         Ok(sites) => Ok(AdminSitesTemplate {
-            template_data: AdminTemplateData {
+            template_shared: AdminTemplateData {
                 page_title: "Sites".to_string(),
                 page_message: None,
             },
@@ -917,12 +910,18 @@ async fn admin_site_memberships(
         .collect();
 
     Ok(AdminMembershipsTemplate {
-        template_data: AdminTemplateData {
+        template_shared: AdminTemplateData {
             page_title: "Memberships".to_string(),
             page_message: None,
         },
+        heading: "Memberships".to_string(),
+        links: vec![
+            link(&format!("/admin/site/{site_id}/content"), "Back to content"),
+            link(&format!("/admin/site/{site_id}/settings"), "Site settings"),
+        ],
         site_id: site.id,
         site_short_name: site.short_name,
+        create_href: format!("/admin/site/{site_id}/memberships/new"),
         memberships: membership_rows,
     })
 }
@@ -1149,10 +1148,11 @@ async fn admin_site_content_new(
 
     let site = get_by_id(state.db.as_ref(), site_id).await?;
     Ok(AdminContentNewTemplate {
-        site_id: site.id.to_string(),
+        template_shared: AdminTemplateData {
+            page_title: format!("Create Content - {}", site.short_name),
+            page_message: None,
+        },
         heading: format!("{} - Create Content", &site.short_name),
-        site_short_name: site.short_name,
-        message: "".to_string(),
         tags,
         links: Vec::new(),
     })
@@ -1770,7 +1770,6 @@ async fn admin_site_tags(
                     page_title: "Tags".to_string(),
                     page_message: None,
                 },
-                site_id,
                 heading: format!("Site Tags ({site_id})"),
                 rows,
                 links: vec![link(
@@ -2187,11 +2186,15 @@ async fn admin_site_settings(
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
 
     Ok(AdminSiteSettingsTemplate {
-        template_data: AdminTemplateData {
+        template_shared: AdminTemplateData {
             page_title: "Site Settings".to_string(),
             page_message: None,
         },
-
+        heading: "Site settings".to_string(),
+        links: vec![
+            link(&format!("/admin/site/{site_id}/content"), "Back to content"),
+            link(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
+        ],
         site_id: site.id,
         site_short_name: site.short_name,
         full_title: site.full_title,

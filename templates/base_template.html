@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{% block title %}{{ title }}{% endblock title %}</title>
+    <title>{% block title %}{{ template_shared.page_title }}{% endblock title %}</title>
     <link rel="stylesheet" href="/admin/assets/admin.css" />
     <link rel="stylesheet" href="/admin/assets/editor.css" />
     <script src="/admin/assets/editor.js" defer></script>
@@ -20,7 +20,7 @@
         <a href="/admin/logout">Logout</a>
       </nav>
 
-      {% if let Some(message) = template_shared.message %}
+      {% if let Some(message) = template_shared.page_message %}
       <p class="message">{{ message }}</p>
       {% endif %}
 

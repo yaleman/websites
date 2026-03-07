@@ -1,22 +1,5 @@
 {% extends "base_template.html" %}
-
-{% block title%}Create Content - {{ site_short_name }} Admin{% endblock %}
-
-{% block header %}
-<link rel="stylesheet" href="/admin/assets/admin.css" />
-<link rel="stylesheet" href="/admin/assets/editor.css" />
-<script src="/admin/assets/editor.js" defer></script>
-{% endblock %}
-
 {% block body %}
-
-<!-- <section class="content-editor__meta">
-    <div class="meta-card">
-      <span class="meta-label">Site ID</span>
-      <span class="meta-value">{{ site_id }}</span>
-    </div>
-  </section> -->
-
 <form method="post" action class="editor-form">
   <div class="form-grid">
     <div class="form-field">
@@ -34,10 +17,8 @@
         <option value="page">Page</option>
       </select>
     </div>
-
   </div>
 
-  <!-- <label for="page_content">Content</label> -->
   <div class="editor-toolbar" data-editor-toolbar>
     <div class="editor-toolbar__group">
       <button type="button" class="editor-button" data-command="bold">Bold</button>
