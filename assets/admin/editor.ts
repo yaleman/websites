@@ -5,10 +5,14 @@ import { history } from "@milkdown/plugin-history";
 import { listener, listenerCtx } from "@milkdown/plugin-listener";
 import "./editor.css";
 
-const root = document.getElementById("editor");
-const textarea = document.getElementById("page_content") as HTMLTextAreaElement | null;
+const initEditor = () => {
+  const root = document.getElementById("editor");
+  const textarea = document.getElementById("page_content") as HTMLTextAreaElement | null;
 
-if (root && textarea) {
+  if (!root || !textarea) {
+    return;
+  }
+
   Editor.make()
     .config(nord)
     .config((editorCtx) => {
@@ -21,7 +25,18 @@ if (root && textarea) {
     .use(commonmark)
     .use(history)
     .use(listener)
-    .create();
+    .create()
+    .then(() => {
+      textarea.style.display = "none";
+      document.body?.classList.add("editor-ready");
+    })
+    .catch(() => {
+      document.body?.classList.add("editor-error");
+    });
+};
 
-  textarea.style.display = "none";
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initEditor);
+} else {
+  initEditor();
 }
