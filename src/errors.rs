@@ -1,10 +1,12 @@
 use axum::{Json, response::IntoResponse};
+use sea_orm::DbErr;
 
 #[derive(Debug)]
 pub enum SiteError {
     NotFound,
     Internal(String),
     UnAuthorized(String),
+    Database(String),
 }
 
 impl SiteError {
@@ -23,6 +25,9 @@ impl IntoResponse for SiteError {
             SiteError::UnAuthorized(msg) => {
                 (axum::http::StatusCode::UNAUTHORIZED, msg).into_response()
             }
+            SiteError::Database(error) => {
+                (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(error)).into_response()
+            }
         }
     }
 }
@@ -33,6 +38,20 @@ impl std::fmt::Display for SiteError {
             SiteError::NotFound => write!(f, "not found"),
             SiteError::Internal(msg) => write!(f, "internal error: {msg}"),
             SiteError::UnAuthorized(msg) => write!(f, "unauthorized: {msg}"),
+
+            SiteError::Database(msg) => write!(f, "database error: {msg}"),
         }
+    }
+}
+
+impl From<sqlx::Error> for SiteError {
+    fn from(err: sqlx::Error) -> Self {
+        SiteError::Database(err.to_string())
+    }
+}
+
+impl From<DbErr> for SiteError {
+    fn from(err: DbErr) -> Self {
+        SiteError::Database(err.to_string())
     }
 }
