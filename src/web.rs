@@ -1,4 +1,5 @@
 use crate::entities::PageType;
+use crate::entities::audit_event::log_audit_event;
 use crate::errors::SiteError;
 use crate::middleware::log_requests;
 use crate::tls::build_tls_config;
@@ -6,8 +7,8 @@ use crate::{
     NewAsset, NewAssetVariant, NewContent, cli::OidcConfig, content_primary_route, create_asset,
     create_asset_variant, create_content, create_site, get_content, get_revision,
     get_revision_by_number, get_site, list_aliases, list_asset_variants, list_assets, list_content,
-    list_content_tags, list_revisions, list_sites, list_tags, log_audit_event, render_site,
-    search_content, update_content,
+    list_content_tags, list_revisions, list_sites, list_tags, render_site, search_content,
+    update_content,
 };
 use anyhow::Context;
 use askama::Template;
