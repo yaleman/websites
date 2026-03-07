@@ -636,6 +636,28 @@ pub async fn create_site<C: ConnectionTrait>(
     Ok(model)
 }
 
+/// Updates site settings and returns the updated row.
+pub async fn update_site_settings<C: ConnectionTrait>(
+    db: &C,
+    site_id: Uuid,
+    full_title: String,
+    template_name: String,
+) -> StdResult<entities::site::Model, String> {
+    let existing = entities::site::Entity::find_by_id(site_id)
+        .one(db)
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(existing) = existing else {
+        return Err(format!("site {site_id} not found"));
+    };
+    let mut model = existing.into_active_model();
+    model.full_title = Set(full_title);
+    model.template_name = Set(template_name);
+    model.updated_at = Set(Some(Utc::now()));
+    let updated = model.update(db).await.map_err(|error| error.to_string())?;
+    Ok(updated)
+}
+
 /// Returns all sites ordered by short name.
 pub async fn list_sites(db: &DatabaseConnection) -> StdResult<Vec<entities::site::Model>, String> {
     let sites = entities::site::Entity::find()
@@ -1776,6 +1798,25 @@ mod tests {
 
         let fetched = get_site(&db, site.id).await.expect("failed to get site");
         assert_eq!(fetched.id, site.id);
+    }
+
+    #[tokio::test]
+    async fn update_site_settings_updates_values() {
+        let db = setup_db().await;
+        let site = create_site_fixture(&db).await;
+
+        let updated = update_site_settings(
+            &db,
+            site.id,
+            "Updated Title".to_string(),
+            "new-template".to_string(),
+        )
+        .await
+        .expect("failed to update site settings");
+
+        assert_eq!(updated.full_title, "Updated Title");
+        assert_eq!(updated.template_name, "new-template");
+        assert!(updated.updated_at.is_some());
     }
 
     #[tokio::test]
