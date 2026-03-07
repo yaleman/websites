@@ -251,6 +251,7 @@ pub async fn run_admin_server(
         .merge(protected_routes)
         .layer(session_layer)
         .layer(from_fn(log_requests))
+        .layer(from_fn(crate::middleware::dont_cache_me))
         .with_state(state);
 
     let tls_config = build_tls_config(&oidc.tls_cert_path, &oidc.tls_key_path).await?;

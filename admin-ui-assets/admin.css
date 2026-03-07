@@ -120,6 +120,14 @@ pre {
   min-height: 280px;
 }
 
+.editor-ready #page_content {
+  display: none !important;
+}
+
+.editor-error #page_content {
+  display: block !important;
+}
+
 .content-editor__header {
   margin-bottom: 1.5rem;
 }

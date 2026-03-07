@@ -19,12 +19,9 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@milkdown/core": "^7.19.0",
-    "@milkdown/plugin-history": "^7.19.0",
-    "@milkdown/plugin-listener": "^7.19.0",
-    "@milkdown/preset-commonmark": "^7.19.0",
-    "@milkdown/prose": "^7.19.0",
-    "@milkdown/theme-nord": "^7.19.0",
-    "@milkdown/utils": "^7.19.0"
+    "@tiptap/core": "^3.20.1",
+    "@tiptap/extension-link": "^3.20.1",
+    "@tiptap/markdown": "^3.20.1",
+    "@tiptap/starter-kit": "^3.20.1"
   }
 }

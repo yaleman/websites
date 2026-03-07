@@ -48,6 +48,23 @@
         </div>
 
         <label for="page_content">Content</label>
+        <div class="editor-toolbar" data-editor-toolbar>
+          <div class="editor-toolbar__group">
+            <button type="button" class="editor-button" data-command="bold">Bold</button>
+            <button type="button" class="editor-button" data-command="italic">Italic</button>
+            <button type="button" class="editor-button" data-command="code">Code</button>
+            <button type="button" class="editor-button" data-command="link">Link</button>
+          </div>
+          <div class="editor-toolbar__group">
+            <button type="button" class="editor-button" data-command="h2">H2</button>
+            <button type="button" class="editor-button" data-command="h3">H3</button>
+          </div>
+          <div class="editor-toolbar__group">
+            <button type="button" class="editor-button" data-command="ul">Bullets</button>
+            <button type="button" class="editor-button" data-command="ol">Numbered</button>
+            <button type="button" class="editor-button" data-command="quote">Quote</button>
+          </div>
+        </div>
         <div id="editor" class="editor-shell"></div>
         <textarea id="page_content" name="page_content" rows="14" class="editor-source"></textarea>
 

@@ -117,7 +117,7 @@ async function waitForPort(
 test.describe("content new editor", () => {
   test.setTimeout(120_000);
 
-  test("renders Milkdown editor", async ({ browser }) => {
+  test("renders TipTap editor", async ({ browser }) => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "websites-e2e-"));
     const dbPath = path.join(tempRoot, "database.sqlite");
     const databaseUrl = `sqlite://${dbPath}?mode=rwc`;
@@ -249,7 +249,7 @@ test.describe("content new editor", () => {
       );
 
       await expect(page.locator("#editor")).toBeVisible();
-      await page.locator(".milkdown .editor").first().waitFor({ state: "visible" });
+      await page.locator(".ProseMirror").first().waitFor({ state: "visible" });
       await expect(page.locator("#page_content")).toBeHidden();
     } finally {
       if (server && !server.killed) {
