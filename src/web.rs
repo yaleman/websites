@@ -29,7 +29,7 @@ use openidconnect::{
     core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata},
 };
 use reqwest::redirect::Policy;
-use sea_orm::DatabaseConnection;
+use sea_orm::{ConnectionTrait, DatabaseConnection, TransactionTrait};
 use serde::Deserialize;
 use serde_json::json;
 use similar::TextDiff;
@@ -442,7 +442,7 @@ async fn admin_index(State(_state): State<AdminState>) -> AdminPageTemplate {
 }
 
 async fn admin_sites(State(state): State<AdminState>) -> Result<AdminSitesTemplate, SiteError> {
-    match list_sites(&state.db.clone()).await {
+    match list_sites(state.db.as_ref()).await {
         Ok(sites) => {
             let rows = sites
                 .into_iter()
@@ -480,8 +480,8 @@ async fn admin_sites_new() -> Response {
     .into_response()
 }
 
-async fn ensure_site_owner_membership(
-    db: &DatabaseConnection,
+async fn ensure_site_owner_membership<C: ConnectionTrait>(
+    db: &C,
     user_sub: &str,
     site_id: Uuid,
 ) -> Result<Option<crate::entities::site_membership::Model>, SiteError> {
@@ -517,44 +517,64 @@ async fn admin_sites_create(
     let template_name = form
         .template_name
         .unwrap_or_else(|| DEFAULT_TEMPLATE_NAME.to_string());
+    let user_sub = current_user_sub(&session).await?;
+    let short_name = form.short_name;
+    let full_title = form.full_title;
 
-    match create_site(&state.db, form.short_name, form.full_title, template_name).await {
-        Ok(site) => {
-            let user_sub = current_user_sub(&session).await?;
-            let _ = log_audit_event(
-                &state.db,
-                ADMIN_ACTOR_SUB,
-                "create_site",
-                "site",
-                &site.id.to_string(),
-                Some(site.id),
-                Some(json!({ "short_name": &site.short_name, "full_title": &site.full_title })),
-            )
-            .await;
-            if let Some(membership) =
-                ensure_site_owner_membership(&state.db, &user_sub, site.id).await?
-            {
-                let _ = log_audit_event(
-                    &state.db,
+    state
+        .db
+        .transaction::<_, _, SiteError>(|txn| {
+            let user_sub = user_sub.clone();
+            let template_name = template_name.clone();
+            Box::pin(async move {
+                let site = create_site(txn, short_name, full_title, template_name)
+                    .await
+                    .map_err(|error| {
+                        SiteError::internal(format!("failed to create site: {error}"))
+                    })?;
+                log_audit_event(
+                    txn,
                     ADMIN_ACTOR_SUB,
-                    "create_membership",
-                    "site_membership",
-                    &membership.id.to_string(),
-                    Some(membership.site_id),
-                    Some(json!({
-                        "site_id": membership.site_id.to_string(),
-                        "user_id": membership.user_id.to_string(),
-                        "role": membership.role
-                    })),
+                    "create_site",
+                    "site",
+                    &site.id.to_string(),
+                    Some(site.id),
+                    Some(json!({ "short_name": &site.short_name, "full_title": &site.full_title })),
                 )
-                .await;
-            }
-            Ok(Redirect::to("/admin/sites"))
-        }
-        Err(error) => Err(SiteError::internal(format!(
-            "failed to create site: {error}"
-        ))),
-    }
+                .await
+                .map_err(|error| {
+                    SiteError::internal(format!("failed to log site audit: {error}"))
+                })?;
+
+                if let Some(membership) =
+                    ensure_site_owner_membership(txn, &user_sub, site.id).await?
+                {
+                    log_audit_event(
+                        txn,
+                        ADMIN_ACTOR_SUB,
+                        "create_membership",
+                        "site_membership",
+                        &membership.id.to_string(),
+                        Some(membership.site_id),
+                        Some(json!({
+                            "site_id": membership.site_id.to_string(),
+                            "user_id": membership.user_id.to_string(),
+                            "role": membership.role
+                        })),
+                    )
+                    .await
+                    .map_err(|error| {
+                        SiteError::internal(format!("failed to log membership audit: {error}"))
+                    })?;
+                }
+
+                Ok(site)
+            })
+        })
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to create site: {error}")))?;
+
+    Ok(Redirect::to("/admin/sites"))
 }
 
 fn admin_sites_new_form_html() -> &'static str {
@@ -737,7 +757,7 @@ async fn admin_login_callback(
         return Err(SiteError::internal("failed to store session".to_string()));
     }
 
-    let _ = crate::upsert_user_login(&state.db, &subject).await;
+    let _ = crate::upsert_user_login(state.db.as_ref(), &subject).await;
 
     Ok(Redirect::to("/admin"))
 }
@@ -792,7 +812,7 @@ async fn admin_site_content_list(
 ) -> Result<AdminPageTemplate, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
     require_site_role(&state, &session, site_id_uuid, SiteRole::Viewer).await?;
-    match list_content(&state.db, site_id_uuid, None).await {
+    match list_content(state.db.as_ref(), site_id_uuid, None).await {
         Ok(content) => {
             let rows = content
                 .into_iter()
@@ -836,17 +856,17 @@ async fn admin_site_memberships(
 ) -> Result<AdminMembershipsTemplate, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
     require_site_role(&state, &session, site_id_uuid, SiteRole::Owner).await?;
-    let site = get_site(&state.db, site_id_uuid)
+    let site = get_site(state.db.as_ref(), site_id_uuid)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
-    let memberships = list_memberships(&state.db, site_id_uuid)
+    let memberships = list_memberships(state.db.as_ref(), site_id_uuid)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load memberships: {error}")))?;
     let user_ids = memberships
         .iter()
         .map(|membership| membership.user_id)
         .collect::<Vec<_>>();
-    let users = list_users_by_ids(&state.db, user_ids)
+    let users = list_users_by_ids(state.db.as_ref(), user_ids)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load users: {error}")))?;
     let user_map = users
@@ -895,33 +915,51 @@ async fn admin_site_membership_create(
     if subject.is_empty() {
         return Err(SiteError::internal("missing subject".to_string()));
     }
-    let user = crate::upsert_user_login(&state.db, subject)
-        .await
-        .map_err(|error| SiteError::internal(format!("failed to upsert user: {error}")))?;
-    let membership = create_membership(
-        &state.db,
-        crate::NewMembership {
-            site_id: site_id_uuid,
-            user_id: user.id,
-            role: role.label().to_string(),
-        },
-    )
-    .await
-    .map_err(|error| SiteError::internal(format!("failed to create membership: {error}")))?;
     let actor = current_user_sub(&session).await?;
-    let _ = log_audit_event(
-        &state.db,
-        &actor,
-        "create_membership",
-        "site_membership",
-        &membership.id.to_string(),
-        Some(membership.site_id),
-        Some(json!({
-            "user_id": membership.user_id.to_string(),
-            "role": membership.role
-        })),
-    )
-    .await;
+    state
+        .db
+        .transaction::<_, _, SiteError>(|txn| {
+            let actor = actor.clone();
+            let subject = subject.to_string();
+            Box::pin(async move {
+                let user = crate::upsert_user_login(txn, &subject)
+                    .await
+                    .map_err(|error| {
+                        SiteError::internal(format!("failed to upsert user: {error}"))
+                    })?;
+                let membership = create_membership(
+                    txn,
+                    crate::NewMembership {
+                        site_id: site_id_uuid,
+                        user_id: user.id,
+                        role: role.label().to_string(),
+                    },
+                )
+                .await
+                .map_err(|error| {
+                    SiteError::internal(format!("failed to create membership: {error}"))
+                })?;
+                log_audit_event(
+                    txn,
+                    &actor,
+                    "create_membership",
+                    "site_membership",
+                    &membership.id.to_string(),
+                    Some(membership.site_id),
+                    Some(json!({
+                        "user_id": membership.user_id.to_string(),
+                        "role": membership.role
+                    })),
+                )
+                .await
+                .map_err(|error| {
+                    SiteError::internal(format!("failed to log membership audit: {error}"))
+                })?;
+                Ok(())
+            })
+        })
+        .await
+        .map_err(|error| SiteError::internal(error.to_string()))?;
 
     Ok(Redirect::to(&format!("/admin/site/{site_id}/memberships")))
 }
@@ -935,7 +973,7 @@ async fn admin_site_membership_update(
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
     require_site_role(&state, &session, site_id_uuid, SiteRole::Owner).await?;
     let membership_id_uuid = parse_uuid_param(&membership_id, "membership_id")?;
-    let membership = get_membership_by_id(&state.db, membership_id_uuid)
+    let membership = get_membership_by_id(state.db.as_ref(), membership_id_uuid)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load membership: {error}")))?;
     let membership =
@@ -947,24 +985,40 @@ async fn admin_site_membership_update(
     }
     let role = SiteRole::from_str(form.role.as_str())
         .ok_or_else(|| SiteError::internal("invalid role".to_string()))?;
-    let updated = update_membership_role(&state.db, membership.id, role.label().to_string())
-        .await
-        .map_err(|error| SiteError::internal(format!("failed to update membership: {error}")))?;
     let actor = current_user_sub(&session).await?;
-    let _ = log_audit_event(
-        &state.db,
-        &actor,
-        "update_membership",
-        "site_membership",
-        &updated.id.to_string(),
-        Some(updated.site_id),
-        Some(json!({
-            "site_id": updated.site_id.to_string(),
-            "user_id": updated.user_id.to_string(),
-            "role": updated.role
-        })),
-    )
-    .await;
+    state
+        .db
+        .transaction::<_, _, SiteError>(|txn| {
+            let actor = actor.clone();
+            let role = role.label().to_string();
+            Box::pin(async move {
+                let updated = update_membership_role(txn, membership.id, role)
+                    .await
+                    .map_err(|error| {
+                        SiteError::internal(format!("failed to update membership: {error}"))
+                    })?;
+                log_audit_event(
+                    txn,
+                    &actor,
+                    "update_membership",
+                    "site_membership",
+                    &updated.id.to_string(),
+                    Some(updated.site_id),
+                    Some(json!({
+                        "site_id": updated.site_id.to_string(),
+                        "user_id": updated.user_id.to_string(),
+                        "role": updated.role
+                    })),
+                )
+                .await
+                .map_err(|error| {
+                    SiteError::internal(format!("failed to log membership audit: {error}"))
+                })?;
+                Ok(())
+            })
+        })
+        .await
+        .map_err(|error| SiteError::internal(error.to_string()))?;
 
     Ok(Redirect::to(&format!("/admin/site/{site_id}/memberships")))
 }
@@ -977,7 +1031,7 @@ async fn admin_site_membership_remove(
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
     require_site_role(&state, &session, site_id_uuid, SiteRole::Owner).await?;
     let membership_id_uuid = parse_uuid_param(&membership_id, "membership_id")?;
-    let membership = get_membership_by_id(&state.db, membership_id_uuid)
+    let membership = get_membership_by_id(state.db.as_ref(), membership_id_uuid)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load membership: {error}")))?;
     let membership =
@@ -987,24 +1041,39 @@ async fn admin_site_membership_remove(
             "membership does not belong to site".to_string(),
         ));
     }
-    delete_membership(&state.db, membership.id)
-        .await
-        .map_err(|error| SiteError::internal(format!("failed to remove membership: {error}")))?;
     let actor = current_user_sub(&session).await?;
-    let _ = log_audit_event(
-        &state.db,
-        &actor,
-        "delete_membership",
-        "site_membership",
-        &membership.id.to_string(),
-        Some(membership.site_id),
-        Some(json!({
-            "site_id": membership.site_id.to_string(),
-            "user_id": membership.user_id.to_string(),
-            "role": membership.role
-        })),
-    )
-    .await;
+    state
+        .db
+        .transaction::<_, _, SiteError>(|txn| {
+            let actor = actor.clone();
+            Box::pin(async move {
+                delete_membership(txn, membership.id)
+                    .await
+                    .map_err(|error| {
+                        SiteError::internal(format!("failed to remove membership: {error}"))
+                    })?;
+                log_audit_event(
+                    txn,
+                    &actor,
+                    "delete_membership",
+                    "site_membership",
+                    &membership.id.to_string(),
+                    Some(membership.site_id),
+                    Some(json!({
+                        "site_id": membership.site_id.to_string(),
+                        "user_id": membership.user_id.to_string(),
+                        "role": membership.role
+                    })),
+                )
+                .await
+                .map_err(|error| {
+                    SiteError::internal(format!("failed to log membership audit: {error}"))
+                })?;
+                Ok(())
+            })
+        })
+        .await
+        .map_err(|error| SiteError::internal(error.to_string()))?;
 
     Ok(Redirect::to(&format!("/admin/site/{site_id}/memberships")))
 }
@@ -1022,7 +1091,7 @@ async fn admin_site_search(
     let mut message = "Search content by title, slug, or body text.".to_string();
 
     if !query_text.trim().is_empty() {
-        match search_content(&state.db, site_id_uuid, query_text.trim()).await {
+        match search_content(state.db.as_ref(), site_id_uuid, query_text.trim()).await {
             Ok(items) => {
                 message = format!("Found {} result(s) for \"{}\".", items.len(), query_text);
                 rows = items
@@ -1079,7 +1148,7 @@ async fn admin_site_content_new(
 ) -> Result<AdminContentNewTemplate, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
     require_site_role(&state, &session, site_id_uuid, SiteRole::Author).await?;
-    let tags = list_tags(&state.db, site_id_uuid)
+    let tags = list_tags(state.db.as_ref(), site_id_uuid)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load tags: {error}")))?;
     let tags = tags
@@ -1087,7 +1156,7 @@ async fn admin_site_content_new(
         .map(|tag| AdminTagOption { name: tag.name })
         .collect();
 
-    match get_site(&state.db, site_id_uuid).await {
+    match get_site(state.db.as_ref(), site_id_uuid).await {
         Ok(site) => Ok(AdminContentNewTemplate {
             title: "New Content".to_string(),
             site_id: site.id.to_string(),
@@ -1114,26 +1183,43 @@ async fn admin_site_content_create(
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
     require_site_role(&state, &session, site_id_uuid, SiteRole::Author).await?;
     let tag_names = form.tags.clone();
+    let title = form.title;
+    let slug = form.slug;
+    let page_content = form.page_content;
+    let draft = form.draft.unwrap_or(false);
 
-    match get_site(&state.db, site_id_uuid).await {
-        Ok(site) => match create_content(
-            &state.db,
-            NewContent {
-                site_id: site.id,
-                page_type,
-                title: form.title,
-                slug: form.slug,
-                page_content: form.page_content,
-                draft: form.draft.unwrap_or(false),
-                creator_sub: ADMIN_ACTOR_SUB.to_string(),
-                published_at: None,
-            },
-        )
+    let site = get_site(state.db.as_ref(), site_id_uuid)
         .await
-        {
-            Ok(content) => {
+        .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
+    let site_id_uuid = site.id;
+
+    let content = state
+        .db
+        .transaction::<_, _, SiteError>(|txn| {
+            let tag_names = tag_names.clone();
+            Box::pin(async move {
+                let content = create_content(
+                    txn,
+                    NewContent {
+                        site_id: site_id_uuid,
+                        page_type,
+                        title,
+                        slug,
+                        page_content,
+                        draft,
+                        creator_sub: ADMIN_ACTOR_SUB.to_string(),
+                        published_at: None,
+                    },
+                )
+                .await
+                .map_err(|error| {
+                    SiteError::internal(format!(
+                        "failed to create content for site {site_id}: {error}"
+                    ))
+                })?;
+
                 if !tag_names.is_empty() {
-                    let revision = get_revision_by_number(&state.db, content.id, 1)
+                    let revision = get_revision_by_number(txn, content.id, 1)
                         .await
                         .map_err(|error| {
                             SiteError::internal(format!(
@@ -1144,7 +1230,7 @@ async fn admin_site_content_create(
                             SiteError::internal("missing revision for new content".to_string())
                         })?;
                     crate::assign_tags_to_content(
-                        &state.db,
+                        txn,
                         content.site_id,
                         content.id,
                         revision.id,
@@ -1155,8 +1241,9 @@ async fn admin_site_content_create(
                         SiteError::internal(format!("failed to assign tags: {error}"))
                     })?;
                 }
-                let _ = log_audit_event(
-                    &state.db,
+
+                log_audit_event(
+                    txn,
                     ADMIN_ACTOR_SUB,
                     "create_content",
                     "content_item",
@@ -1169,20 +1256,21 @@ async fn admin_site_content_create(
                         "draft": content.draft
                     })),
                 )
-                .await;
-                Ok(Redirect::to(&format!(
-                    "/admin/site/{}/content/{}",
-                    content.site_id, content.id
-                )))
-            }
-            Err(error) => Err(SiteError::internal(format!(
-                "failed to create content for site {site_id}: {error}"
-            ))),
-        },
-        Err(error) => Err(SiteError::internal(format!(
-            "failed to load site {site_id}: {error}"
-        ))),
-    }
+                .await
+                .map_err(|error| {
+                    SiteError::internal(format!("failed to log content audit: {error}"))
+                })?;
+
+                Ok(content)
+            })
+        })
+        .await
+        .map_err(|error| SiteError::internal(error.to_string()))?;
+
+    Ok(Redirect::to(&format!(
+        "/admin/site/{}/content/{}",
+        content.site_id, content.id
+    )))
 }
 
 async fn admin_site_content_detail(
@@ -1193,7 +1281,7 @@ async fn admin_site_content_detail(
     let site_id_uuid = parse_uuid_param(&_site_id, "site_id")?;
     require_site_role(&state, &session, site_id_uuid, SiteRole::Viewer).await?;
     let content_id_uuid = parse_uuid_param(&content_id, "content_id")?;
-    let content = get_content(&state.db, content_id_uuid)
+    let content = get_content(state.db.as_ref(), content_id_uuid)
         .await
         .map_err(|err| {
             SiteError::internal(format!("failed to load content {content_id}: {err}"))
@@ -1285,12 +1373,12 @@ async fn admin_site_content_source(
     let site_id_uuid = parse_uuid_param(&_site_id, "site_id")?;
     require_site_role(&state, &session, site_id_uuid, SiteRole::Author).await?;
     let content_id_uuid = parse_uuid_param(&content_id, "content_id")?;
-    let content = get_content(&state.db, content_id_uuid)
+    let content = get_content(state.db.as_ref(), content_id_uuid)
         .await
         .map_err(|error| {
             SiteError::internal(format!("failed to load source for {content_id}: {error}"))
         })?;
-    let assets_html = render_asset_embed_library(&state.db, content.site_id)
+    let assets_html = render_asset_embed_library(state.db.as_ref(), content.site_id)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load assets: {error}")))?;
 
@@ -1326,48 +1414,62 @@ async fn admin_site_content_source_update(
     let content_id_uuid = parse_uuid_param(&content_id, "content_id")?;
     let page_type = PageType::from_str(&form.page_type)
         .map_err(|error| SiteError::internal(error.to_string()))?;
+    let title = form.title;
+    let slug = form.slug;
+    let page_content = form.page_content;
 
-    match update_content(
-        &state.db,
-        crate::UpdateContent {
-            content_id: content_id_uuid,
-            page_type: Some(page_type),
-            title: Some(form.title),
-            slug: Some(form.slug),
-            page_content: Some(form.page_content),
-            draft: Some(draft),
-            published_at,
-            editor_sub: ADMIN_ACTOR_SUB.to_string(),
-        },
-    )
-    .await
-    {
-        Ok(content) => {
-            let _ = log_audit_event(
-                &state.db,
-                ADMIN_ACTOR_SUB,
-                "update_content",
-                "content_item",
-                &content.id.to_string(),
-                Some(content.site_id),
-                Some(json!({
-                        "page_type": content.page_type.to_string(),
-                        "slug": &content.slug,
-                        "title": &content.title,
-                        "draft": content.draft
-                    }
-                )),
-            )
-            .await;
-            Ok(Redirect::to(&format!(
-                "/admin/site/{}/content/{}",
-                content.site_id, content.id
-            )))
-        }
-        Err(error) => Err(SiteError::internal(format!(
-            "failed to update content {content_id}: {error}"
-        ))),
-    }
+    let content = state
+        .db
+        .transaction::<_, _, SiteError>(|txn| {
+            Box::pin(async move {
+                let content = update_content(
+                    txn,
+                    crate::UpdateContent {
+                        content_id: content_id_uuid,
+                        page_type: Some(page_type),
+                        title: Some(title),
+                        slug: Some(slug),
+                        page_content: Some(page_content),
+                        draft: Some(draft),
+                        published_at,
+                        editor_sub: ADMIN_ACTOR_SUB.to_string(),
+                    },
+                )
+                .await
+                .map_err(|error| {
+                    SiteError::internal(format!("failed to update content {content_id}: {error}"))
+                })?;
+
+                log_audit_event(
+                    txn,
+                    ADMIN_ACTOR_SUB,
+                    "update_content",
+                    "content_item",
+                    &content.id.to_string(),
+                    Some(content.site_id),
+                    Some(json!({
+                            "page_type": content.page_type.to_string(),
+                            "slug": &content.slug,
+                            "title": &content.title,
+                            "draft": content.draft
+                        }
+                    )),
+                )
+                .await
+                .map_err(|error| {
+                    SiteError::internal(format!("failed to log update audit: {error}"))
+                })?;
+
+                Ok(content)
+            })
+        })
+        .await
+        .map_err(|error| SiteError::internal(error.to_string()))?;
+
+    Ok(Redirect::to(&format!(
+        "/admin/site/{}/content/{}",
+        content.site_id, content.id
+    )))
 }
 
 fn admin_site_content_source_form_html(content: &crate::entities::content_item::Model) -> String {
@@ -1483,20 +1585,20 @@ async fn admin_site_content_advanced(
     let site_id_uuid = parse_uuid_param(&_site_id, "site_id")?;
     require_site_role(&state, &session, site_id_uuid, SiteRole::Viewer).await?;
     let content_id_uuid = parse_uuid_param(&content_id, "content_id")?;
-    let content = get_content(&state.db, content_id_uuid)
+    let content = get_content(state.db.as_ref(), content_id_uuid)
         .await
         .map_err(|error| {
             SiteError::internal(format!("failed to load content {content_id}: {error}"))
         })?;
 
-    let aliases = list_aliases(&state.db, content.site_id, Some(content.id))
+    let aliases = list_aliases(state.db.as_ref(), content.site_id, Some(content.id))
         .await
         .map_err(|error| {
             SiteError::internal(format!(
                 "failed to load aliases for content {content_id}: {error}"
             ))
         })?;
-    let tags = list_content_tags(&state.db, content.id)
+    let tags = list_content_tags(state.db.as_ref(), content.id)
         .await
         .map_err(|error| {
             SiteError::internal(format!(
@@ -1546,7 +1648,7 @@ async fn admin_site_content_revisions(
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
     require_site_role(&state, &session, site_id_uuid, SiteRole::Viewer).await?;
     let content_id_uuid = parse_uuid_param(&content_id, "content_id")?;
-    let revisions = list_revisions(&state.db, content_id_uuid)
+    let revisions = list_revisions(state.db.as_ref(), content_id_uuid)
         .await
         .map_err(|error| {
             SiteError::internal(format!(
@@ -1606,7 +1708,7 @@ async fn admin_site_revision_diff(
     require_site_role(&state, &session, site_id_uuid, SiteRole::Viewer).await?;
     let revision_id_uuid = parse_uuid_param(&revision_id, "revision_id")?;
     let content_id_uuid = parse_uuid_param(&content_id, "content_id")?;
-    let revision = get_revision(&state.db, revision_id_uuid)
+    let revision = get_revision(state.db.as_ref(), revision_id_uuid)
         .await
         .map_err(|error| {
             SiteError::internal(format!("failed to load revision {revision_id}: {error}"))
@@ -1618,8 +1720,12 @@ async fn admin_site_revision_diff(
     }
 
     let previous = if revision.revision_number > 1 {
-        match get_revision_by_number(&state.db, revision.content_id, revision.revision_number - 1)
-            .await
+        match get_revision_by_number(
+            state.db.as_ref(),
+            revision.content_id,
+            revision.revision_number - 1,
+        )
+        .await
         {
             Ok(previous) => previous,
             Err(error) => {
@@ -1686,7 +1792,7 @@ async fn admin_site_tags(
 ) -> Result<AdminPageTemplate, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
     require_site_role(&state, &session, site_id_uuid, SiteRole::Viewer).await?;
-    match list_tags(&state.db, site_id_uuid).await {
+    match list_tags(state.db.as_ref(), site_id_uuid).await {
         Ok(tags) => {
             let rows = tags
                 .into_iter()
@@ -1722,7 +1828,7 @@ async fn admin_site_assets(
 ) -> Result<AdminPageTemplate, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
     require_site_role(&state, &session, site_id_uuid, SiteRole::Viewer).await?;
-    match list_assets(&state.db, site_id_uuid).await {
+    match list_assets(state.db.as_ref(), site_id_uuid).await {
         Ok(assets) => {
             let rows = assets
                 .into_iter()
@@ -1761,7 +1867,7 @@ async fn admin_site_assets_new(
 ) -> Result<AdminPageTemplate, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
     require_site_role(&state, &session, site_id_uuid, SiteRole::Author).await?;
-    match get_site(&state.db, site_id_uuid).await {
+    match get_site(state.db.as_ref(), site_id_uuid).await {
         Ok(site) => Ok(AdminPageTemplate {
             title: "Upload Asset".to_string(),
             heading: format!("Upload Asset {}", site.short_name),
@@ -1791,7 +1897,7 @@ async fn admin_site_assets_create(
 ) -> Result<Redirect, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
     require_site_role(&state, &session, site_id_uuid, SiteRole::Author).await?;
-    let site = match get_site(&state.db, site_id_uuid).await {
+    let site = match get_site(state.db.as_ref(), site_id_uuid).await {
         Ok(site) => site,
         Err(error) => {
             return Err(SiteError::internal(format!(
@@ -1891,85 +1997,100 @@ async fn admin_site_assets_create(
     };
 
     let mime_type = mime_type.unwrap_or_else(|| mime_from_extension(&extension).to_string());
-    let asset = match create_asset(
-        &state.db,
-        NewAsset {
-            site_id: site.id,
-            uploader_sub: ADMIN_ACTOR_SUB.to_string(),
-            original_filename: original_filename.clone(),
-            storage_basename: storage_basename.clone(),
-            mime_type: mime_type.clone(),
-            byte_length,
-            width: width_i32,
-            height: height_i32,
-        },
-    )
-    .await
-    {
-        Ok(asset) => asset,
-        Err(error) => {
-            return Err(SiteError::internal(format!(
-                "failed to create asset: {error}"
-            )));
-        }
-    };
+    let asset = state
+        .db
+        .transaction::<_, _, SiteError>(|txn| {
+            let original_filename = original_filename.clone();
+            let storage_basename = storage_basename.clone();
+            let mime_type = mime_type.clone();
+            Box::pin(async move {
+                let asset = create_asset(
+                    txn,
+                    NewAsset {
+                        site_id: site.id,
+                        uploader_sub: ADMIN_ACTOR_SUB.to_string(),
+                        original_filename,
+                        storage_basename: storage_basename.clone(),
+                        mime_type: mime_type.clone(),
+                        byte_length,
+                        width: width_i32,
+                        height: height_i32,
+                    },
+                )
+                .await
+                .map_err(|error| SiteError::internal(format!("failed to create asset: {error}")))?;
 
-    let _ = log_audit_event(
-        &state.db,
-        ADMIN_ACTOR_SUB,
-        "create_asset",
-        "asset",
-        &asset.id.to_string(),
-        Some(asset.site_id),
-        Some(json!({
-            "original_filename": &asset.original_filename,
-            "storage_basename": &asset.storage_basename,
-            "mime_type": &asset.mime_type
-        })),
-    )
-    .await;
+                log_audit_event(
+                    txn,
+                    ADMIN_ACTOR_SUB,
+                    "create_asset",
+                    "asset",
+                    &asset.id.to_string(),
+                    Some(asset.site_id),
+                    Some(json!({
+                        "original_filename": &asset.original_filename,
+                        "storage_basename": &asset.storage_basename,
+                        "mime_type": &asset.mime_type
+                    })),
+                )
+                .await
+                .map_err(|error| {
+                    SiteError::internal(format!("failed to log asset audit: {error}"))
+                })?;
 
-    let _ = create_asset_variant(
-        &state.db,
-        NewAssetVariant {
-            asset_id: asset.id,
-            variant_kind: "original".to_string(),
-            filename: storage_basename,
-            mime_type: mime_type.clone(),
-            byte_length,
-            width: width_i32,
-            height: height_i32,
-        },
-    )
-    .await;
+                create_asset_variant(
+                    txn,
+                    NewAssetVariant {
+                        asset_id: asset.id,
+                        variant_kind: "original".to_string(),
+                        filename: storage_basename.clone(),
+                        mime_type: mime_type.clone(),
+                        byte_length,
+                        width: width_i32,
+                        height: height_i32,
+                    },
+                )
+                .await
+                .map_err(|error| {
+                    SiteError::internal(format!("failed to create asset variant: {error}"))
+                })?;
 
-    if let Some(thumbnail) = thumbnail {
-        let stem = StdPath::new(&asset.storage_basename)
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or("asset");
-        let filename = format!("{stem}_thumb.{}", thumbnail.extension);
-        let thumb_path = StdPath::new(UPLOAD_ROOT).join(&filename);
-        if let Err(error) = fs::write(&thumb_path, &thumbnail.bytes).await {
-            return Err(SiteError::internal(format!(
-                "failed to write thumbnail: {error}"
-            )));
-        }
+                if let Some(thumbnail) = thumbnail {
+                    let stem = StdPath::new(&asset.storage_basename)
+                        .file_stem()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("asset");
+                    let filename = format!("{stem}_thumb.{}", thumbnail.extension);
+                    let thumb_path = StdPath::new(UPLOAD_ROOT).join(&filename);
+                    if let Err(error) = fs::write(&thumb_path, &thumbnail.bytes).await {
+                        return Err(SiteError::internal(format!(
+                            "failed to write thumbnail: {error}"
+                        )));
+                    }
 
-        let _ = create_asset_variant(
-            &state.db,
-            NewAssetVariant {
-                asset_id: asset.id,
-                variant_kind: "thumbnail".to_string(),
-                filename,
-                mime_type: thumbnail.mime_type,
-                byte_length: thumbnail.byte_length,
-                width: thumbnail.width,
-                height: thumbnail.height,
-            },
-        )
-        .await;
-    }
+                    create_asset_variant(
+                        txn,
+                        NewAssetVariant {
+                            asset_id: asset.id,
+                            variant_kind: "thumbnail".to_string(),
+                            filename,
+                            mime_type: thumbnail.mime_type,
+                            byte_length: thumbnail.byte_length,
+                            width: thumbnail.width,
+                            height: thumbnail.height,
+                        },
+                    )
+                    .await
+                    .map_err(|error| {
+                        SiteError::internal(format!("failed to create thumbnail variant: {error}"))
+                    })?;
+                }
+
+                Ok(asset)
+            })
+        })
+        .await
+        .map_err(|error| SiteError::internal(error.to_string()))?;
 
     Ok(Redirect::to(&format!("/admin/site/{site_id}/assets")))
 }
@@ -2104,7 +2225,7 @@ async fn admin_site_settings(
 ) -> Result<AdminPageTemplate, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
     require_site_role(&state, &session, site_id_uuid, SiteRole::Viewer).await?;
-    get_site(&state.db, site_id_uuid)
+    get_site(state.db.as_ref(), site_id_uuid)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))
         .map(|site| {
@@ -2148,7 +2269,7 @@ async fn admin_site_render(
     Path(site_id): Path<Uuid>,
 ) -> Result<AdminPageTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Editor).await?;
-    render_site(&state.db, site_id, "templates", "./rendered")
+    render_site(state.db.as_ref(), site_id, "templates", "./rendered")
         .await
         .map_err(|error| SiteError::internal(format!("failed to render site {site_id}: {error}")))
         .map(|files_written| AdminPageTemplate {
@@ -2182,7 +2303,7 @@ mod tests {
             .await
             .expect("failed to start db");
         let site = crate::create_site(
-            &db,
+            db.as_ref(),
             "test".to_string(),
             "Test Site".to_string(),
             DEFAULT_TEMPLATE_NAME.to_string(),
@@ -2190,7 +2311,7 @@ mod tests {
         .await
         .expect("failed to create site");
 
-        let first = match ensure_site_owner_membership(&db, "tester", site.id).await {
+        let first = match ensure_site_owner_membership(db.as_ref(), "tester", site.id).await {
             Ok(value) => value,
             Err(_) => panic!("failed to create membership"),
         };
@@ -2199,7 +2320,7 @@ mod tests {
             assert_eq!(membership.role, "owner");
         }
 
-        let second = match ensure_site_owner_membership(&db, "tester", site.id).await {
+        let second = match ensure_site_owner_membership(db.as_ref(), "tester", site.id).await {
             Ok(value) => value,
             Err(_) => panic!("failed to check membership"),
         };

@@ -3,8 +3,8 @@ use chrono::{DateTime, Datelike, Utc};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, DbErr, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, DbErr,
+    EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
 };
 use std::collections::HashSet;
 use std::io::ErrorKind;
@@ -612,8 +612,8 @@ fn content_is_publishable_at(content: &entities::content_item::Model, now: DateT
 }
 
 /// Creates a site record and returns the persisted row.
-pub async fn create_site(
-    db: &DatabaseConnection,
+pub async fn create_site<C: ConnectionTrait>(
+    db: &C,
     short_name: String,
     full_title: String,
     template_name: String,
@@ -647,8 +647,8 @@ pub async fn list_sites(db: &DatabaseConnection) -> StdResult<Vec<entities::site
 }
 
 /// Creates one content record and one revision snapshot in the same operation.
-pub async fn create_content(
-    db: &DatabaseConnection,
+pub async fn create_content<C: ConnectionTrait>(
+    db: &C,
     input: NewContent,
 ) -> StdResult<entities::content_item::Model, String> {
     let now = Utc::now();
@@ -711,8 +711,8 @@ pub async fn create_content(
 }
 
 /// Updates a content row and appends a revision snapshot.
-pub async fn update_content(
-    db: &DatabaseConnection,
+pub async fn update_content<C: ConnectionTrait>(
+    db: &C,
     input: UpdateContent,
 ) -> StdResult<entities::content_item::Model, String> {
     let now = Utc::now();
@@ -871,8 +871,8 @@ struct WordpressItem {
     link: Option<String>,
 }
 
-pub async fn import_wordpress(
-    db: &DatabaseConnection,
+pub async fn import_wordpress<C: ConnectionTrait>(
+    db: &C,
     site_id: Uuid,
     file_path: &str,
     creator_sub: &str,
@@ -917,7 +917,7 @@ pub async fn import_wordpress(
 
         if let Some(post_id) = item.post_id {
             let alias_path = format!("/?p={post_id}");
-            let _ = create_alias(
+            create_alias(
                 db,
                 NewAlias {
                     content_id: content_model.id,
@@ -926,13 +926,13 @@ pub async fn import_wordpress(
                     kind: "alias".to_string(),
                 },
             )
-            .await;
+            .await?;
         }
 
         if let Some(link) = item.link
             && let Some(alias_path) = wordpress_link_to_alias(&link)
         {
-            let _ = create_alias(
+            create_alias(
                 db,
                 NewAlias {
                     content_id: content_model.id,
@@ -941,7 +941,7 @@ pub async fn import_wordpress(
                     kind: "alias".to_string(),
                 },
             )
-            .await;
+            .await?;
         }
 
         imported = imported.saturating_add(1);
@@ -1096,8 +1096,8 @@ pub async fn get_site(
 }
 
 /// Creates a content alias entry.
-pub async fn create_alias(
-    db: &DatabaseConnection,
+pub async fn create_alias<C: ConnectionTrait>(
+    db: &C,
     input: NewAlias,
 ) -> StdResult<entities::content_alias::Model, String> {
     let model = entities::content_alias::ActiveModel {
@@ -1134,8 +1134,8 @@ pub async fn list_aliases(
 }
 
 /// Creates a tag record.
-pub async fn create_tag(
-    db: &DatabaseConnection,
+pub async fn create_tag<C: ConnectionTrait>(
+    db: &C,
     input: NewTag,
 ) -> StdResult<entities::tag::Model, String> {
     let model = entities::tag::ActiveModel {
@@ -1164,8 +1164,8 @@ pub async fn list_tags(
 }
 
 /// Adds a tag to content (creates the tag if missing).
-pub async fn add_content_tag(
-    db: &DatabaseConnection,
+pub async fn add_content_tag<C: ConnectionTrait>(
+    db: &C,
     input: NewContentTag,
 ) -> StdResult<entities::content_tag::Model, String> {
     let content = entities::content_item::Entity::find_by_id(input.content_id)
@@ -1309,8 +1309,8 @@ pub async fn get_revision(
 }
 
 /// Returns a revision by number, if present.
-pub async fn get_revision_by_number(
-    db: &DatabaseConnection,
+pub async fn get_revision_by_number<C: ConnectionTrait>(
+    db: &C,
     content_id: Uuid,
     revision_number: i32,
 ) -> StdResult<Option<entities::content_revision::Model>, String> {
@@ -1340,8 +1340,8 @@ fn content_date_path(date: &DateTime<Utc>) -> String {
 }
 
 /// Creates a user record and returns the persisted row.
-pub async fn create_user(
-    db: &DatabaseConnection,
+pub async fn create_user<C: ConnectionTrait>(
+    db: &C,
     input: NewUser,
 ) -> StdResult<entities::user::Model, String> {
     let model = entities::user::ActiveModel {
@@ -1367,8 +1367,8 @@ pub async fn list_users(db: &DatabaseConnection) -> StdResult<Vec<entities::user
 }
 
 /// Ensures a user exists and updates last_login_at.
-pub async fn upsert_user_login(
-    db: &DatabaseConnection,
+pub async fn upsert_user_login<C: ConnectionTrait>(
+    db: &C,
     subject: &str,
 ) -> StdResult<entities::user::Model, String> {
     let existing = entities::user::Entity::find()
@@ -1397,8 +1397,8 @@ pub async fn upsert_user_login(
 }
 
 /// Creates one site membership record.
-pub async fn create_membership(
-    db: &DatabaseConnection,
+pub async fn create_membership<C: ConnectionTrait>(
+    db: &C,
     input: NewMembership,
 ) -> StdResult<entities::site_membership::Model, String> {
     let model = entities::site_membership::ActiveModel {
@@ -1428,8 +1428,8 @@ pub async fn list_memberships(
 }
 
 /// Returns a membership by id.
-pub async fn get_membership_by_id(
-    db: &DatabaseConnection,
+pub async fn get_membership_by_id<C: ConnectionTrait>(
+    db: &C,
     membership_id: Uuid,
 ) -> StdResult<Option<entities::site_membership::Model>, String> {
     entities::site_membership::Entity::find_by_id(membership_id)
@@ -1439,8 +1439,8 @@ pub async fn get_membership_by_id(
 }
 
 /// Returns a user by subject.
-pub async fn get_user_by_subject(
-    db: &DatabaseConnection,
+pub async fn get_user_by_subject<C: ConnectionTrait>(
+    db: &C,
     subject: &str,
 ) -> StdResult<Option<entities::user::Model>, String> {
     entities::user::Entity::find()
@@ -1451,8 +1451,8 @@ pub async fn get_user_by_subject(
 }
 
 /// Returns users by id.
-pub async fn list_users_by_ids(
-    db: &DatabaseConnection,
+pub async fn list_users_by_ids<C: ConnectionTrait>(
+    db: &C,
     user_ids: Vec<Uuid>,
 ) -> StdResult<Vec<entities::user::Model>, String> {
     if user_ids.is_empty() {
@@ -1467,8 +1467,8 @@ pub async fn list_users_by_ids(
 }
 
 /// Returns a membership for a site and user subject.
-pub async fn get_membership_for_subject(
-    db: &DatabaseConnection,
+pub async fn get_membership_for_subject<C: ConnectionTrait>(
+    db: &C,
     site_id: Uuid,
     subject: &str,
 ) -> StdResult<Option<entities::site_membership::Model>, String> {
@@ -1518,8 +1518,8 @@ pub async fn list_sites_for_subject(
 }
 
 /// Updates the membership role.
-pub async fn update_membership_role(
-    db: &DatabaseConnection,
+pub async fn update_membership_role<C: ConnectionTrait>(
+    db: &C,
     membership_id: Uuid,
     role: String,
 ) -> StdResult<entities::site_membership::Model, String> {
@@ -1532,8 +1532,8 @@ pub async fn update_membership_role(
 }
 
 /// Deletes the membership by id.
-pub async fn delete_membership(
-    db: &DatabaseConnection,
+pub async fn delete_membership<C: ConnectionTrait>(
+    db: &C,
     membership_id: Uuid,
 ) -> StdResult<(), String> {
     entities::site_membership::Entity::delete_by_id(membership_id)
@@ -1544,8 +1544,8 @@ pub async fn delete_membership(
 }
 
 /// Assigns tags to content and its revision, creating tags as needed.
-pub async fn assign_tags_to_content(
-    db: &DatabaseConnection,
+pub async fn assign_tags_to_content<C: ConnectionTrait>(
+    db: &C,
     site_id: Uuid,
     content_id: Uuid,
     revision_id: Uuid,
@@ -1624,8 +1624,8 @@ pub async fn assign_tags_to_content(
 }
 
 /// Creates an asset record.
-pub async fn create_asset(
-    db: &DatabaseConnection,
+pub async fn create_asset<C: ConnectionTrait>(
+    db: &C,
     input: NewAsset,
 ) -> StdResult<entities::asset::Model, String> {
     let model = entities::asset::ActiveModel {
@@ -1661,8 +1661,8 @@ pub async fn list_assets(
 }
 
 /// Creates an asset variant entry.
-pub async fn create_asset_variant(
-    db: &DatabaseConnection,
+pub async fn create_asset_variant<C: ConnectionTrait>(
+    db: &C,
     input: NewAssetVariant,
 ) -> StdResult<entities::asset_variant::Model, String> {
     let model = entities::asset_variant::ActiveModel {
@@ -1700,13 +1700,12 @@ mod tests {
     use super::*;
     use crate::db::test_db_start;
     use crate::entities::audit_event::log_audit_event;
-    use sea_orm::DatabaseConnection;
-    use std::sync::Arc;
+    use sea_orm::{DatabaseConnection, TransactionTrait};
     use tempfile::TempDir;
     use tokio::fs;
 
-    async fn setup_db() -> Arc<DatabaseConnection> {
-        test_db_start().await
+    async fn setup_db() -> DatabaseConnection {
+        test_db_start().await.as_ref().clone()
     }
 
     async fn create_site_fixture(db: &DatabaseConnection) -> entities::site::Model {
@@ -1777,6 +1776,37 @@ mod tests {
 
         let fetched = get_site(&db, site.id).await.expect("failed to get site");
         assert_eq!(fetched.id, site.id);
+    }
+
+    #[tokio::test]
+    async fn transaction_rolls_back_on_error() {
+        let db = setup_db().await;
+
+        let result = db
+            .transaction::<_, _, String>(|txn| {
+                Box::pin(async move {
+                    create_site(
+                        txn,
+                        "dupe".to_string(),
+                        "Dupe Site".to_string(),
+                        "default".to_string(),
+                    )
+                    .await?;
+                    create_site(
+                        txn,
+                        "dupe".to_string(),
+                        "Dupe Site 2".to_string(),
+                        "default".to_string(),
+                    )
+                    .await?;
+                    Ok(())
+                })
+            })
+            .await;
+
+        assert!(result.is_err(), "expected transaction error");
+        let sites = list_sites(&db).await.expect("failed to list sites");
+        assert!(sites.is_empty(), "expected no sites after rollback");
     }
 
     #[tokio::test]
