@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="/admin/assets/admin.css" />
+    <link rel="stylesheet" href="/admin/assets/editor.css" />
+    <script src="/admin/assets/editor.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <h1>{{ heading }}</h1>
+      <nav>
+        <a href="/admin">Dashboard</a>
+        <a href="/admin/sites">Sites</a>
+        <a href="/admin/login">Login</a>
+        <a href="/admin/logout">Logout</a>
+      </nav>
+
+      {% if !message.is_empty() %}
+      <p class="message">{{ message }}</p>
+      {% endif %}
+
+      {% block body %}{% endblock %}
+
+      {% if !links.is_empty() %}
+      <h2>Actions</h2>
+      <ul>
+        {% for link in links %}
+        <li><a href="{{ link.href }}">{{ link.label }}</a></li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </main>
+  </body>
+</html>
