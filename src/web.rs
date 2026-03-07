@@ -57,20 +57,41 @@ struct AdminState {
     oidc_discovery_url: Option<String>,
 }
 
-#[derive(Template, WebTemplate)]
-#[template(path = "admin/page.html")]
-struct AdminPageTemplate {
-    title: String,
-    heading: String,
-    message: String,
-    rows: Vec<AdminRow>,
-    links: Vec<AdminLink>,
-    inline_body: String,
-    pre_body: String,
+macro_rules! admin_page_template {
+    ($name:ident, $path:literal) => {
+        #[derive(Template, WebTemplate)]
+        #[template(path = $path)]
+        struct $name {
+            title: String,
+            heading: String,
+            message: String,
+            rows: Vec<AdminRow>,
+            links: Vec<AdminLink>,
+            inline_body: String,
+            pre_body: String,
+        }
+    };
 }
 
+admin_page_template!(AdminIndexTemplate, "admin_index.html");
+admin_page_template!(AdminSitesNewTemplate, "admin_sites_new.html");
+admin_page_template!(AdminContentListTemplate, "admin_content_list.html");
+admin_page_template!(AdminSearchTemplate, "admin_content_search.html");
+admin_page_template!(AdminContentDetailTemplate, "admin_content_detail.html");
+admin_page_template!(AdminContentSourceTemplate, "admin_content_source.html");
+admin_page_template!(AdminContentAdvancedTemplate, "admin_content_advanced.html");
+admin_page_template!(
+    AdminContentRevisionsTemplate,
+    "admin_content_revisions.html"
+);
+admin_page_template!(AdminRevisionDiffTemplate, "admin_revision_diff.html");
+admin_page_template!(AdminTagsTemplate, "admin_tags.html");
+admin_page_template!(AdminAssetsTemplate, "admin_assets.html");
+admin_page_template!(AdminAssetsNewTemplate, "admin_assets_new.html");
+admin_page_template!(AdminRenderTemplate, "admin_render.html");
+
 #[derive(Template, WebTemplate)]
-#[template(path = "admin/sites.html")]
+#[template(path = "sites.html")]
 struct AdminSitesTemplate {
     title: String,
     heading: String,
@@ -80,7 +101,7 @@ struct AdminSitesTemplate {
 }
 
 #[derive(Template, WebTemplate)]
-#[template(path = "admin/content_new.html")]
+#[template(path = "content_new.html")]
 struct AdminContentNewTemplate {
     // title: String,
     site_id: String,
@@ -94,7 +115,7 @@ struct AdminContentNewTemplate {
 }
 
 #[derive(Template, WebTemplate)]
-#[template(path = "admin/site_settings.html")]
+#[template(path = "site_settings.html")]
 struct AdminSiteSettingsTemplate {
     title: String,
     site_id: String,
@@ -107,7 +128,7 @@ struct AdminSiteSettingsTemplate {
 }
 
 #[derive(Template, WebTemplate)]
-#[template(path = "admin/memberships.html")]
+#[template(path = "memberships.html")]
 struct AdminMembershipsTemplate {
     title: String,
     site_id: String,
@@ -439,14 +460,14 @@ async fn require_admin_session(session: Session, request: Request, next: Next) -
     }
 }
 
-async fn admin_index(State(_state): State<AdminState>) -> AdminPageTemplate {
+async fn admin_index(State(_state): State<AdminState>) -> AdminIndexTemplate {
     let links = vec![
     //     link("/admin/sites", "Sites"),
     //     link("/admin/login", "Login"),
     //     link("/admin/logout", "Logout"),
     ];
 
-    AdminPageTemplate {
+    AdminIndexTemplate {
         title: "Admin".to_string(),
         heading: "Administration".to_string(),
         message: "".to_string(),
@@ -493,7 +514,7 @@ async fn admin_sites(State(state): State<AdminState>) -> Result<AdminSitesTempla
 }
 
 async fn admin_sites_new() -> Response {
-    AdminPageTemplate {
+    AdminSitesNewTemplate {
         title: "New Site".to_string(),
         heading: "Create Site".to_string(),
         message: "Use this form to create a site.".to_string(),
@@ -818,7 +839,7 @@ async fn admin_site_content_list(
     State(state): State<AdminState>,
     session: Session,
     Path(site_id): Path<Uuid>,
-) -> Result<AdminPageTemplate, SiteError> {
+) -> Result<AdminContentListTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
     let site = get_by_id(state.db.as_ref(), site_id)
         .await
@@ -837,7 +858,7 @@ async fn admin_site_content_list(
                 })
                 .collect();
 
-            Ok(AdminPageTemplate {
+            Ok(AdminContentListTemplate {
                 title: "Content".to_string(),
                 heading: site.full_title,
                 message: "".to_string(),
@@ -1059,7 +1080,7 @@ async fn admin_site_search(
     session: Session,
     Path(site_id): Path<Uuid>,
     Query(query): Query<SearchQuery>,
-) -> Result<AdminPageTemplate, SiteError> {
+) -> Result<AdminSearchTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
     let query_text = query.q.unwrap_or_default();
     let mut rows = Vec::new();
@@ -1088,7 +1109,7 @@ async fn admin_site_search(
         }
     }
 
-    Ok(AdminPageTemplate {
+    Ok(AdminSearchTemplate {
         title: "Search".to_string(),
         heading: format!("Search Content {site_id}"),
         message,
@@ -1226,7 +1247,7 @@ async fn admin_site_content_detail(
     State(state): State<AdminState>,
     session: Session,
     Path((site_id, content_id)): Path<(Uuid, Uuid)>,
-) -> Result<AdminPageTemplate, SiteError> {
+) -> Result<AdminContentDetailTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
 
     let content = get_content(state.db.as_ref(), content_id)
@@ -1275,7 +1296,7 @@ async fn admin_site_content_detail(
     ];
 
     let route = content_primary_route(&content);
-    Ok(AdminPageTemplate {
+    Ok(AdminContentDetailTemplate {
         title: "Content Detail".to_string(),
         heading: format!("Content: /{route}"),
         message: format!("Creator: {}", content.creator_sub),
@@ -1317,7 +1338,7 @@ async fn admin_site_content_source(
     State(state): State<AdminState>,
     session: Session,
     Path((site_id, content_id)): Path<(Uuid, Uuid)>,
-) -> Result<AdminPageTemplate, SiteError> {
+) -> Result<AdminContentSourceTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Author).await?;
 
     let content = get_content(state.db.as_ref(), content_id)
@@ -1329,7 +1350,7 @@ async fn admin_site_content_source(
         .await
         .map_err(|error| SiteError::internal(format!("failed to load assets: {error}")))?;
 
-    Ok(AdminPageTemplate {
+    Ok(AdminContentSourceTemplate {
         title: "Content Source".to_string(),
         heading: format!("Source: {}", content.title),
         message: "Edit raw markdown and metadata, then save to create a revision.".to_string(),
@@ -1516,7 +1537,7 @@ async fn admin_site_content_advanced(
     State(state): State<AdminState>,
     session: Session,
     Path((site_id, content_id)): Path<(Uuid, Uuid)>,
-) -> Result<AdminPageTemplate, SiteError> {
+) -> Result<AdminContentAdvancedTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
     let content = get_content(state.db.as_ref(), content_id)
         .await
@@ -1539,7 +1560,7 @@ async fn admin_site_content_advanced(
             ))
         })?;
 
-    Ok(AdminPageTemplate {
+    Ok(AdminContentAdvancedTemplate {
         title: "Content Advanced".to_string(),
         heading: "Advanced content details".to_string(),
         message: "Computed route and revision-aware detail fields available here.".to_string(),
@@ -1577,7 +1598,7 @@ async fn admin_site_content_revisions(
     State(state): State<AdminState>,
     session: Session,
     Path((site_id, content_id)): Path<(Uuid, Uuid)>,
-) -> Result<AdminPageTemplate, SiteError> {
+) -> Result<AdminContentRevisionsTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
 
     let revisions = list_revisions(state.db.as_ref(), content_id)
@@ -1610,7 +1631,7 @@ async fn admin_site_content_revisions(
         })
         .collect();
 
-    Ok(AdminPageTemplate {
+    Ok(AdminContentRevisionsTemplate {
         title: "Content Revisions".to_string(),
         heading: format!("Revisions for {content_id}"),
         message: "Latest revision is first in list order by revision number.".to_string(),
@@ -1635,7 +1656,7 @@ async fn admin_site_revision_diff(
     State(state): State<AdminState>,
     session: Session,
     Path((site_id, content_id, revision_id)): Path<(Uuid, Uuid, Uuid)>,
-) -> Result<AdminPageTemplate, SiteError> {
+) -> Result<AdminRevisionDiffTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
     let revision = get_revision(state.db.as_ref(), revision_id)
         .await
@@ -1678,7 +1699,7 @@ async fn admin_site_revision_diff(
         "No previous revision available.".to_string()
     };
 
-    Ok(AdminPageTemplate {
+    Ok(AdminRevisionDiffTemplate {
         title: "Revision Diff".to_string(),
         heading: format!("Diff for rev-{}", revision.revision_number),
         message: format!(
@@ -1718,7 +1739,7 @@ async fn admin_site_tags(
     State(state): State<AdminState>,
     session: Session,
     Path(site_id): Path<Uuid>,
-) -> Result<AdminPageTemplate, SiteError> {
+) -> Result<AdminTagsTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
     match list_tags(state.db.as_ref(), site_id).await {
         Ok(tags) => {
@@ -1730,7 +1751,7 @@ async fn admin_site_tags(
                 })
                 .collect();
 
-            Ok(AdminPageTemplate {
+            Ok(AdminSearchTemplate {
                 title: "Tags".to_string(),
                 heading: format!("Site Tags ({site_id})"),
                 message: "Tag definitions for this site.".to_string(),
@@ -1753,7 +1774,7 @@ async fn admin_site_assets(
     State(state): State<AdminState>,
     session: Session,
     Path(site_id): Path<Uuid>,
-) -> Result<AdminPageTemplate, SiteError> {
+) -> Result<AdminAssetsTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
     match list_assets(state.db.as_ref(), site_id).await {
         Ok(assets) => {
@@ -1768,7 +1789,7 @@ async fn admin_site_assets(
                 })
                 .collect();
 
-            Ok(AdminPageTemplate {
+            Ok(AdminAssetsTemplate {
                 title: "Assets".to_string(),
                 heading: format!("Site Assets ({site_id})"),
                 message: "Upload assets and review metadata and thumbnails.".to_string(),
@@ -1791,10 +1812,10 @@ async fn admin_site_assets_new(
     State(state): State<AdminState>,
     session: Session,
     Path(site_id): Path<Uuid>,
-) -> Result<AdminPageTemplate, SiteError> {
+) -> Result<AdminAssetsNewTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Author).await?;
     match get_by_id(state.db.as_ref(), site_id).await {
-        Ok(site) => Ok(AdminPageTemplate {
+        Ok(site) => Ok(AdminAssetsNewTemplate {
             title: "Upload Asset".to_string(),
             heading: format!("Upload Asset {}", site.short_name),
             message: "Upload a media asset and generate a thumbnail.".to_string(),
@@ -2204,12 +2225,12 @@ async fn admin_site_render(
     State(state): State<AdminState>,
     session: Session,
     Path(site_id): Path<Uuid>,
-) -> Result<AdminPageTemplate, SiteError> {
+) -> Result<AdminRenderTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Editor).await?;
     render_site(state.db.as_ref(), site_id, "templates", "./rendered")
         .await
         .map_err(|error| SiteError::internal(format!("failed to render site {site_id}: {error}")))
-        .map(|files_written| AdminPageTemplate {
+        .map(|files_written| AdminRenderTemplate {
             title: "Render".to_string(),
             heading: format!("Rendered site {site_id}"),
             message: format!("Rendered {files_written} file(s)."),
