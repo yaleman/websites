@@ -17,6 +17,7 @@ pub async fn db_start(db_url: &str) -> Result<Arc<DatabaseConnection>, DbErr> {
 
 #[cfg(test)]
 pub async fn test_db_start() -> Arc<DatabaseConnection> {
+    crate::telemetry::test();
     db_start("sqlite::memory:")
         .await
         .expect("Failed to start in-memory db")
