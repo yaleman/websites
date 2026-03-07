@@ -3,6 +3,8 @@ name = "websites"
 version = "0.1.0"
 edition = "2024"
 
+default-run = "websites"
+
 [lib]
 
 [dependencies]
@@ -22,8 +24,17 @@ reqwest = { version = "0.12", default-features = false, features = [
     "json",
 ] }
 rustls = "0.23.37"
-sea-orm = { version = "1.1.19", features = ["runtime-tokio-rustls", "sqlx-sqlite", "with-chrono", "with-json", "with-uuid"], default-features = false }
-sea-orm-migration = { version = "1.1.19", default-features = false, features = ["runtime-tokio-rustls", "sqlx-sqlite"] }
+sea-orm = { version = "1.1.19", features = [
+    "runtime-tokio-rustls",
+    "sqlx-sqlite",
+    "with-chrono",
+    "with-json",
+    "with-uuid",
+], default-features = false }
+sea-orm-migration = { version = "1.1.19", default-features = false, features = [
+    "runtime-tokio-rustls",
+    "sqlx-sqlite",
+] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 similar = "2.7.0"
@@ -34,7 +45,12 @@ tower-http = { version = "0.6.8", features = ["fs"] }
 tower-sessions = "0.14.0"
 tower-sessions-sqlx-store = { version = "0.15.0", features = ["sqlite"] }
 tracing = { version = "0.1.44", features = ["log"] }
-tracing-subscriber = { version = "0.3.22", features = ["json", "serde", "tracing", "env-filter"] }
+tracing-subscriber = { version = "0.3.22", features = [
+    "json",
+    "serde",
+    "tracing",
+    "env-filter",
+] }
 url = "2.5.8"
 uuid = { version = "1.22.0", features = ["v7"] }
 
