@@ -1,0 +1,19 @@
+.editor-shell {
+  border: 1px solid #b8b8b8;
+  border-radius: 6px;
+  min-height: 320px;
+  padding: 0.35rem 0.5rem;
+  background: #fff;
+}
+
+.editor-shell .milkdown {
+  min-height: 300px;
+}
+
+.editor-shell .milkdown .editor {
+  min-height: 300px;
+}
+
+.editor-shell .milkdown .editor:focus {
+  outline: none;
+}
