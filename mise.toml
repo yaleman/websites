@@ -13,3 +13,10 @@ run = "cargo fmt --all --"
 
 [tasks.rust_test]
 run = "cargo test --all --quiet"
+
+[tasks.frontend_build]
+run = "pnpm run build:admin"
+
+[tasks.start]
+depends = ["frontend_build"]
+run = "cargo run"
