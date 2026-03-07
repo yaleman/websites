@@ -25,11 +25,13 @@ use reqwest::redirect::Policy;
 use serde::Deserialize;
 use serde_json::json;
 use similar::TextDiff;
+use sqlx::sqlite::SqlitePool;
 use std::io::Cursor;
 use std::path::Path as StdPath;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use tower_sessions::{Expiry, MemoryStore, Session, SessionManagerLayer};
+use tower_sessions::{Expiry, Session, SessionManagerLayer};
+use tower_sessions_sqlx_store::SqliteStore;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -131,7 +133,10 @@ pub async fn run_admin_server(
         oidc_discovery_url: oidc.oidc_discovery_url.clone(),
     };
 
-    let session_store = MemoryStore::default();
+    let pool = SqlitePool::connect(database_url)
+        .await
+        .map_err(|error| error.to_string())?;
+    let session_store = SqliteStore::new(pool);
     let session_layer = SessionManagerLayer::new(session_store)
         .with_secure(false)
         .with_expiry(Expiry::OnSessionEnd);
