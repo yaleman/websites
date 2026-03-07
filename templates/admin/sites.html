@@ -5,16 +5,14 @@
   <thead>
     <tr>
       <th>Site</th>
-      <th>Title</th>
-      <th>Content</th>
+      <th>Short Name</th>
     </tr>
   </thead>
   <tbody>
     {% for site in sites %}
     <tr>
-      <td>{{ site.short_name }}</td>
-      <td>{{ site.full_title }}</td>
-      <td><a href="{{ site.content_href }}">View content</a></td>
+      <td><a href="{{ site.content_href }}">{{ site.full_title }}</a></td>
+      <td><a href="{{ site.content_href }}">{{ site.short_name }}</a></td>
     </tr>
     {% endfor %}
   </tbody>
