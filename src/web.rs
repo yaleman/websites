@@ -17,7 +17,7 @@ use askama::Template;
 use askama_web::WebTemplate;
 use axum::middleware::{Next, from_fn};
 use axum::{
-    Router,
+    Json, Router,
     extract::{Form, Multipart, Path, Query, Request, State},
     response::{Html, IntoResponse, Redirect, Response},
     routing::get,
@@ -31,10 +31,10 @@ use openidconnect::{
 };
 use reqwest::redirect::Policy;
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
-    TransactionTrait,
+    ColumnTrait as _, Condition, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    QueryOrder, QuerySelect, TransactionTrait,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use similar::TextDiff;
 use std::collections::HashMap;
@@ -150,6 +150,8 @@ struct AdminContentNewTemplate {
     tags: Vec<AdminTagOption>,
     links: Vec<AdminLink>,
     heading: String,
+    site_id: Uuid,
+    allow_external_image: bool,
 }
 
 #[derive(Template, WebTemplate)]
@@ -165,6 +167,8 @@ struct AdminContentSourceTemplate {
     published_at: String,
     page_content: String,
     assets_html: String,
+    site_id: Uuid,
+    allow_external_image: bool,
 }
 
 #[derive(Template, WebTemplate)]
@@ -273,6 +277,31 @@ struct MembershipUpdateForm {
 #[derive(Debug, Deserialize)]
 struct SearchQuery {
     q: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AssetLibraryQuery {
+    q: Option<String>,
+    limit: Option<u64>,
+    r#type: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AssetLibraryResponse {
+    assets: Vec<AssetLibraryItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct AssetLibraryItem {
+    id: Uuid,
+    original_filename: String,
+    mime_type: String,
+    width: Option<i32>,
+    height: Option<i32>,
+    created_at: String,
+    original_url: String,
+    thumbnail_url: Option<String>,
+    has_thumbnail: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -426,6 +455,10 @@ pub async fn run_admin_server(
         )
         .route("/admin/site/{site_id}/tags", get(admin_site_tags))
         .route("/admin/site/{site_id}/assets", get(admin_site_assets))
+        .route(
+            "/admin/site/{site_id}/assets/library",
+            get(admin_site_assets_library),
+        )
         .route(
             "/admin/site/{site_id}/assets/new",
             get(admin_site_assets_new).post(admin_site_assets_create),
@@ -1188,6 +1221,8 @@ async fn admin_site_content_new(
         heading: format!("{} - Create Content", &site.short_name),
         tags,
         links: Vec::new(),
+        site_id: site.id,
+        allow_external_image: false,
     })
 }
 
@@ -1408,6 +1443,8 @@ async fn admin_site_content_source(
         published_at,
         page_content,
         assets_html,
+        site_id: content.site_id,
+        allow_external_image: true,
     })
 }
 
@@ -1784,6 +1821,99 @@ async fn admin_site_tags(
             "failed to load tags for site {site_id}: {error}"
         ))),
     }
+}
+
+fn normalize_asset_mime_filter(value: &str) -> Option<&'static str> {
+    match value {
+        "jpeg" | "jpg" => Some("image/jpeg"),
+        "png" => Some("image/png"),
+        "gif" => Some("image/gif"),
+        "svg" => Some("image/svg+xml"),
+        "webp" => Some("image/webp"),
+        "all" => None,
+        _ => None,
+    }
+}
+
+async fn admin_site_assets_library(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    Query(query): Query<AssetLibraryQuery>,
+) -> Result<Json<AssetLibraryResponse>, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+
+    let query_text = query.q.unwrap_or_default();
+    let query_text = query_text.trim();
+    let has_query = !query_text.is_empty();
+    let default_limit = if has_query { 50 } else { 12 };
+    let limit = query.limit.unwrap_or(default_limit).clamp(1, 200);
+
+    let mut asset_query = entities::asset::Entity::find()
+        .filter(entities::asset::Column::SiteId.eq(site_id))
+        .filter(entities::asset::Column::MimeType.like("image/%"));
+
+    if let Some(type_filter) = query
+        .r#type
+        .as_deref()
+        .and_then(normalize_asset_mime_filter)
+    {
+        asset_query = asset_query.filter(entities::asset::Column::MimeType.eq(type_filter));
+    }
+
+    if has_query {
+        let condition = Condition::any()
+            .add(entities::asset::Column::OriginalFilename.contains(query_text))
+            .add(entities::asset::Column::StorageBasename.contains(query_text));
+        asset_query = asset_query.filter(condition);
+    }
+
+    let assets = asset_query
+        .order_by_desc(entities::asset::Column::CreatedAt)
+        .limit(limit)
+        .all(state.db.as_ref())
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to list assets: {error}")))?;
+
+    if assets.is_empty() {
+        return Ok(Json(AssetLibraryResponse { assets: Vec::new() }));
+    }
+
+    let asset_ids = assets.iter().map(|asset| asset.id).collect::<Vec<_>>();
+    let thumbnails = entities::asset_variant::Entity::find()
+        .filter(entities::asset_variant::Column::AssetId.is_in(asset_ids))
+        .filter(entities::asset_variant::Column::VariantKind.eq("thumbnail"))
+        .all(state.db.as_ref())
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load asset variants: {error}")))?;
+
+    let mut thumbnails_by_asset: HashMap<Uuid, entities::asset_variant::Model> = HashMap::new();
+    for variant in thumbnails {
+        thumbnails_by_asset.insert(variant.asset_id, variant);
+    }
+
+    let items = assets
+        .into_iter()
+        .map(|asset| {
+            let thumbnail_url = thumbnails_by_asset
+                .get(&asset.id)
+                .map(|variant| format!("/media/images/{}", variant.filename));
+            let has_thumbnail = thumbnail_url.is_some();
+            AssetLibraryItem {
+                id: asset.id,
+                original_filename: asset.original_filename,
+                mime_type: asset.mime_type,
+                width: asset.width,
+                height: asset.height,
+                created_at: asset.created_at.to_rfc3339(),
+                original_url: format!("/media/images/{}", asset.storage_basename),
+                thumbnail_url,
+                has_thumbnail,
+            }
+        })
+        .collect();
+
+    Ok(Json(AssetLibraryResponse { assets: items }))
 }
 
 async fn admin_site_assets(
