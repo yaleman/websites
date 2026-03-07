@@ -1,3 +1,4 @@
+use crate::errors::SiteError;
 use crate::middleware::log_requests;
 use crate::{
     NewAsset, NewAssetVariant, NewContent, cli::OidcConfig, content_primary_route, create_asset,
@@ -8,7 +9,6 @@ use crate::{
 };
 use askama::Template;
 use askama_web::WebTemplate;
-use axum::http::StatusCode;
 use axum::middleware::{Next, from_fn};
 use axum::{
     Router,
@@ -255,9 +255,7 @@ async fn admin_index(State(state): State<AdminState>) -> AdminPageTemplate {
     }
 }
 
-async fn admin_sites(
-    State(state): State<AdminState>,
-) -> Result<AdminPageTemplate, impl IntoResponse> {
+async fn admin_sites(State(state): State<AdminState>) -> Result<AdminPageTemplate, SiteError> {
     match list_sites(&state.db.clone()).await {
         Ok(sites) => {
             let rows = sites
@@ -281,7 +279,9 @@ async fn admin_sites(
                 pre_body: String::new(),
             })
         }
-        Err(error) => Err(internal_error(format!("failed to load sites: {error}"))),
+        Err(error) => Err(SiteError::internal(format!(
+            "failed to load sites: {error}"
+        ))),
     }
 }
 
@@ -301,7 +301,7 @@ async fn admin_sites_new() -> Response {
 async fn admin_sites_create(
     State(state): State<AdminState>,
     Form(form): Form<CreateSiteForm>,
-) -> Result<Redirect, impl IntoResponse> {
+) -> Result<Redirect, SiteError> {
     let template_name = form
         .template_name
         .unwrap_or_else(|| DEFAULT_TEMPLATE_NAME.to_string());
@@ -323,7 +323,9 @@ async fn admin_sites_create(
             .await;
             Ok(Redirect::to("/admin/sites"))
         }
-        Err(error) => Err(internal_error(format!("failed to create site: {error}"))),
+        Err(error) => Err(SiteError::internal(format!(
+            "failed to create site: {error}"
+        ))),
     }
 }
 
@@ -347,7 +349,7 @@ fn admin_sites_new_form_html() -> &'static str {
 async fn admin_login(
     State(state): State<AdminState>,
     session: Session,
-) -> Result<Response, impl IntoResponse> {
+) -> Result<Response, SiteError> {
     if !admin_oidc_is_configured(&state) {
         return Ok(AdminPageTemplate {
             title: "Login".to_string(),
@@ -365,7 +367,7 @@ async fn admin_login(
     let http_client = match build_http_client() {
         Ok(client) => client,
         Err(error) => {
-            return Err(internal_error(format!(
+            return Err(SiteError::internal(format!(
                 "failed to build http client: {error}"
             )));
         }
@@ -373,7 +375,7 @@ async fn admin_login(
     let client = match build_oidc_client(&state, &http_client).await {
         Ok(client) => client,
         Err(error) => {
-            return Err(internal_error(format!(
+            return Err(SiteError::internal(format!(
                 "failed to initialize OIDC client: {error}"
             )));
         }
@@ -405,7 +407,7 @@ async fn admin_login(
             .await
             .is_err()
     {
-        return Err(internal_error(
+        return Err(SiteError::internal(
             "failed to persist OIDC session data".to_string(),
         ));
     }
@@ -418,19 +420,25 @@ async fn admin_login_callback(
     State(state): State<AdminState>,
     Query(query): Query<OidcCallbackQuery>,
     session: Session,
-) -> Result<Redirect, impl IntoResponse> {
+) -> Result<Redirect, SiteError> {
     if let Some(error) = query.error {
         let description = query.error_description.unwrap_or_default();
-        return Err(internal_error(format!("OIDC error: {error} {description}")));
+        return Err(SiteError::internal(format!(
+            "OIDC error: {error} {description}"
+        )));
     }
 
     let code = match query.code {
         Some(code) => code,
-        None => return Err(internal_error("missing authorization code".to_string())),
+        None => {
+            return Err(SiteError::UnAuthorized(
+                "missing authorization code".to_string(),
+            ));
+        }
     };
     let state_value = match query.state {
         Some(state) => state,
-        None => return Err(internal_error("missing state".to_string())),
+        None => return Err(SiteError::UnAuthorized("missing state".to_string())),
     };
 
     let stored_state = session
@@ -439,7 +447,7 @@ async fn admin_login_callback(
         .unwrap_or(None)
         .unwrap_or_default();
     if stored_state != state_value {
-        return Err(internal_error("OIDC state mismatch".to_string()));
+        return Err(SiteError::UnAuthorized("OIDC state mismatch".to_string()));
     }
 
     let pkce_verifier = session
@@ -456,7 +464,7 @@ async fn admin_login_callback(
     let http_client = match build_http_client() {
         Ok(client) => client,
         Err(error) => {
-            return Err(internal_error(format!(
+            return Err(SiteError::internal(format!(
                 "failed to build http client: {error}"
             )));
         }
@@ -464,7 +472,7 @@ async fn admin_login_callback(
     let client = match build_oidc_client(&state, &http_client).await {
         Ok(client) => client,
         Err(error) => {
-            return Err(internal_error(format!(
+            return Err(SiteError::internal(format!(
                 "failed to initialize OIDC client: {error}"
             )));
         }
@@ -473,7 +481,7 @@ async fn admin_login_callback(
     let token_request = match client.exchange_code(AuthorizationCode::new(code)) {
         Ok(request) => request,
         Err(error) => {
-            return Err(internal_error(format!(
+            return Err(SiteError::internal(format!(
                 "failed to build token request: {error}"
             )));
         }
@@ -484,19 +492,27 @@ async fn admin_login_callback(
         .await
     {
         Ok(response) => response,
-        Err(error) => return Err(internal_error(format!("failed to exchange code: {error}"))),
+        Err(error) => {
+            return Err(SiteError::internal(format!(
+                "failed to exchange code: {error}"
+            )));
+        }
     };
 
     let id_token = match token_response.id_token() {
         Some(token) => token,
-        None => return Err(internal_error("missing id_token in response".to_string())),
+        None => {
+            return Err(SiteError::internal(
+                "missing id_token in response".to_string(),
+            ));
+        }
     };
 
     let nonce = Nonce::new(nonce_value);
     let claims = match id_token.claims(&client.id_token_verifier(), &nonce) {
         Ok(claims) => claims,
         Err(error) => {
-            return Err(internal_error(format!(
+            return Err(SiteError::UnAuthorized(format!(
                 "failed to verify id_token: {error}"
             )));
         }
@@ -504,7 +520,7 @@ async fn admin_login_callback(
 
     let subject = claims.subject().as_str().to_string();
     if session.insert("user_sub", subject.clone()).await.is_err() {
-        return Err(internal_error("failed to store session".to_string()));
+        return Err(SiteError::internal("failed to store session".to_string()));
     }
 
     let _ = crate::upsert_user_login(&state.db, &subject).await;
@@ -512,9 +528,9 @@ async fn admin_login_callback(
     Ok(Redirect::to("/admin"))
 }
 
-async fn admin_logout(session: Session) -> Response {
+async fn admin_logout(session: Session) -> Redirect {
     let _ = session.clear().await;
-    Redirect::to("/admin/login").into_response()
+    Redirect::to("/admin/login")
 }
 
 fn build_http_client() -> Result<reqwest::Client, String> {
@@ -562,7 +578,7 @@ async fn build_oidc_client(
 async fn admin_site_content_list(
     State(state): State<AdminState>,
     Path(site_id): Path<String>,
-) -> Result<AdminPageTemplate, impl IntoResponse> {
+) -> Result<AdminPageTemplate, SiteError> {
     match list_content(&state.db, &site_id, None).await {
         Ok(content) => {
             let rows = content
@@ -593,7 +609,7 @@ async fn admin_site_content_list(
                 pre_body: String::new(),
             })
         }
-        Err(error) => Err(internal_error(format!(
+        Err(error) => Err(SiteError::internal(format!(
             "failed to load content for site {site_id}: {error}"
         ))),
     }
@@ -603,7 +619,7 @@ async fn admin_site_search(
     State(state): State<AdminState>,
     Path(site_id): Path<String>,
     Query(query): Query<SearchQuery>,
-) -> Result<AdminPageTemplate, impl IntoResponse> {
+) -> Result<AdminPageTemplate, SiteError> {
     let query_text = query.q.unwrap_or_default();
     let mut rows = Vec::new();
     let mut message = "Search content by title, slug, or body text.".to_string();
@@ -624,7 +640,9 @@ async fn admin_site_search(
                     .collect();
             }
             Err(error) => {
-                return Err(internal_error(format!("failed to search content: {error}")));
+                return Err(SiteError::internal(format!(
+                    "failed to search content: {error}"
+                )));
             }
         }
     }
@@ -660,7 +678,7 @@ fn admin_site_search_form_html(query: &str) -> String {
 async fn admin_site_content_new(
     State(state): State<AdminState>,
     Path(site_id): Path<String>,
-) -> Result<AdminPageTemplate, impl IntoResponse> {
+) -> Result<AdminPageTemplate, SiteError> {
     match get_site(&state.db, &site_id).await {
         Ok(site) => Ok(AdminPageTemplate {
             title: "New Content".to_string(),
@@ -680,7 +698,7 @@ async fn admin_site_content_new(
             inline_body: admin_site_content_new_form_html().to_string(),
             pre_body: String::new(),
         }),
-        Err(error) => Err(internal_error(format!(
+        Err(error) => Err(SiteError::internal(format!(
             "failed to load site {site_id}: {error}"
         ))),
     }
@@ -690,10 +708,10 @@ async fn admin_site_content_create(
     State(state): State<AdminState>,
     Path(site_id): Path<String>,
     Form(form): Form<CreateContentForm>,
-) -> Result<Redirect, impl IntoResponse> {
+) -> Result<Redirect, SiteError> {
     let page_type = form.page_type;
     if page_type != "post" && page_type != "page" {
-        return Err(internal_error(
+        return Err(SiteError::internal(
             "invalid page_type, expected post or page".to_string(),
         ));
     }
@@ -738,11 +756,11 @@ async fn admin_site_content_create(
                     content.site_id, content.id
                 )))
             }
-            Err(error) => Err(internal_error(format!(
+            Err(error) => Err(SiteError::internal(format!(
                 "failed to create content for site {site_id}: {error}"
             ))),
         },
-        Err(error) => Err(internal_error(format!(
+        Err(error) => Err(SiteError::internal(format!(
             "failed to load site {site_id}: {error}"
         ))),
     }
@@ -779,10 +797,10 @@ fn admin_site_content_new_form_html() -> &'static str {
 async fn admin_site_content_detail(
     State(state): State<AdminState>,
     Path((_site_id, content_id)): Path<(String, String)>,
-) -> Result<AdminPageTemplate, (StatusCode, String)> {
-    let content = get_content(&state.db, &content_id)
-        .await
-        .map_err(|err| internal_error(format!("failed to load content {content_id}: {err}")))?;
+) -> Result<AdminPageTemplate, SiteError> {
+    let content = get_content(&state.db, &content_id).await.map_err(|err| {
+        SiteError::internal(format!("failed to load content {content_id}: {err}"))
+    })?;
     let content_id = content.id.clone();
     let content_site_id = content.site_id.clone();
     let published_at = content
@@ -865,13 +883,13 @@ async fn admin_site_content_detail(
 async fn admin_site_content_source(
     State(state): State<AdminState>,
     Path((_site_id, content_id)): Path<(String, String)>,
-) -> Result<AdminPageTemplate, (StatusCode, String)> {
+) -> Result<AdminPageTemplate, SiteError> {
     let content = get_content(&state.db, &content_id).await.map_err(|error| {
-        internal_error(format!("failed to load source for {content_id}: {error}"))
+        SiteError::internal(format!("failed to load source for {content_id}: {error}"))
     })?;
     let assets_html = render_asset_embed_library(&state.db, &content.site_id)
         .await
-        .map_err(|error| internal_error(format!("failed to load assets: {error}")))?;
+        .map_err(|error| SiteError::internal(format!("failed to load assets: {error}")))?;
 
     Ok(AdminPageTemplate {
         title: "Content Source".to_string(),
@@ -895,7 +913,7 @@ async fn admin_site_content_source_update(
     State(state): State<AdminState>,
     Path((_site_id, content_id)): Path<(String, String)>,
     Form(form): Form<UpdateContentForm>,
-) -> Result<Redirect, impl IntoResponse> {
+) -> Result<Redirect, SiteError> {
     let draft = matches!(form.draft.as_str(), "true" | "1" | "yes");
     let published_at = normalize_optional(form.published_at);
 
@@ -938,7 +956,7 @@ async fn admin_site_content_source_update(
                 content.site_id, content.id
             )))
         }
-        Err(error) => Err(internal_error(format!(
+        Err(error) => Err(SiteError::internal(format!(
             "failed to update content {content_id}: {error}"
         ))),
     }
@@ -1046,22 +1064,22 @@ async fn render_asset_embed_library(
 async fn admin_site_content_advanced(
     State(state): State<AdminState>,
     Path((_site_id, content_id)): Path<(String, String)>,
-) -> Result<AdminPageTemplate, (StatusCode, String)> {
-    let content = get_content(&state.db, &content_id)
-        .await
-        .map_err(|error| internal_error(format!("failed to load content {content_id}: {error}")))?;
+) -> Result<AdminPageTemplate, SiteError> {
+    let content = get_content(&state.db, &content_id).await.map_err(|error| {
+        SiteError::internal(format!("failed to load content {content_id}: {error}"))
+    })?;
 
     let aliases = list_aliases(&state.db, &content.site_id, Some(&content.id))
         .await
         .map_err(|error| {
-            internal_error(format!(
+            SiteError::internal(format!(
                 "failed to load aliases for content {content_id}: {error}"
             ))
         })?;
     let tags = list_content_tags(&state.db, &content.id)
         .await
         .map_err(|error| {
-            internal_error(format!(
+            SiteError::internal(format!(
                 "failed to load tags for content {content_id}: {error}"
             ))
         })?;
@@ -1100,11 +1118,11 @@ async fn admin_site_content_advanced(
 async fn admin_site_content_revisions(
     State(state): State<AdminState>,
     Path((site_id, content_id)): Path<(String, String)>,
-) -> Result<AdminPageTemplate, (StatusCode, String)> {
+) -> Result<AdminPageTemplate, SiteError> {
     let revisions = list_revisions(&state.db, &content_id)
         .await
         .map_err(|error| {
-            internal_error(format!(
+            SiteError::internal(format!(
                 "failed to load revisions for {content_id}: {error}"
             ))
         })?;
@@ -1155,14 +1173,14 @@ async fn admin_site_content_revisions(
 async fn admin_site_revision_diff(
     State(state): State<AdminState>,
     Path((site_id, content_id, revision_id)): Path<(String, String, String)>,
-) -> Result<AdminPageTemplate, impl IntoResponse> {
+) -> Result<AdminPageTemplate, SiteError> {
     let revision = get_revision(&state.db, &revision_id)
         .await
         .map_err(|error| {
-            internal_error(format!("failed to load revision {revision_id}: {error}"))
+            SiteError::internal(format!("failed to load revision {revision_id}: {error}"))
         })?;
     if revision.content_id != content_id || revision.site_id != site_id {
-        return Err(internal_error(
+        return Err(SiteError::internal(
             "revision does not belong to requested content".to_string(),
         ));
     }
@@ -1177,7 +1195,7 @@ async fn admin_site_revision_diff(
         {
             Ok(previous) => previous,
             Err(error) => {
-                return Err(internal_error(format!(
+                return Err(SiteError::internal(format!(
                     "failed to load previous revision: {error}"
                 )));
             }
@@ -1236,7 +1254,7 @@ async fn admin_site_revision_diff(
 async fn admin_site_tags(
     State(state): State<AdminState>,
     Path(site_id): Path<String>,
-) -> Result<AdminPageTemplate, impl IntoResponse> {
+) -> Result<AdminPageTemplate, SiteError> {
     match list_tags(&state.db, &site_id).await {
         Ok(tags) => {
             let rows = tags
@@ -1260,7 +1278,7 @@ async fn admin_site_tags(
                 pre_body: String::new(),
             })
         }
-        Err(error) => Err(internal_error(format!(
+        Err(error) => Err(SiteError::internal(format!(
             "failed to load tags for site {site_id}: {error}"
         ))),
     }
@@ -1269,7 +1287,7 @@ async fn admin_site_tags(
 async fn admin_site_assets(
     State(state): State<AdminState>,
     Path(site_id): Path<String>,
-) -> Result<AdminPageTemplate, impl IntoResponse> {
+) -> Result<AdminPageTemplate, SiteError> {
     match list_assets(&state.db, &site_id).await {
         Ok(assets) => {
             let rows = assets
@@ -1296,7 +1314,7 @@ async fn admin_site_assets(
                 pre_body: String::new(),
             })
         }
-        Err(error) => Err(internal_error(format!(
+        Err(error) => Err(SiteError::internal(format!(
             "failed to load assets for site {site_id}: {error}"
         ))),
     }
@@ -1305,7 +1323,7 @@ async fn admin_site_assets(
 async fn admin_site_assets_new(
     State(state): State<AdminState>,
     Path(site_id): Path<String>,
-) -> Result<AdminPageTemplate, impl IntoResponse> {
+) -> Result<AdminPageTemplate, SiteError> {
     match get_site(&state.db, &site_id).await {
         Ok(site) => Ok(AdminPageTemplate {
             title: "Upload Asset".to_string(),
@@ -1322,7 +1340,7 @@ async fn admin_site_assets_new(
             inline_body: admin_site_assets_new_form_html().to_string(),
             pre_body: String::new(),
         }),
-        Err(error) => Err(internal_error(format!(
+        Err(error) => Err(SiteError::internal(format!(
             "failed to load site {site_id}: {error}"
         ))),
     }
@@ -1332,11 +1350,11 @@ async fn admin_site_assets_create(
     State(state): State<AdminState>,
     Path(site_id): Path<String>,
     mut multipart: Multipart,
-) -> Result<Redirect, impl IntoResponse> {
+) -> Result<Redirect, SiteError> {
     let site = match get_site(&state.db, &site_id).await {
         Ok(site) => site,
         Err(error) => {
-            return Err(internal_error(format!(
+            return Err(SiteError::internal(format!(
                 "failed to load site {site_id}: {error}"
             )));
         }
@@ -1350,7 +1368,9 @@ async fn admin_site_assets_create(
         let field = match multipart.next_field().await {
             Ok(field) => field,
             Err(error) => {
-                return Err(internal_error(format!("failed to parse upload: {error}")));
+                return Err(SiteError::internal(format!(
+                    "failed to parse upload: {error}"
+                )));
             }
         };
 
@@ -1364,17 +1384,19 @@ async fn admin_site_assets_create(
         let bytes = match field.bytes().await {
             Ok(bytes) => bytes,
             Err(error) => {
-                return Err(internal_error(format!("failed to read upload: {error}")));
+                return Err(SiteError::internal(format!(
+                    "failed to read upload: {error}"
+                )));
             }
         };
         upload_bytes = Some(bytes.to_vec());
     }
 
     let Some(bytes) = upload_bytes else {
-        return Err(internal_error("missing file upload".to_string()));
+        return Err(SiteError::internal("missing file upload".to_string()));
     };
     let Some(original_filename) = original_filename else {
-        return Err(internal_error("missing original filename".to_string()));
+        return Err(SiteError::internal("missing original filename".to_string()));
     };
 
     let extension = StdPath::new(&original_filename)
@@ -1386,7 +1408,7 @@ async fn admin_site_assets_create(
     let storage_path = StdPath::new(UPLOAD_ROOT).join(&storage_basename);
 
     if let Err(error) = fs::create_dir_all(UPLOAD_ROOT).await {
-        return Err(internal_error(format!(
+        return Err(SiteError::internal(format!(
             "failed to create upload directory: {error}"
         )));
     }
@@ -1394,13 +1416,13 @@ async fn admin_site_assets_create(
     match fs::File::create(&storage_path).await {
         Ok(mut file) => {
             if let Err(error) = file.write_all(&bytes).await {
-                return Err(internal_error(format!(
+                return Err(SiteError::internal(format!(
                     "failed to write upload file: {error}"
                 )));
             }
         }
         Err(error) => {
-            return Err(internal_error(format!(
+            return Err(SiteError::internal(format!(
                 "failed to create upload file: {error}"
             )));
         }
@@ -1410,7 +1432,9 @@ async fn admin_site_assets_create(
     let (dimensions, thumbnail) = match generate_thumbnail(bytes, &extension).await {
         Ok(result) => result,
         Err(error) => {
-            return Err(internal_error(format!("failed to process image: {error}")));
+            return Err(SiteError::internal(format!(
+                "failed to process image: {error}"
+            )));
         }
     };
 
@@ -1444,7 +1468,9 @@ async fn admin_site_assets_create(
     {
         Ok(asset) => asset,
         Err(error) => {
-            return Err(internal_error(format!("failed to create asset: {error}")));
+            return Err(SiteError::internal(format!(
+                "failed to create asset: {error}"
+            )));
         }
     };
 
@@ -1488,7 +1514,7 @@ async fn admin_site_assets_create(
         let filename = format!("{stem}_thumb.{}", thumbnail.extension);
         let thumb_path = StdPath::new(UPLOAD_ROOT).join(&filename);
         if let Err(error) = fs::write(&thumb_path, &thumbnail.bytes).await {
-            return Err(internal_error(format!(
+            return Err(SiteError::internal(format!(
                 "failed to write thumbnail: {error}"
             )));
         }
@@ -1620,10 +1646,10 @@ fn escape_html(value: &str) -> String {
 async fn admin_site_settings(
     State(state): State<AdminState>,
     Path(site_id): Path<String>,
-) -> Result<AdminPageTemplate, impl IntoResponse> {
+) -> Result<AdminPageTemplate, SiteError> {
     get_site(&state.db, &site_id)
         .await
-        .map_err(|error| internal_error(format!("failed to load site {site_id}: {error}")))
+        .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))
         .map(|site| {
             let rows = vec![
                 AdminRow {
@@ -1662,10 +1688,10 @@ async fn admin_site_settings(
 async fn admin_site_render(
     State(state): State<AdminState>,
     Path(site_id): Path<String>,
-) -> Result<AdminPageTemplate, impl IntoResponse> {
+) -> Result<AdminPageTemplate, SiteError> {
     render_site(&state.db, &site_id, "templates", "./rendered")
         .await
-        .map_err(|error| internal_error(format!("failed to render site {site_id}: {error}")))
+        .map_err(|error| SiteError::internal(format!("failed to render site {site_id}: {error}")))
         .map(|files_written| AdminPageTemplate {
             title: "Render".to_string(),
             heading: format!("Rendered site {site_id}"),
@@ -1691,8 +1717,4 @@ fn link(href: &str, label: &str) -> AdminLink {
         href: href.to_string(),
         label: label.to_string(),
     }
-}
-
-fn internal_error(error: String) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, error)
 }
