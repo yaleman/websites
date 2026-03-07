@@ -1498,3 +1498,465 @@ pub async fn list_asset_variants(
 
     Ok(variants)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_db_start;
+    use crate::entities::audit_event::log_audit_event;
+    use sea_orm::DatabaseConnection;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::fs;
+
+    async fn setup_db() -> Arc<DatabaseConnection> {
+        test_db_start().await
+    }
+
+    async fn create_site_fixture(db: &DatabaseConnection) -> entities::site::Model {
+        create_site(
+            db,
+            "alpha".to_string(),
+            "Alpha Site".to_string(),
+            "default".to_string(),
+        )
+        .await
+        .expect("failed to create site")
+    }
+
+    async fn create_content_fixture(
+        db: &DatabaseConnection,
+        site_id: Uuid,
+        page_type: PageType,
+        slug: &str,
+        draft: bool,
+    ) -> entities::content_item::Model {
+        create_content(
+            db,
+            NewContent {
+                site_id,
+                page_type,
+                title: "Hello World".to_string(),
+                slug: slug.to_string(),
+                page_content: "Body".to_string(),
+                draft,
+                creator_sub: "creator".to_string(),
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create content")
+    }
+
+    #[tokio::test]
+    async fn list_audit_events_filters_by_site() {
+        let db = setup_db().await;
+        let site = create_site_fixture(&db).await;
+
+        log_audit_event(&db, "actor", "create", "site", "1", Some(site.id), None)
+            .await
+            .expect("failed to log site audit event");
+        log_audit_event(&db, "actor", "login", "user", "2", None, None)
+            .await
+            .expect("failed to log global audit event");
+
+        let scoped = list_audit_events(&db, Some(site.id))
+            .await
+            .expect("failed to list scoped audit events");
+        assert_eq!(scoped.len(), 1);
+
+        let all = list_audit_events(&db, None)
+            .await
+            .expect("failed to list all audit events");
+        assert_eq!(all.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn create_list_and_get_sites() {
+        let db = setup_db().await;
+        let site = create_site_fixture(&db).await;
+
+        let sites = list_sites(&db).await.expect("failed to list sites");
+        assert!(sites.iter().any(|model| model.id == site.id));
+
+        let fetched = get_site(&db, site.id).await.expect("failed to get site");
+        assert_eq!(fetched.id, site.id);
+    }
+
+    #[tokio::test]
+    async fn content_lifecycle_and_revisions() {
+        let db = setup_db().await;
+        let site = create_site_fixture(&db).await;
+
+        let content = create_content_fixture(&db, site.id, PageType::Post, "hello", true).await;
+
+        let all_content = list_content(&db, site.id, None)
+            .await
+            .expect("failed to list content");
+        assert_eq!(all_content.len(), 1);
+
+        let post_content = list_content(&db, site.id, Some(PageType::Post))
+            .await
+            .expect("failed to list post content");
+        assert_eq!(post_content.len(), 1);
+
+        let page_content = list_content(&db, site.id, Some(PageType::Page))
+            .await
+            .expect("failed to list page content");
+        assert_eq!(page_content.len(), 0);
+
+        let search = search_content(&db, site.id, "Hello")
+            .await
+            .expect("failed to search content");
+        assert_eq!(search.len(), 1);
+
+        let fetched = get_content(&db, content.id)
+            .await
+            .expect("failed to get content");
+        assert_eq!(fetched.id, content.id);
+
+        let alias = create_alias(
+            &db,
+            NewAlias {
+                content_id: content.id,
+                site_id: site.id,
+                alias_path: "/legacy/hello".to_string(),
+                kind: "alias".to_string(),
+            },
+        )
+        .await
+        .expect("failed to create alias");
+
+        let tag_link = add_content_tag(
+            &db,
+            NewContentTag {
+                content_id: content.id,
+                site_id: site.id,
+                tag_name: "News".to_string(),
+            },
+        )
+        .await
+        .expect("failed to add content tag");
+
+        let tag_names = load_tag_names(&db, content.id)
+            .await
+            .expect("failed to load tag names");
+        assert_eq!(tag_names, vec!["News".to_string()]);
+
+        let updated = update_content(
+            &db,
+            UpdateContent {
+                content_id: content.id,
+                page_type: None,
+                title: Some("Hello Updated".to_string()),
+                slug: Some("hello-updated".to_string()),
+                page_content: Some("Updated".to_string()),
+                draft: Some(false),
+                published_at: None,
+                editor_sub: "editor".to_string(),
+            },
+        )
+        .await
+        .expect("failed to update content");
+        assert_eq!(updated.title, "Hello Updated");
+
+        let aliases = list_aliases(&db, site.id, Some(content.id))
+            .await
+            .expect("failed to list aliases");
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0].id, alias.id);
+
+        let content_tags = list_content_tags(&db, content.id)
+            .await
+            .expect("failed to list content tags");
+        assert_eq!(content_tags.len(), 1);
+        assert_eq!(content_tags[0].id, tag_link.tag_id);
+
+        let revisions = list_revisions(&db, content.id)
+            .await
+            .expect("failed to list revisions");
+        assert_eq!(revisions.len(), 2);
+
+        let latest = revisions.first().expect("missing revision entry").clone();
+        let fetched_revision = get_revision(&db, latest.id)
+            .await
+            .expect("failed to get revision");
+        assert_eq!(fetched_revision.id, latest.id);
+
+        let rev1 = get_revision_by_number(&db, content.id, 1)
+            .await
+            .expect("failed to fetch revision 1");
+        assert!(rev1.is_some());
+        let rev2 = get_revision_by_number(&db, content.id, 2)
+            .await
+            .expect("failed to fetch revision 2");
+        assert!(rev2.is_some());
+
+        let revision_aliases = list_revision_aliases(&db, latest.id)
+            .await
+            .expect("failed to list revision aliases");
+        assert_eq!(revision_aliases.len(), 1);
+
+        let revision_tags = list_revision_tags(&db, latest.id)
+            .await
+            .expect("failed to list revision tags");
+        assert_eq!(revision_tags.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn create_and_list_tags() {
+        let db = setup_db().await;
+        let site = create_site_fixture(&db).await;
+
+        let tag = create_tag(
+            &db,
+            NewTag {
+                site_id: site.id,
+                name: "Docs".to_string(),
+            },
+        )
+        .await
+        .expect("failed to create tag");
+
+        let tags = list_tags(&db, site.id).await.expect("failed to list tags");
+        assert!(tags.iter().any(|model| model.id == tag.id));
+
+        let content = create_content_fixture(&db, site.id, PageType::Post, "docs", true).await;
+        let _ = add_content_tag(
+            &db,
+            NewContentTag {
+                content_id: content.id,
+                site_id: site.id,
+                tag_name: "Docs".to_string(),
+            },
+        )
+        .await
+        .expect("failed to add tag to content");
+
+        let content_tags = list_content_tags(&db, content.id)
+            .await
+            .expect("failed to list content tags");
+        assert_eq!(content_tags.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn users_and_memberships() {
+        let db = setup_db().await;
+        let site = create_site_fixture(&db).await;
+
+        let user = create_user(
+            &db,
+            NewUser {
+                subject: "alice".to_string(),
+            },
+        )
+        .await
+        .expect("failed to create user");
+
+        let updated = upsert_user_login(&db, "alice")
+            .await
+            .expect("failed to upsert user login");
+        assert_eq!(updated.id, user.id);
+        assert!(updated.last_login_at.is_some());
+
+        let _ = upsert_user_login(&db, "bob")
+            .await
+            .expect("failed to insert user login");
+
+        let users = list_users(&db).await.expect("failed to list users");
+        assert_eq!(users.len(), 2);
+
+        let membership = create_membership(
+            &db,
+            NewMembership {
+                site_id: site.id,
+                user_id: user.id,
+                role: "owner".to_string(),
+            },
+        )
+        .await
+        .expect("failed to create membership");
+
+        let memberships = list_memberships(&db, site.id)
+            .await
+            .expect("failed to list memberships");
+        assert!(memberships.iter().any(|model| model.id == membership.id));
+    }
+
+    #[tokio::test]
+    async fn assets_variants_and_copy_media() {
+        let db = setup_db().await;
+        let site = create_site_fixture(&db).await;
+
+        let asset = create_asset(
+            &db,
+            NewAsset {
+                site_id: site.id,
+                uploader_sub: "uploader".to_string(),
+                original_filename: "photo.jpg".to_string(),
+                storage_basename: "asset.jpg".to_string(),
+                mime_type: "image/jpeg".to_string(),
+                byte_length: 10,
+                width: Some(100),
+                height: Some(200),
+            },
+        )
+        .await
+        .expect("failed to create asset");
+
+        let variant = create_asset_variant(
+            &db,
+            NewAssetVariant {
+                asset_id: asset.id,
+                variant_kind: "thumbnail".to_string(),
+                filename: "asset-thumb.jpg".to_string(),
+                mime_type: "image/jpeg".to_string(),
+                byte_length: 5,
+                width: Some(50),
+                height: Some(50),
+            },
+        )
+        .await
+        .expect("failed to create asset variant");
+
+        let assets = list_assets(&db, site.id)
+            .await
+            .expect("failed to list assets");
+        assert_eq!(assets.len(), 1);
+
+        let variants = list_asset_variants(&db, asset.id)
+            .await
+            .expect("failed to list asset variants");
+        assert_eq!(variants.len(), 1);
+        assert_eq!(variants[0].id, variant.id);
+
+        let source_dir = TempDir::new().expect("failed to create temp source dir");
+        let dest_dir = TempDir::new().expect("failed to create temp dest dir");
+        let source_root = source_dir.path();
+        let dest_root = dest_dir.path();
+
+        fs::create_dir_all(source_root)
+            .await
+            .expect("failed to create source root");
+        fs::write(source_root.join("asset.jpg"), b"asset data")
+            .await
+            .expect("failed to write asset file");
+        fs::write(source_root.join("asset-thumb.jpg"), b"thumb data")
+            .await
+            .expect("failed to write variant file");
+
+        let mut files_written = 0usize;
+        copy_media_variants(&db, site.id, source_root, dest_root, &mut files_written)
+            .await
+            .expect("failed to copy media variants");
+
+        assert_eq!(files_written, 2);
+        assert!(fs::metadata(dest_root.join("asset.jpg")).await.is_ok());
+        assert!(
+            fs::metadata(dest_root.join("asset-thumb.jpg"))
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn import_wordpress_creates_content_and_aliases() {
+        let db = setup_db().await;
+        let site = create_site_fixture(&db).await;
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let file_path = temp_dir.path().join("import.xml");
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:wp="http://wordpress.org/export/1.2/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <item>
+      <title>Imported Post</title>
+      <link>https://example.com/2020/01/imported-post/?p=123</link>
+      <wp:post_id>123</wp:post_id>
+      <wp:post_name>imported-post</wp:post_name>
+      <wp:post_type>post</wp:post_type>
+      <wp:status>publish</wp:status>
+      <wp:post_date_gmt>2025-01-02 03:04:05</wp:post_date_gmt>
+      <content:encoded><![CDATA[Hello world]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"#;
+
+        fs::write(&file_path, xml.as_bytes())
+            .await
+            .expect("failed to write import file");
+
+        let imported = import_wordpress(
+            &db,
+            site.id,
+            file_path.to_str().expect("invalid path"),
+            "creator",
+        )
+        .await
+        .expect("failed to import wordpress data");
+        assert_eq!(imported, 1);
+
+        let content = list_content(&db, site.id, None)
+            .await
+            .expect("failed to list content");
+        assert_eq!(content.len(), 1);
+
+        let aliases = list_aliases(&db, site.id, None)
+            .await
+            .expect("failed to list aliases");
+        assert_eq!(aliases.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn render_site_outputs_files() {
+        let db = setup_db().await;
+        let site = create_site_fixture(&db).await;
+        let templates_dir = TempDir::new().expect("failed to create templates dir");
+        let rendered_dir = TempDir::new().expect("failed to create rendered dir");
+
+        let content = create_content_fixture(&db, site.id, PageType::Post, "hello", false).await;
+        let _ = add_content_tag(
+            &db,
+            NewContentTag {
+                content_id: content.id,
+                site_id: site.id,
+                tag_name: "Alpha Tag".to_string(),
+            },
+        )
+        .await
+        .expect("failed to tag content");
+
+        let files_written = render_site(
+            &db,
+            site.id,
+            templates_dir
+                .path()
+                .to_str()
+                .expect("invalid templates path"),
+            rendered_dir.path().to_str().expect("invalid rendered path"),
+        )
+        .await
+        .expect("failed to render site");
+        assert!(files_written >= 4);
+
+        let rendered_root = rendered_dir.path().join(site.short_name);
+        assert!(fs::metadata(rendered_root.join("index.html")).await.is_ok());
+        assert!(fs::metadata(rendered_root.join("rss.xml")).await.is_ok());
+        assert!(fs::metadata(rendered_root.join("atom.xml")).await.is_ok());
+        assert!(
+            fs::metadata(rendered_root.join("hello").join("index.html"))
+                .await
+                .is_ok()
+        );
+        assert!(
+            fs::metadata(
+                rendered_root
+                    .join("tags")
+                    .join("alpha-tag")
+                    .join("index.html")
+            )
+            .await
+            .is_ok()
+        );
+    }
+}
