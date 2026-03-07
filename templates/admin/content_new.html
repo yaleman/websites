@@ -66,6 +66,7 @@
             <button type="button" class="editor-button" data-command="italic">Italic</button>
             <button type="button" class="editor-button" data-command="code">Code</button>
             <button type="button" class="editor-button" data-command="link">Link</button>
+            <button type="button" class="editor-button" data-command="image">Image</button>
           </div>
           <div class="editor-toolbar__group">
             <button type="button" class="editor-button" data-command="h2">H2</button>
@@ -75,6 +76,16 @@
             <button type="button" class="editor-button" data-command="ul">Bullets</button>
             <button type="button" class="editor-button" data-command="ol">Numbered</button>
             <button type="button" class="editor-button" data-command="quote">Quote</button>
+          </div>
+        </div>
+        <div class="editor-image-tools">
+          <div class="form-field">
+            <label for="image_url">Image URL</label>
+            <input id="image_url" type="url" placeholder="https://example.com/image.png" />
+          </div>
+          <div class="form-field">
+            <label for="image_alt">Alt text</label>
+            <input id="image_alt" type="text" placeholder="Describe the image" />
           </div>
         </div>
         <div id="editor" class="editor-shell"></div>

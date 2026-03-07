@@ -1,4 +1,5 @@
 import { Editor } from "@tiptap/core";
+import Image from "@tiptap/extension-image";
 import Link from "@tiptap/extension-link";
 import { Markdown } from "@tiptap/markdown";
 import StarterKit from "@tiptap/starter-kit";
@@ -28,6 +29,28 @@ const bindToolbar = (editor: Editor) => {
           return;
         }
         editor.chain().focus().setLink({ href }).run();
+        return;
+      }
+      case "image": {
+        const imageUrlInput = document.getElementById(
+          "image_url",
+        ) as HTMLInputElement | null;
+        const imageAltInput = document.getElementById(
+          "image_alt",
+        ) as HTMLInputElement | null;
+        const src = imageUrlInput?.value.trim() ?? "";
+        if (!src) {
+          return;
+        }
+        const alt = imageAltInput?.value.trim();
+        const attrs = alt ? { src, alt } : { src };
+        editor.chain().focus().setImage(attrs).run();
+        if (imageUrlInput) {
+          imageUrlInput.value = "";
+        }
+        if (imageAltInput) {
+          imageAltInput.value = "";
+        }
         return;
       }
       case "h2":
@@ -88,6 +111,7 @@ const initEditor = () => {
       contentType: "markdown",
       extensions: [
         StarterKit,
+        Image,
         Link.configure({ openOnClick: false }),
         Markdown,
       ],
