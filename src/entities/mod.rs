@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use sea_orm::prelude::StringLen;
 use sea_orm::{DeriveActiveEnum, EnumIter};
 use serde::{Deserialize, Serialize};
@@ -89,8 +91,14 @@ fn test_pagetype() {
     assert_eq!(post.to_string(), "post");
     assert_eq!(page.to_string(), "page");
 
-    assert_eq!(PageType::from_str("post").unwrap(), PageType::Post);
-    assert_eq!(PageType::from_str("page").unwrap(), PageType::Page);
+    assert_eq!(
+        PageType::from_str("post").expect("failed to parse page type"),
+        PageType::Post
+    );
+    assert_eq!(
+        PageType::from_str("page").expect("failed to parse page type"),
+        PageType::Page
+    );
 
     assert!(post.is_post());
     assert!(!post.is_page());
