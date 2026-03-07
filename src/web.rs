@@ -49,6 +49,28 @@ use tower_sessions_sqlx_store::SqliteStore;
 use url::Url;
 use uuid::Uuid;
 
+/// Holds all the common template-shared data for admin pages.
+struct AdminTemplateData {
+    page_title: String,
+    page_message: Option<String>,
+}
+
+impl AdminTemplateData {
+    pub fn new(title: impl ToString) -> Self {
+        Self {
+            page_title: title.to_string(),
+            page_message: None,
+        }
+    }
+
+    pub fn with_message(self, message: impl ToString) -> Self {
+        Self {
+            page_message: Some(message.to_string()),
+            ..self
+        }
+    }
+}
+
 #[derive(Clone)]
 struct AdminState {
     db: Arc<DatabaseConnection>,
@@ -117,11 +139,6 @@ struct AdminContentNewTemplate {
     heading: String,
 }
 
-struct AdminTemplateData {
-    page_title: String,
-    page_message: Option<String>,
-}
-
 #[derive(Template, WebTemplate)]
 #[template(path = "site_settings.html")]
 struct AdminSiteSettingsTemplate {
@@ -169,6 +186,15 @@ struct AdminMembershipRow {
 struct AdminLink {
     href: String,
     label: String,
+}
+
+impl AdminLink {
+    fn new(href: &str, label: &str) -> Self {
+        Self {
+            href: href.to_string(),
+            label: label.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -460,20 +486,11 @@ async fn require_admin_session(session: Session, request: Request, next: Next) -
 }
 
 async fn admin_index(State(_state): State<AdminState>) -> AdminIndexTemplate {
-    let links = vec![
-    //     link("/admin/sites", "Sites"),
-    //     link("/admin/login", "Login"),
-    //     link("/admin/logout", "Logout"),
-    ];
-
     AdminIndexTemplate {
-        template_shared: AdminTemplateData {
-            page_title: "Admin Dashboard".to_string(),
-            page_message: None,
-        },
+        template_shared: AdminTemplateData::new("Admin Dashboard"),
         heading: "Administration".to_string(),
         rows: vec![],
-        links,
+        links: vec![],
         inline_body: String::new(),
         pre_body: String::new(),
     }
@@ -487,7 +504,7 @@ async fn admin_sites(State(state): State<AdminState>) -> Result<AdminSitesTempla
                 page_message: None,
             },
             heading: "Managed Sites".to_string(),
-            links: vec![link("/admin/sites/new", "New site")],
+            links: vec![AdminLink::new("/admin/sites/new", "New site")],
             sites,
         }),
         Err(error) => Err(SiteError::internal(format!(
@@ -504,7 +521,7 @@ async fn admin_sites_new() -> Response {
         },
         heading: "Create Site".to_string(),
         rows: vec![],
-        links: vec![link("/admin/sites", "Back to sites")],
+        links: vec![AdminLink::new("/admin/sites", "Back to sites")],
         inline_body: admin_sites_new_form_html().to_string(),
         pre_body: String::new(),
     }
@@ -852,13 +869,13 @@ async fn admin_site_content_list(
 
                 rows,
                 links: vec![
-                    link(&format!("/admin/site/{site_id}/content/new"), "New content"),
-                    link(&format!("/admin/site/{site_id}/search"), "Search content"),
-                    link(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
-                    link(&format!("/admin/site/{site_id}/tags"), "Tags"),
-                    link(&format!("/admin/site/{site_id}/assets"), "Assets"),
-                    link(&format!("/admin/site/{site_id}/render"), "Render"),
-                    link(&format!("/admin/site/{site_id}/settings"), "Site settings"),
+                    AdminLink::new(&format!("/admin/site/{site_id}/content/new"), "New content"),
+                    AdminLink::new(&format!("/admin/site/{site_id}/search"), "Search content"),
+                    AdminLink::new(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
+                    AdminLink::new(&format!("/admin/site/{site_id}/tags"), "Tags"),
+                    AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Assets"),
+                    AdminLink::new(&format!("/admin/site/{site_id}/render"), "Render"),
+                    AdminLink::new(&format!("/admin/site/{site_id}/settings"), "Site settings"),
                 ],
                 inline_body: String::new(),
                 pre_body: String::new(),
@@ -916,8 +933,8 @@ async fn admin_site_memberships(
         },
         heading: "Memberships".to_string(),
         links: vec![
-            link(&format!("/admin/site/{site_id}/content"), "Back to content"),
-            link(&format!("/admin/site/{site_id}/settings"), "Site settings"),
+            AdminLink::new(&format!("/admin/site/{site_id}/content"), "Back to content"),
+            AdminLink::new(&format!("/admin/site/{site_id}/settings"), "Site settings"),
         ],
         site_id: site.id,
         site_short_name: site.short_name,
@@ -1103,15 +1120,12 @@ async fn admin_site_search(
     }
 
     Ok(AdminSearchTemplate {
-        template_shared: AdminTemplateData {
-            page_title: "Search".to_string(),
-            page_message: Some(message),
-        },
+        template_shared: AdminTemplateData::new("Search").with_message(message),
         heading: format!("Search Content {site_id}"),
         rows,
         links: vec![
-            link(&format!("/admin/site/{site_id}/content"), "Back to content"),
-            link(&format!("/admin/site/{site_id}/content/new"), "New content"),
+            AdminLink::new(&format!("/admin/site/{site_id}/content"), "Back to content"),
+            AdminLink::new(&format!("/admin/site/{site_id}/content/new"), "New content"),
         ],
         inline_body: admin_site_search_form_html(&query_text),
         pre_body: String::new(),
@@ -1293,36 +1307,34 @@ async fn admin_site_content_detail(
 
     let route = content_primary_route(&content);
     Ok(AdminContentDetailTemplate {
-        template_shared: AdminTemplateData {
-            page_title: "Content Detail".to_string(),
-            page_message: Some(format!("Creator: {}", content.creator_sub)),
-        },
+        template_shared: AdminTemplateData::new("Content Detail")
+            .with_message(format!("Creator: {}", content.creator_sub)),
         heading: format!("Content: /{route}"),
 
         rows,
         links: vec![
-            link(
+            AdminLink::new(
                 &format!(
                     "/admin/site/{}/content/{}/source",
                     content.site_id, content.id
                 ),
                 "Source",
             ),
-            link(
+            AdminLink::new(
                 &format!(
                     "/admin/site/{}/content/{}/advanced",
                     content.site_id, content.id
                 ),
                 "Advanced",
             ),
-            link(
+            AdminLink::new(
                 &format!(
                     "/admin/site/{}/content/{}/revisions",
                     content.site_id, content.id
                 ),
                 "Revisions",
             ),
-            link(
+            AdminLink::new(
                 &format!("/admin/site/{}/content", content.site_id),
                 "Back to content",
             ),
@@ -1357,11 +1369,11 @@ async fn admin_site_content_source(
         heading: format!("Source: {}", content.title),
         rows: vec![],
         links: vec![
-            link(
+            AdminLink::new(
                 &format!("/{}/", content_primary_route(&content).trim_matches('/')),
                 "Preview",
             ),
-            link(
+            AdminLink::new(
                 &format!("/admin/site/{}/content/{}", content.site_id, content.id),
                 "Back to content",
             ),
@@ -1594,7 +1606,7 @@ async fn admin_site_content_advanced(
                     .unwrap_or_else(|| "n/a".to_string()),
             },
         ],
-        links: vec![link(
+        links: vec![AdminLink::new(
             &format!("/admin/site/{}/content/{}", content.site_id, content.id),
             "Back to content",
         )],
@@ -1647,7 +1659,7 @@ async fn admin_site_content_revisions(
         },
         heading: format!("Revisions for {content_id}"),
         rows,
-        links: vec![link(
+        links: vec![AdminLink::new(
             &format!("/admin/site/{site_id}/content/{content_id}"),
             "Back to content",
         )],
@@ -1735,11 +1747,11 @@ async fn admin_site_revision_diff(
             },
         ],
         links: vec![
-            link(
+            AdminLink::new(
                 &format!("/admin/site/{}/content/{}/revisions", site_id, content_id),
                 "Back to revisions",
             ),
-            link(
+            AdminLink::new(
                 &format!("/admin/site/{}/content/{}", site_id, content_id),
                 "Back to content",
             ),
@@ -1772,7 +1784,7 @@ async fn admin_site_tags(
                 },
                 heading: format!("Site Tags ({site_id})"),
                 rows,
-                links: vec![link(
+                links: vec![AdminLink::new(
                     &format!("/admin/site/{site_id}/content"),
                     "Back to content",
                 )],
@@ -1813,8 +1825,8 @@ async fn admin_site_assets(
                 heading: format!("Site Assets ({site_id})"),
                 rows,
                 links: vec![
-                    link(&format!("/admin/site/{site_id}/assets/new"), "Upload asset"),
-                    link(&format!("/admin/site/{site_id}/content"), "Back to content"),
+                    AdminLink::new(&format!("/admin/site/{site_id}/assets/new"), "Upload asset"),
+                    AdminLink::new(&format!("/admin/site/{site_id}/content"), "Back to content"),
                 ],
                 inline_body: String::new(),
                 pre_body: String::new(),
@@ -1844,8 +1856,8 @@ async fn admin_site_assets_new(
                 value: site.id.to_string(),
             }],
             links: vec![
-                link(&format!("/admin/site/{site_id}/assets"), "Back to assets"),
-                link(&format!("/admin/site/{site_id}/content"), "Back to content"),
+                AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Back to assets"),
+                AdminLink::new(&format!("/admin/site/{site_id}/content"), "Back to content"),
             ],
             inline_body: admin_site_assets_new_form_html().to_string(),
             pre_body: String::new(),
@@ -2192,8 +2204,8 @@ async fn admin_site_settings(
         },
         heading: "Site settings".to_string(),
         links: vec![
-            link(&format!("/admin/site/{site_id}/content"), "Back to content"),
-            link(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
+            AdminLink::new(&format!("/admin/site/{site_id}/content"), "Back to content"),
+            AdminLink::new(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
         ],
         site_id: site.id,
         site_short_name: site.short_name,
@@ -2265,20 +2277,13 @@ async fn admin_site_render(
             },
             heading: format!("Rendered site {site_id}"),
             rows: vec![],
-            links: vec![link(
+            links: vec![AdminLink::new(
                 &format!("/admin/site/{site_id}/content"),
                 "Back to content",
             )],
             inline_body: String::new(),
             pre_body: String::new(),
         })
-}
-
-fn link(href: &str, label: &str) -> AdminLink {
-    AdminLink {
-        href: href.to_string(),
-        label: label.to_string(),
-    }
 }
 
 #[cfg(test)]
