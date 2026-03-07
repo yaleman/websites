@@ -5,10 +5,11 @@ use crate::middleware::log_requests;
 use crate::tls::build_tls_config;
 use crate::{
     NewAsset, NewAssetVariant, NewContent, cli::OidcConfig, content_primary_route, create_asset,
-    create_asset_variant, create_content, create_membership, create_site, get_content,
-    get_membership_for_subject, get_revision, get_revision_by_number, get_site, list_aliases,
-    list_asset_variants, list_assets, list_content, list_content_tags, list_revisions,
-    list_sites_for_subject, list_tags, render_site, search_content, update_content,
+    create_asset_variant, create_content, create_membership, create_site, delete_membership,
+    get_content, get_membership_by_id, get_membership_for_subject, get_revision,
+    get_revision_by_number, get_site, list_aliases, list_asset_variants, list_assets, list_content,
+    list_content_tags, list_memberships, list_revisions, list_sites_for_subject, list_tags,
+    list_users_by_ids, render_site, search_content, update_content, update_membership_role,
 };
 use anyhow::Context;
 use askama::Template;
@@ -32,6 +33,7 @@ use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 use serde_json::json;
 use similar::TextDiff;
+use std::collections::HashMap;
 use std::env;
 use std::io::Cursor;
 use std::net::SocketAddr;
@@ -87,6 +89,19 @@ struct AdminContentNewTemplate {
     settings_href: String,
 }
 
+#[derive(Template, WebTemplate)]
+#[template(path = "admin/memberships.html")]
+struct AdminMembershipsTemplate {
+    title: String,
+    site_id: String,
+    site_short_name: String,
+    message: String,
+    content_href: String,
+    settings_href: String,
+    create_href: String,
+    memberships: Vec<AdminMembershipRow>,
+}
+
 #[derive(Debug)]
 struct AdminRow {
     label: String,
@@ -98,6 +113,14 @@ struct AdminSiteRow {
     short_name: String,
     full_title: String,
     content_href: String,
+}
+
+#[derive(Debug)]
+struct AdminMembershipRow {
+    subject: String,
+    role: String,
+    update_href: String,
+    remove_href: String,
 }
 
 #[derive(Debug)]
@@ -130,6 +153,17 @@ struct UpdateContentForm {
     page_content: String,
     draft: String,
     published_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MembershipCreateForm {
+    subject: String,
+    role: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MembershipUpdateForm {
+    role: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -188,17 +222,21 @@ impl SiteRole {
     }
 }
 
+async fn current_user_sub(session: &Session) -> Result<String, SiteError> {
+    session
+        .get::<String>("user_sub")
+        .await
+        .map_err(|_| SiteError::internal("failed to read session".to_string()))?
+        .ok_or_else(|| SiteError::UnAuthorized("missing user session".to_string()))
+}
+
 async fn require_site_role(
     state: &AdminState,
     session: &Session,
     site_id: Uuid,
     required: SiteRole,
 ) -> Result<(), SiteError> {
-    let user_sub = session
-        .get::<String>("user_sub")
-        .await
-        .map_err(|_| SiteError::internal("failed to read session".to_string()))?
-        .ok_or_else(|| SiteError::UnAuthorized("missing user session".to_string()))?;
+    let user_sub = current_user_sub(session).await?;
     let membership = get_membership_for_subject(&state.db, site_id, &user_sub)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load membership: {error}")))?;
@@ -255,6 +293,22 @@ pub async fn run_admin_server(
         .route(
             "/admin/site/{site_id}/content",
             get(admin_site_content_list),
+        )
+        .route(
+            "/admin/site/{site_id}/memberships",
+            get(admin_site_memberships),
+        )
+        .route(
+            "/admin/site/{site_id}/memberships/new",
+            axum::routing::post(admin_site_membership_create),
+        )
+        .route(
+            "/admin/site/{site_id}/memberships/{membership_id}/update",
+            axum::routing::post(admin_site_membership_update),
+        )
+        .route(
+            "/admin/site/{site_id}/memberships/{membership_id}/remove",
+            axum::routing::post(admin_site_membership_remove),
         )
         .route("/admin/site/{site_id}/search", get(admin_site_search))
         .route(
@@ -402,11 +456,7 @@ async fn admin_sites(
     State(state): State<AdminState>,
     session: Session,
 ) -> Result<AdminSitesTemplate, SiteError> {
-    let user_sub = session
-        .get::<String>("user_sub")
-        .await
-        .map_err(|_| SiteError::internal("failed to read session".to_string()))?
-        .ok_or_else(|| SiteError::UnAuthorized("missing user session".to_string()))?;
+    let user_sub = current_user_sub(&session).await?;
     match list_sites_for_subject(&state.db.clone(), &user_sub).await {
         Ok(sites) => {
             let rows = sites
@@ -466,11 +516,7 @@ async fn admin_sites_create(
                 Some(json!({ "short_name": &site.short_name, "full_title": &site.full_title })),
             )
             .await;
-            let user_sub = session
-                .get::<String>("user_sub")
-                .await
-                .map_err(|_| SiteError::internal("failed to read session".to_string()))?
-                .ok_or_else(|| SiteError::UnAuthorized("missing user session".to_string()))?;
+            let user_sub = current_user_sub(&session).await?;
             let user = crate::upsert_user_login(&state.db, &user_sub)
                 .await
                 .map_err(|error| SiteError::internal(format!("failed to load user: {error}")))?;
@@ -763,6 +809,7 @@ async fn admin_site_content_list(
                 rows,
                 links: vec![
                     link(&format!("/admin/site/{site_id}/settings"), "Site settings"),
+                    link(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
                     link(&format!("/admin/site/{site_id}/tags"), "Tags"),
                     link(&format!("/admin/site/{site_id}/assets"), "Assets"),
                     link(&format!("/admin/site/{site_id}/render"), "Render"),
@@ -777,6 +824,186 @@ async fn admin_site_content_list(
             "failed to load content for site {site_id}: {error}"
         ))),
     }
+}
+
+async fn admin_site_memberships(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<String>,
+) -> Result<AdminMembershipsTemplate, SiteError> {
+    let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Owner).await?;
+    let site = get_site(&state.db, site_id_uuid)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
+    let memberships = list_memberships(&state.db, site_id_uuid)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load memberships: {error}")))?;
+    let user_ids = memberships
+        .iter()
+        .map(|membership| membership.user_id)
+        .collect::<Vec<_>>();
+    let users = list_users_by_ids(&state.db, user_ids)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load users: {error}")))?;
+    let user_map = users
+        .into_iter()
+        .map(|user| (user.id, user.subject))
+        .collect::<HashMap<_, _>>();
+    let membership_rows = memberships
+        .into_iter()
+        .map(|membership| {
+            let subject = user_map
+                .get(&membership.user_id)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            AdminMembershipRow {
+                subject,
+                role: membership.role,
+                update_href: format!("/admin/site/{site_id}/memberships/{}/update", membership.id),
+                remove_href: format!("/admin/site/{site_id}/memberships/{}/remove", membership.id),
+            }
+        })
+        .collect();
+
+    Ok(AdminMembershipsTemplate {
+        title: "Memberships".to_string(),
+        site_id: site.id.to_string(),
+        site_short_name: site.short_name,
+        message: "Manage site membership roles.".to_string(),
+        content_href: format!("/admin/site/{site_id}/content"),
+        settings_href: format!("/admin/site/{site_id}/settings"),
+        create_href: format!("/admin/site/{site_id}/memberships/new"),
+        memberships: membership_rows,
+    })
+}
+
+async fn admin_site_membership_create(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<String>,
+    Form(form): Form<MembershipCreateForm>,
+) -> Result<Redirect, SiteError> {
+    let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Owner).await?;
+    let role = SiteRole::from_str(form.role.as_str())
+        .ok_or_else(|| SiteError::internal("invalid role".to_string()))?;
+    let subject = form.subject.trim();
+    if subject.is_empty() {
+        return Err(SiteError::internal("missing subject".to_string()));
+    }
+    let user = crate::upsert_user_login(&state.db, subject)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to upsert user: {error}")))?;
+    let membership = create_membership(
+        &state.db,
+        crate::NewMembership {
+            site_id: site_id_uuid,
+            user_id: user.id,
+            role: role.label().to_string(),
+        },
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to create membership: {error}")))?;
+    let actor = current_user_sub(&session).await?;
+    let _ = log_audit_event(
+        &state.db,
+        &actor,
+        "create_membership",
+        "site_membership",
+        &membership.id.to_string(),
+        Some(membership.site_id),
+        Some(json!({
+            "user_id": membership.user_id.to_string(),
+            "role": membership.role
+        })),
+    )
+    .await;
+
+    Ok(Redirect::to(&format!("/admin/site/{site_id}/memberships")))
+}
+
+async fn admin_site_membership_update(
+    State(state): State<AdminState>,
+    session: Session,
+    Path((site_id, membership_id)): Path<(String, String)>,
+    Form(form): Form<MembershipUpdateForm>,
+) -> Result<Redirect, SiteError> {
+    let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Owner).await?;
+    let membership_id_uuid = parse_uuid_param(&membership_id, "membership_id")?;
+    let membership = get_membership_by_id(&state.db, membership_id_uuid)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load membership: {error}")))?;
+    let membership =
+        membership.ok_or_else(|| SiteError::internal("membership not found".to_string()))?;
+    if membership.site_id != site_id_uuid {
+        return Err(SiteError::UnAuthorized(
+            "membership does not belong to site".to_string(),
+        ));
+    }
+    let role = SiteRole::from_str(form.role.as_str())
+        .ok_or_else(|| SiteError::internal("invalid role".to_string()))?;
+    let updated = update_membership_role(&state.db, membership.id, role.label().to_string())
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to update membership: {error}")))?;
+    let actor = current_user_sub(&session).await?;
+    let _ = log_audit_event(
+        &state.db,
+        &actor,
+        "update_membership",
+        "site_membership",
+        &updated.id.to_string(),
+        Some(updated.site_id),
+        Some(json!({
+            "site_id": updated.site_id.to_string(),
+            "user_id": updated.user_id.to_string(),
+            "role": updated.role
+        })),
+    )
+    .await;
+
+    Ok(Redirect::to(&format!("/admin/site/{site_id}/memberships")))
+}
+
+async fn admin_site_membership_remove(
+    State(state): State<AdminState>,
+    session: Session,
+    Path((site_id, membership_id)): Path<(String, String)>,
+) -> Result<Redirect, SiteError> {
+    let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Owner).await?;
+    let membership_id_uuid = parse_uuid_param(&membership_id, "membership_id")?;
+    let membership = get_membership_by_id(&state.db, membership_id_uuid)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load membership: {error}")))?;
+    let membership =
+        membership.ok_or_else(|| SiteError::internal("membership not found".to_string()))?;
+    if membership.site_id != site_id_uuid {
+        return Err(SiteError::UnAuthorized(
+            "membership does not belong to site".to_string(),
+        ));
+    }
+    delete_membership(&state.db, membership.id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to remove membership: {error}")))?;
+    let actor = current_user_sub(&session).await?;
+    let _ = log_audit_event(
+        &state.db,
+        &actor,
+        "delete_membership",
+        "site_membership",
+        &membership.id.to_string(),
+        Some(membership.site_id),
+        Some(json!({
+            "site_id": membership.site_id.to_string(),
+            "user_id": membership.user_id.to_string(),
+            "role": membership.role
+        })),
+    )
+    .await;
+
+    Ok(Redirect::to(&format!("/admin/site/{site_id}/memberships")))
 }
 
 async fn admin_site_search(

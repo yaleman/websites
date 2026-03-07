@@ -363,6 +363,13 @@ test.describe("content new editor", () => {
       await expect(page.locator("#editor")).toBeVisible();
       await page.locator(".ProseMirror").first().waitFor({ state: "visible" });
       await expect(page.locator("#page_content")).toBeHidden();
+
+      await page.goto(
+        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/memberships`,
+        { waitUntil: "domcontentloaded" },
+      );
+      await expect(page.getByText("Memberships")).toBeVisible();
+      await expect(page.getByText("test-user")).toBeVisible();
     } finally {
       await cleanupHarness(harness);
     }

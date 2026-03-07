@@ -1427,6 +1427,17 @@ pub async fn list_memberships(
     Ok(memberships)
 }
 
+/// Returns a membership by id.
+pub async fn get_membership_by_id(
+    db: &DatabaseConnection,
+    membership_id: Uuid,
+) -> StdResult<Option<entities::site_membership::Model>, String> {
+    entities::site_membership::Entity::find_by_id(membership_id)
+        .one(db)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// Returns a user by subject.
 pub async fn get_user_by_subject(
     db: &DatabaseConnection,
@@ -1435,6 +1446,22 @@ pub async fn get_user_by_subject(
     entities::user::Entity::find()
         .filter(entities::user::Column::Subject.eq(subject.to_string()))
         .one(db)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Returns users by id.
+pub async fn list_users_by_ids(
+    db: &DatabaseConnection,
+    user_ids: Vec<Uuid>,
+) -> StdResult<Vec<entities::user::Model>, String> {
+    if user_ids.is_empty() {
+        return Ok(vec![]);
+    }
+
+    entities::user::Entity::find()
+        .filter(entities::user::Column::Id.is_in(user_ids))
+        .all(db)
         .await
         .map_err(|error| error.to_string())
 }
@@ -1488,6 +1515,32 @@ pub async fn list_sites_for_subject(
         .map_err(|error| error.to_string())?;
 
     Ok(sites)
+}
+
+/// Updates the membership role.
+pub async fn update_membership_role(
+    db: &DatabaseConnection,
+    membership_id: Uuid,
+    role: String,
+) -> StdResult<entities::site_membership::Model, String> {
+    let Some(membership) = get_membership_by_id(db, membership_id).await? else {
+        return Err("membership not found".to_string());
+    };
+    let mut active = membership.into_active_model();
+    active.role = Set(role);
+    active.update(db).await.map_err(|error| error.to_string())
+}
+
+/// Deletes the membership by id.
+pub async fn delete_membership(
+    db: &DatabaseConnection,
+    membership_id: Uuid,
+) -> StdResult<(), String> {
+    entities::site_membership::Entity::delete_by_id(membership_id)
+        .exec(db)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 /// Creates an asset record.
