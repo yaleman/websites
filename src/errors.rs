@@ -1,4 +1,4 @@
-use axum::response::IntoResponse;
+use axum::{Json, response::IntoResponse};
 
 pub enum SiteError {
     NotFound,
@@ -17,7 +17,7 @@ impl IntoResponse for SiteError {
         match self {
             SiteError::NotFound => (axum::http::StatusCode::NOT_FOUND, "Not Found").into_response(),
             SiteError::Internal(msg) => {
-                (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+                (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(msg)).into_response()
             }
             SiteError::UnAuthorized(msg) => {
                 (axum::http::StatusCode::UNAUTHORIZED, msg).into_response()

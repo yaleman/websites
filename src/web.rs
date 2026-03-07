@@ -1,5 +1,6 @@
 use crate::errors::SiteError;
 use crate::middleware::log_requests;
+use crate::tls::build_tls_config;
 use crate::{
     NewAsset, NewAssetVariant, NewContent, cli::OidcConfig, content_primary_route, create_asset,
     create_asset_variant, create_content, create_site, get_content, get_revision,
@@ -7,6 +8,7 @@ use crate::{
     list_content_tags, list_revisions, list_sites, list_tags, log_audit_event, render_site,
     search_content, update_content,
 };
+use anyhow::Context;
 use askama::Template;
 use askama_web::WebTemplate;
 use axum::middleware::{Next, from_fn};
@@ -28,20 +30,23 @@ use serde::Deserialize;
 use serde_json::json;
 use similar::TextDiff;
 use std::io::Cursor;
+use std::net::SocketAddr;
 use std::path::Path as StdPath;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tower_http::services::ServeDir;
 use tower_sessions::{Expiry, Session, SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
+use url::Url;
 use uuid::Uuid;
 
 #[derive(Clone)]
 struct AdminState {
     db: Arc<DatabaseConnection>,
     oidc_client_id: Option<String>,
-    oidc_frontend_url: Option<String>,
+    oidc_frontend_url: Url,
     oidc_discovery_url: Option<String>,
 }
 
@@ -126,7 +131,7 @@ pub async fn run_admin_server(
     db: Arc<DatabaseConnection>,
     listen: &str,
     oidc: &OidcConfig,
-) -> Result<(), String> {
+) -> Result<(), anyhow::Error> {
     let state = AdminState {
         db: db.clone(),
         oidc_client_id: oidc.oidc_client_id.clone(),
@@ -136,6 +141,12 @@ pub async fn run_admin_server(
 
     let pool = db.get_sqlite_connection_pool();
     let session_store = SqliteStore::new((*pool).clone());
+
+    session_store
+        .migrate()
+        .await
+        .context("Failed to migrate Session store")?;
+
     let session_layer = SessionManagerLayer::new(session_store)
         .with_secure(false)
         .with_expiry(Expiry::OnSessionEnd);
@@ -186,10 +197,15 @@ pub async fn run_admin_server(
         .route("/admin/site/{site_id}/render", get(admin_site_render))
         .layer(from_fn(require_admin_session));
 
+    tracing::info!(
+        "admin server listening on http://{listen} / {}",
+        state.oidc_frontend_url
+    );
+
     let app = Router::new()
         .route("/", get(admin_root))
         .route("/admin/login", get(admin_login))
-        .route("/admin/login/callback", get(admin_login_callback))
+        .route("/oauth2/callback", get(admin_login_callback))
         .route("/admin/logout", get(admin_logout))
         .nest_service("/admin/assets", ServeDir::new("admin-ui-assets"))
         .merge(protected_routes)
@@ -197,15 +213,13 @@ pub async fn run_admin_server(
         .layer(from_fn(log_requests))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(listen)
+    let tls_config = build_tls_config(&oidc.tls_cert_path, &oidc.tls_key_path).await?;
+    let bind_addr: SocketAddr = SocketAddr::from_str(listen)
+        .with_context(|| format!("failed to parse bind address {}", listen))?;
+    axum_server::bind_rustls(bind_addr, tls_config)
+        .serve(app.into_make_service())
         .await
-        .map_err(|error| error.to_string())?;
-    let local = listener.local_addr().map_err(|error| error.to_string())?;
-
-    println!("admin server listening on http://{local}");
-    axum::serve(listener, app)
-        .await
-        .map_err(|error| error.to_string())
+        .context("axum rustls server exited unexpectedly")
 }
 
 async fn admin_root() -> Redirect {
@@ -225,15 +239,13 @@ async fn require_admin_session(session: Session, request: Request, next: Next) -
     }
 }
 
-async fn admin_index(State(state): State<AdminState>) -> AdminPageTemplate {
-    let mut links = vec![
+async fn admin_index(State(_state): State<AdminState>) -> AdminPageTemplate {
+    let links = vec![
         link("/admin/sites", "Sites"),
         link("/admin/login", "Login"),
         link("/admin/logout", "Logout"),
+        link("/admin/login", "OIDC configured"),
     ];
-    if admin_oidc_is_configured(&state) {
-        links.push(link("/admin/login", "OIDC configured"));
-    }
 
     AdminPageTemplate {
         title: "Admin".to_string(),
@@ -350,20 +362,6 @@ async fn admin_login(
     State(state): State<AdminState>,
     session: Session,
 ) -> Result<Response, SiteError> {
-    if !admin_oidc_is_configured(&state) {
-        return Ok(AdminPageTemplate {
-            title: "Login".to_string(),
-            heading: "Admin Login".to_string(),
-            message: "OIDC configuration is missing. Set the required environment variables."
-                .to_string(),
-            rows: vec![],
-            links: vec![link("/admin", "Back to admin")],
-            inline_body: String::new(),
-            pre_body: String::new(),
-        }
-        .into_response());
-    }
-
     let http_client = match build_http_client() {
         Ok(client) => client,
         Err(error) => {
@@ -552,10 +550,7 @@ async fn build_oidc_client(
         .oidc_client_id
         .clone()
         .ok_or_else(|| "missing client id".to_string())?;
-    let frontend_url = state
-        .oidc_frontend_url
-        .clone()
-        .ok_or_else(|| "missing frontend url".to_string())?;
+    let frontend_url = state.oidc_frontend_url.clone();
 
     let provider_metadata = CoreProviderMetadata::discover_async(
         IssuerUrl::new(discovery_url).map_err(|error| error.to_string())?,
@@ -564,13 +559,12 @@ async fn build_oidc_client(
     .await
     .map_err(|error| error.to_string())?;
 
-    let redirect_url = format!(
-        "{}/admin/login/callback",
-        frontend_url.trim_end_matches('/')
-    );
+    let redirect_url = frontend_url
+        .join("/oauth2/callback")
+        .map_err(|error| error.to_string())?;
     let client =
         CoreClient::from_provider_metadata(provider_metadata, ClientId::new(client_id), None)
-            .set_redirect_uri(RedirectUrl::new(redirect_url).map_err(|error| error.to_string())?);
+            .set_redirect_uri(RedirectUrl::from_url(redirect_url));
 
     Ok(client)
 }
@@ -1704,12 +1698,6 @@ async fn admin_site_render(
             inline_body: String::new(),
             pre_body: String::new(),
         })
-}
-
-fn admin_oidc_is_configured(state: &AdminState) -> bool {
-    state.oidc_client_id.is_some()
-        || state.oidc_frontend_url.is_some()
-        || state.oidc_discovery_url.is_some()
 }
 
 fn link(href: &str, label: &str) -> AdminLink {

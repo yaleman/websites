@@ -1,4 +1,7 @@
+use std::path::PathBuf;
+
 use clap::{Args, Parser, Subcommand};
+use url::Url;
 
 #[derive(Debug, Args, Clone)]
 pub struct OidcConfig {
@@ -8,7 +11,7 @@ pub struct OidcConfig {
         env = "WEBSITES_TLS_CERT_PATH",
         value_name = "FILE"
     )]
-    pub tls_cert_path: Option<String>,
+    pub tls_cert_path: PathBuf,
 
     /// Path to the TLS private key file.
     #[arg(
@@ -16,7 +19,7 @@ pub struct OidcConfig {
         env = "WEBSITES_TLS_KEY_PATH",
         value_name = "FILE"
     )]
-    pub tls_key_path: Option<String>,
+    pub tls_key_path: PathBuf,
 
     /// Public frontend URL for OIDC redirect and callback configuration.
     #[arg(
@@ -24,7 +27,7 @@ pub struct OidcConfig {
         env = "WEBSITES_FRONTEND_URL",
         value_name = "URL"
     )]
-    pub frontend_url: Option<String>,
+    pub frontend_url: Url,
 
     /// OIDC client ID.
     #[arg(
@@ -51,7 +54,6 @@ pub struct OidcConfig {
 )]
 pub struct Cli {
     #[arg(
-        short = 'd',
         long = "database-url",
         default_value = "sqlite://./database.sqlite?mode=rwc",
         help = "SQLite database URL for the management database"
@@ -104,7 +106,7 @@ pub enum Commands {
 pub enum ServeCommands {
     /// Start the admin web UI server.
     Admin {
-        #[arg(long, default_value = "127.0.0.1:3000")]
+        #[arg(long, default_value = "127.0.0.1:9000")]
         listen: String,
     },
 }

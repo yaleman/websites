@@ -6,9 +6,11 @@ edition = "2024"
 [lib]
 
 [dependencies]
+anyhow = "1.0.102"
 askama = "0.15.4"
 askama_web = { version = "0.15.1", features = ["axum-0.8", "tracing-0.1"] }
 axum = { version = "0.8.8", features = ["multipart", "macros"] }
+axum-server = { version = "0.8.0", features = ["tokio-rustls", "tls-rustls"] }
 chrono = "0.4.44"
 clap = { version = "4.5.60", features = ["derive", "env"] }
 image = "0.25.9"
@@ -19,6 +21,7 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
     "json",
 ] }
+rustls = "0.23.37"
 sea-orm = { version = "1.1.19", features = [
     "runtime-tokio-rustls",
     "sqlx-sqlite",
@@ -33,5 +36,6 @@ tower-http = { version = "0.6.8", features = ["fs"] }
 tower-sessions = "0.14.0"
 tower-sessions-sqlx-store = { version = "0.15.0", features = ["sqlite"] }
 tracing = { version = "0.1.44", features = ["log"] }
+tracing-subscriber = { version = "0.3.22", features = ["json", "serde", "tracing", "env-filter"] }
 url = "2.5.8"
 uuid = { version = "1.22.0", features = ["v7"] }
