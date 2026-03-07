@@ -10,14 +10,14 @@ const textarea = document.getElementById("page_content") as HTMLTextAreaElement 
 
 if (root && textarea) {
   Editor.make()
-    .config((ctx) => {
-      ctx.set(rootCtx, root);
-      ctx.set(defaultValueCtx, textarea.value || "");
-      ctx.get(listenerCtx).markdownUpdated((_, markdown) => {
+    .config(nord)
+    .config((editorCtx) => {
+      editorCtx.set(rootCtx, root);
+      editorCtx.set(defaultValueCtx, textarea.value || "");
+      editorCtx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
         textarea.value = markdown;
       });
     })
-    .use(nord)
     .use(commonmark)
     .use(history)
     .use(listener)

@@ -16,5 +16,14 @@
     "@rspack/cli": "^1.7.7",
     "@rspack/core": "^1.7.7",
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@milkdown/core": "^7.19.0",
+    "@milkdown/plugin-history": "^7.19.0",
+    "@milkdown/plugin-listener": "^7.19.0",
+    "@milkdown/preset-commonmark": "^7.19.0",
+    "@milkdown/prose": "^7.19.0",
+    "@milkdown/theme-nord": "^7.19.0",
+    "@milkdown/utils": "^7.19.0"
   }
 }

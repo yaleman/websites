@@ -6,5 +6,5 @@
     "strict": true,
     "skipLibCheck": true
   },
-  "include": ["assets/admin/**/*.ts"]
+  "include": ["assets/admin/**/*.ts", "assets/admin/**/*.d.ts"]
 }
