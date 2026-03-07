@@ -182,6 +182,57 @@ test.describe("content new editor", () => {
       }
       const siteId = siteMatch[1];
 
+      const userResult = await runCommand(
+        "cargo",
+        [
+          "run",
+          "--",
+          "--database-url",
+          dbPath,
+          "--tls-cert-path",
+          tlsCertPath,
+          "--tls-key-path",
+          tlsKeyPath,
+          "--frontend-url",
+          "https://127.0.0.1",
+          "user",
+          "create",
+          "--subject",
+          "test-user",
+        ],
+        { env },
+      );
+      const userMatch = userResult.stdout.match(/created user: ([^ ]+)/);
+      if (!userMatch) {
+        throw new Error(`failed to parse user id: ${userResult.stdout}`);
+      }
+      const userId = userMatch[1];
+
+      await runCommand(
+        "cargo",
+        [
+          "run",
+          "--",
+          "--database-url",
+          dbPath,
+          "--tls-cert-path",
+          tlsCertPath,
+          "--tls-key-path",
+          tlsKeyPath,
+          "--frontend-url",
+          "https://127.0.0.1",
+          "site",
+          "member-add",
+          "--site-id",
+          siteId,
+          "--user-id",
+          userId,
+          "--role",
+          "owner",
+        ],
+        { env },
+      );
+
       const sessionResult = await runCommand(
         "cargo",
         [
