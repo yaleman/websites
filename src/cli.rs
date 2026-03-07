@@ -349,7 +349,7 @@ pub enum ContentCommands {
 }
 
 pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Result<(), String> {
-    let db_url = format!("sqlite://{}?mode=rwc&foreign_keys=on", db_path.display());
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
     let db = crate::db::db_start(&db_url)
         .await
         .map_err(|err| format!("Failed to start database: {err}"))?;

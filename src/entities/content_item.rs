@@ -5,7 +5,7 @@ use crate::entities::PageType;
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "content_item")]
 pub struct Model {
-    #[sea_orm(primary_key)]
+    #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
     pub site_id: Uuid,
     pub page_type: PageType,
