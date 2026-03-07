@@ -5,10 +5,10 @@ use crate::middleware::log_requests;
 use crate::tls::build_tls_config;
 use crate::{
     NewAsset, NewAssetVariant, NewContent, cli::OidcConfig, content_primary_route, create_asset,
-    create_asset_variant, create_content, create_site, get_content, get_revision,
-    get_revision_by_number, get_site, list_aliases, list_asset_variants, list_assets, list_content,
-    list_content_tags, list_revisions, list_sites, list_tags, render_site, search_content,
-    update_content,
+    create_asset_variant, create_content, create_membership, create_site, get_content,
+    get_membership_for_subject, get_revision, get_revision_by_number, get_site, list_aliases,
+    list_asset_variants, list_assets, list_content, list_content_tags, list_revisions,
+    list_sites_for_subject, list_tags, render_site, search_content, update_content,
 };
 use anyhow::Context;
 use askama::Template;
@@ -158,6 +158,68 @@ const ADMIN_ACTOR_SUB: &str = "web-admin";
 const DEFAULT_TEMPLATE_NAME: &str = "default";
 const UPLOAD_ROOT: &str = "./uploads/media-storage";
 const THUMBNAIL_MAX_SIZE: u32 = 320;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+enum SiteRole {
+    Viewer,
+    Author,
+    Editor,
+    Owner,
+}
+
+impl SiteRole {
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "viewer" => Some(Self::Viewer),
+            "author" => Some(Self::Author),
+            "editor" => Some(Self::Editor),
+            "owner" => Some(Self::Owner),
+            _ => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Viewer => "viewer",
+            Self::Author => "author",
+            Self::Editor => "editor",
+            Self::Owner => "owner",
+        }
+    }
+}
+
+async fn require_site_role(
+    state: &AdminState,
+    session: &Session,
+    site_id: Uuid,
+    required: SiteRole,
+) -> Result<(), SiteError> {
+    let user_sub = session
+        .get::<String>("user_sub")
+        .await
+        .map_err(|_| SiteError::internal("failed to read session".to_string()))?
+        .ok_or_else(|| SiteError::UnAuthorized("missing user session".to_string()))?;
+    let membership = get_membership_for_subject(&state.db, site_id, &user_sub)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load membership: {error}")))?;
+    let membership = match membership {
+        Some(membership) => membership,
+        None => {
+            return Err(SiteError::UnAuthorized(
+                "missing site membership".to_string(),
+            ));
+        }
+    };
+    let role = SiteRole::from_str(&membership.role)
+        .ok_or_else(|| SiteError::UnAuthorized("invalid membership role".to_string()))?;
+    if role < required {
+        return Err(SiteError::UnAuthorized(format!(
+            "requires {} role",
+            required.label()
+        )));
+    }
+    Ok(())
+}
 
 pub async fn run_admin_server(
     db: Arc<DatabaseConnection>,
@@ -336,8 +398,16 @@ async fn admin_index(State(_state): State<AdminState>) -> AdminPageTemplate {
     }
 }
 
-async fn admin_sites(State(state): State<AdminState>) -> Result<AdminSitesTemplate, SiteError> {
-    match list_sites(&state.db.clone()).await {
+async fn admin_sites(
+    State(state): State<AdminState>,
+    session: Session,
+) -> Result<AdminSitesTemplate, SiteError> {
+    let user_sub = session
+        .get::<String>("user_sub")
+        .await
+        .map_err(|_| SiteError::internal("failed to read session".to_string()))?
+        .ok_or_else(|| SiteError::UnAuthorized("missing user session".to_string()))?;
+    match list_sites_for_subject(&state.db.clone(), &user_sub).await {
         Ok(sites) => {
             let rows = sites
                 .into_iter()
@@ -377,6 +447,7 @@ async fn admin_sites_new() -> Response {
 
 async fn admin_sites_create(
     State(state): State<AdminState>,
+    session: Session,
     Form(form): Form<CreateSiteForm>,
 ) -> Result<Redirect, SiteError> {
     let template_name = form
@@ -393,6 +464,40 @@ async fn admin_sites_create(
                 &site.id.to_string(),
                 Some(site.id),
                 Some(json!({ "short_name": &site.short_name, "full_title": &site.full_title })),
+            )
+            .await;
+            let user_sub = session
+                .get::<String>("user_sub")
+                .await
+                .map_err(|_| SiteError::internal("failed to read session".to_string()))?
+                .ok_or_else(|| SiteError::UnAuthorized("missing user session".to_string()))?;
+            let user = crate::upsert_user_login(&state.db, &user_sub)
+                .await
+                .map_err(|error| SiteError::internal(format!("failed to load user: {error}")))?;
+            let membership = create_membership(
+                &state.db,
+                crate::NewMembership {
+                    site_id: site.id,
+                    user_id: user.id,
+                    role: "owner".to_string(),
+                },
+            )
+            .await
+            .map_err(|error| {
+                SiteError::internal(format!("failed to create membership: {error}"))
+            })?;
+            let _ = log_audit_event(
+                &state.db,
+                ADMIN_ACTOR_SUB,
+                "create_membership",
+                "site_membership",
+                &membership.id.to_string(),
+                Some(membership.site_id),
+                Some(json!({
+                    "site_id": membership.site_id.to_string(),
+                    "user_id": membership.user_id.to_string(),
+                    "role": membership.role
+                })),
             )
             .await;
             Ok(Redirect::to("/admin/sites"))
@@ -633,9 +738,11 @@ async fn build_oidc_client(
 
 async fn admin_site_content_list(
     State(state): State<AdminState>,
+    session: Session,
     Path(site_id): Path<String>,
 ) -> Result<AdminPageTemplate, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Viewer).await?;
     match list_content(&state.db, site_id_uuid, None).await {
         Ok(content) => {
             let rows = content
@@ -674,10 +781,12 @@ async fn admin_site_content_list(
 
 async fn admin_site_search(
     State(state): State<AdminState>,
+    session: Session,
     Path(site_id): Path<String>,
     Query(query): Query<SearchQuery>,
 ) -> Result<AdminPageTemplate, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Viewer).await?;
     let query_text = query.q.unwrap_or_default();
     let mut rows = Vec::new();
     let mut message = "Search content by title, slug, or body text.".to_string();
@@ -735,9 +844,11 @@ fn admin_site_search_form_html(query: &str) -> String {
 
 async fn admin_site_content_new(
     State(state): State<AdminState>,
+    session: Session,
     Path(site_id): Path<String>,
 ) -> Result<AdminContentNewTemplate, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Author).await?;
     match get_site(&state.db, site_id_uuid).await {
         Ok(site) => Ok(AdminContentNewTemplate {
             title: "New Content".to_string(),
@@ -755,12 +866,14 @@ async fn admin_site_content_new(
 
 async fn admin_site_content_create(
     State(state): State<AdminState>,
+    session: Session,
     Path(site_id): Path<String>,
     Form(form): Form<CreateContentForm>,
 ) -> Result<Redirect, SiteError> {
     let page_type = PageType::from_str(&form.page_type)
         .map_err(|error| SiteError::internal(error.to_string()))?;
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Author).await?;
 
     match get_site(&state.db, site_id_uuid).await {
         Ok(site) => match create_content(
@@ -811,8 +924,11 @@ async fn admin_site_content_create(
 
 async fn admin_site_content_detail(
     State(state): State<AdminState>,
+    session: Session,
     Path((_site_id, content_id)): Path<(String, String)>,
 ) -> Result<AdminPageTemplate, SiteError> {
+    let site_id_uuid = parse_uuid_param(&_site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Viewer).await?;
     let content_id_uuid = parse_uuid_param(&content_id, "content_id")?;
     let content = get_content(&state.db, content_id_uuid)
         .await
@@ -900,8 +1016,11 @@ async fn admin_site_content_detail(
 #[axum::debug_handler]
 async fn admin_site_content_source(
     State(state): State<AdminState>,
+    session: Session,
     Path((_site_id, content_id)): Path<(String, String)>,
 ) -> Result<AdminPageTemplate, SiteError> {
+    let site_id_uuid = parse_uuid_param(&_site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Author).await?;
     let content_id_uuid = parse_uuid_param(&content_id, "content_id")?;
     let content = get_content(&state.db, content_id_uuid)
         .await
@@ -932,9 +1051,12 @@ async fn admin_site_content_source(
 
 async fn admin_site_content_source_update(
     State(state): State<AdminState>,
+    session: Session,
     Path((_site_id, content_id)): Path<(String, String)>,
     Form(form): Form<UpdateContentForm>,
 ) -> Result<Redirect, SiteError> {
+    let site_id_uuid = parse_uuid_param(&_site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Author).await?;
     let draft = matches!(form.draft.as_str(), "true" | "1" | "yes");
     let published_at =
         parse_optional_datetime(normalize_optional(form.published_at), "published_at")?;
@@ -1092,8 +1214,11 @@ async fn render_asset_embed_library(
 
 async fn admin_site_content_advanced(
     State(state): State<AdminState>,
+    session: Session,
     Path((_site_id, content_id)): Path<(String, String)>,
 ) -> Result<AdminPageTemplate, SiteError> {
+    let site_id_uuid = parse_uuid_param(&_site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Viewer).await?;
     let content_id_uuid = parse_uuid_param(&content_id, "content_id")?;
     let content = get_content(&state.db, content_id_uuid)
         .await
@@ -1152,8 +1277,11 @@ async fn admin_site_content_advanced(
 
 async fn admin_site_content_revisions(
     State(state): State<AdminState>,
+    session: Session,
     Path((site_id, content_id)): Path<(String, String)>,
 ) -> Result<AdminPageTemplate, SiteError> {
+    let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Viewer).await?;
     let content_id_uuid = parse_uuid_param(&content_id, "content_id")?;
     let revisions = list_revisions(&state.db, content_id_uuid)
         .await
@@ -1208,11 +1336,13 @@ async fn admin_site_content_revisions(
 
 async fn admin_site_revision_diff(
     State(state): State<AdminState>,
+    session: Session,
     Path((site_id, content_id, revision_id)): Path<(String, String, String)>,
 ) -> Result<AdminPageTemplate, SiteError> {
+    let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Viewer).await?;
     let revision_id_uuid = parse_uuid_param(&revision_id, "revision_id")?;
     let content_id_uuid = parse_uuid_param(&content_id, "content_id")?;
-    let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
     let revision = get_revision(&state.db, revision_id_uuid)
         .await
         .map_err(|error| {
@@ -1288,9 +1418,11 @@ async fn admin_site_revision_diff(
 
 async fn admin_site_tags(
     State(state): State<AdminState>,
+    session: Session,
     Path(site_id): Path<String>,
 ) -> Result<AdminPageTemplate, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Viewer).await?;
     match list_tags(&state.db, site_id_uuid).await {
         Ok(tags) => {
             let rows = tags
@@ -1322,9 +1454,11 @@ async fn admin_site_tags(
 
 async fn admin_site_assets(
     State(state): State<AdminState>,
+    session: Session,
     Path(site_id): Path<String>,
 ) -> Result<AdminPageTemplate, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Viewer).await?;
     match list_assets(&state.db, site_id_uuid).await {
         Ok(assets) => {
             let rows = assets
@@ -1359,9 +1493,11 @@ async fn admin_site_assets(
 
 async fn admin_site_assets_new(
     State(state): State<AdminState>,
+    session: Session,
     Path(site_id): Path<String>,
 ) -> Result<AdminPageTemplate, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Author).await?;
     match get_site(&state.db, site_id_uuid).await {
         Ok(site) => Ok(AdminPageTemplate {
             title: "Upload Asset".to_string(),
@@ -1386,10 +1522,12 @@ async fn admin_site_assets_new(
 
 async fn admin_site_assets_create(
     State(state): State<AdminState>,
+    session: Session,
     Path(site_id): Path<String>,
     mut multipart: Multipart,
 ) -> Result<Redirect, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Author).await?;
     let site = match get_site(&state.db, site_id_uuid).await {
         Ok(site) => site,
         Err(error) => {
@@ -1698,9 +1836,11 @@ fn parse_optional_datetime(
 
 async fn admin_site_settings(
     State(state): State<AdminState>,
+    session: Session,
     Path(site_id): Path<String>,
 ) -> Result<AdminPageTemplate, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    require_site_role(&state, &session, site_id_uuid, SiteRole::Viewer).await?;
     get_site(&state.db, site_id_uuid)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))
@@ -1741,8 +1881,10 @@ async fn admin_site_settings(
 
 async fn admin_site_render(
     State(state): State<AdminState>,
+    session: Session,
     Path(site_id): Path<Uuid>,
 ) -> Result<AdminPageTemplate, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Editor).await?;
     render_site(&state.db, site_id, "templates", "./rendered")
         .await
         .map_err(|error| SiteError::internal(format!("failed to render site {site_id}: {error}")))

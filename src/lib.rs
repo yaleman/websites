@@ -1427,6 +1427,69 @@ pub async fn list_memberships(
     Ok(memberships)
 }
 
+/// Returns a user by subject.
+pub async fn get_user_by_subject(
+    db: &DatabaseConnection,
+    subject: &str,
+) -> StdResult<Option<entities::user::Model>, String> {
+    entities::user::Entity::find()
+        .filter(entities::user::Column::Subject.eq(subject.to_string()))
+        .one(db)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Returns a membership for a site and user subject.
+pub async fn get_membership_for_subject(
+    db: &DatabaseConnection,
+    site_id: Uuid,
+    subject: &str,
+) -> StdResult<Option<entities::site_membership::Model>, String> {
+    let Some(user) = get_user_by_subject(db, subject).await? else {
+        return Ok(None);
+    };
+
+    entities::site_membership::Entity::find()
+        .filter(entities::site_membership::Column::SiteId.eq(site_id))
+        .filter(entities::site_membership::Column::UserId.eq(user.id))
+        .one(db)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Returns all sites where the subject has a membership.
+pub async fn list_sites_for_subject(
+    db: &DatabaseConnection,
+    subject: &str,
+) -> StdResult<Vec<entities::site::Model>, String> {
+    let Some(user) = get_user_by_subject(db, subject).await? else {
+        return Ok(vec![]);
+    };
+
+    let memberships = entities::site_membership::Entity::find()
+        .filter(entities::site_membership::Column::UserId.eq(user.id))
+        .all(db)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    if memberships.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let site_ids = memberships
+        .iter()
+        .map(|membership| membership.site_id)
+        .collect::<Vec<_>>();
+    let sites = entities::site::Entity::find()
+        .filter(entities::site::Column::Id.is_in(site_ids))
+        .order_by_asc(entities::site::Column::ShortName)
+        .all(db)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    Ok(sites)
+}
+
 /// Creates an asset record.
 pub async fn create_asset(
     db: &DatabaseConnection,
