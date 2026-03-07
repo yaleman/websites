@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="/admin/assets/admin.css" />
+    <link rel="stylesheet" href="/admin/assets/editor.css" />
+    <script src="/admin/assets/editor.js" defer></script>
+  </head>
+  <body>
+    <main class="content-editor">
+      <header class="content-editor__header">
+        <h1>Create Content {{ site_short_name }}</h1>
+        <p class="message">{{ message }}</p>
+        <nav>
+          <a href="/admin">Dashboard</a>
+          <a href="/admin/sites">Sites</a>
+          <a href="{{ content_href }}">Back to content</a>
+          <a href="{{ settings_href }}">Site settings</a>
+        </nav>
+      </header>
+
+      <section class="content-editor__meta">
+        <div class="meta-card">
+          <span class="meta-label">Site ID</span>
+          <span class="meta-value">{{ site_id }}</span>
+        </div>
+      </section>
+
+      <form method="post" action="" class="editor-form">
+        <div class="form-grid">
+          <div class="form-field">
+            <label for="page_type">Page Type</label>
+            <select id="page_type" name="page_type" required>
+              <option value="post">Post</option>
+              <option value="page">Page</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="title">Title</label>
+            <input id="title" name="title" required />
+          </div>
+          <div class="form-field">
+            <label for="slug">Slug</label>
+            <input id="slug" name="slug" required />
+          </div>
+        </div>
+
+        <label for="page_content">Content</label>
+        <div id="editor" class="editor-shell"></div>
+        <textarea id="page_content" name="page_content" rows="14" class="editor-source"></textarea>
+
+        <label class="inline-checkbox">
+          <input id="draft" name="draft" type="checkbox" value="true" />
+          Save as draft
+        </label>
+
+        <div class="form-actions">
+          <button type="submit">Create content</button>
+        </div>
+      </form>
+    </main>
+  </body>
+</html>

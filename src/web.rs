@@ -75,6 +75,17 @@ struct AdminSitesTemplate {
     links: Vec<AdminLink>,
 }
 
+#[derive(Template, WebTemplate)]
+#[template(path = "admin/content_new.html")]
+struct AdminContentNewTemplate {
+    title: String,
+    site_id: String,
+    site_short_name: String,
+    message: String,
+    content_href: String,
+    settings_href: String,
+}
+
 #[derive(Debug)]
 struct AdminRow {
     label: String,
@@ -686,26 +697,16 @@ fn admin_site_search_form_html(query: &str) -> String {
 async fn admin_site_content_new(
     State(state): State<AdminState>,
     Path(site_id): Path<String>,
-) -> Result<AdminPageTemplate, SiteError> {
+) -> Result<AdminContentNewTemplate, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
     match get_site(&state.db, site_id_uuid).await {
-        Ok(site) => Ok(AdminPageTemplate {
+        Ok(site) => Ok(AdminContentNewTemplate {
             title: "New Content".to_string(),
-            heading: format!("Create Content {}", site.short_name),
+            site_id: site.id.to_string(),
+            site_short_name: site.short_name,
             message: "Create a page or post and start drafting immediately.".to_string(),
-            rows: vec![AdminRow {
-                label: "site_id".to_string(),
-                value: site.id.to_string(),
-            }],
-            links: vec![
-                link(&format!("/admin/site/{site_id}/content"), "Back to content"),
-                link(
-                    &format!("/admin/site/{}/settings", site_id),
-                    "Site settings",
-                ),
-            ],
-            inline_body: admin_site_content_new_form_html().to_string(),
-            pre_body: String::new(),
+            content_href: format!("/admin/site/{site_id}/content"),
+            settings_href: format!("/admin/site/{site_id}/settings"),
         }),
         Err(error) => Err(SiteError::internal(format!(
             "failed to load site {site_id}: {error}"
@@ -767,34 +768,6 @@ async fn admin_site_content_create(
             "failed to load site {site_id}: {error}"
         ))),
     }
-}
-
-fn admin_site_content_new_form_html() -> &'static str {
-    r#"
-      <form method="post" action="">
-        <label for="page_type">Page Type</label>
-        <select id="page_type" name="page_type" required>
-          <option value="post">Post</option>
-          <option value="page">Page</option>
-        </select>
-
-        <label for="title">Title</label>
-        <input id="title" name="title" required />
-
-        <label for="slug">Slug</label>
-        <input id="slug" name="slug" required />
-
-        <label for="page_content">Content</label>
-        <textarea id="page_content" name="page_content" rows="12"></textarea>
-
-        <label class="inline-checkbox">
-          <input id="draft" name="draft" type="checkbox" value="true" />
-          Save as draft
-        </label>
-
-        <button type="submit">Create content</button>
-      </form>
-    "#
 }
 
 async fn admin_site_content_detail(
