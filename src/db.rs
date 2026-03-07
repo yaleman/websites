@@ -14,3 +14,15 @@ pub async fn db_start(db_url: &str) -> Result<Arc<DatabaseConnection>, DbErr> {
     ensure_schema(&db).await?;
     Ok(Arc::new(db))
 }
+
+#[cfg(test)]
+pub async fn test_db_start() -> Arc<DatabaseConnection> {
+    db_start("sqlite::memory:")
+        .await
+        .expect("Failed to start in-memory db")
+}
+
+#[tokio::test]
+pub async fn test_db_start_with_migrations() {
+    test_db_start().await;
+}
