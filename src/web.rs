@@ -480,6 +480,35 @@ async fn admin_sites_new() -> Response {
     .into_response()
 }
 
+async fn ensure_site_owner_membership(
+    db: &DatabaseConnection,
+    user_sub: &str,
+    site_id: Uuid,
+) -> Result<Option<crate::entities::site_membership::Model>, SiteError> {
+    let user = crate::upsert_user_login(db, user_sub)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load user: {error}")))?;
+    let existing = crate::get_membership_for_subject(db, site_id, user_sub)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load membership: {error}")))?;
+    if existing.is_some() {
+        return Ok(None);
+    }
+
+    let membership = create_membership(
+        db,
+        crate::NewMembership {
+            site_id,
+            user_id: user.id,
+            role: "owner".to_string(),
+        },
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to create membership: {error}")))?;
+
+    Ok(Some(membership))
+}
+
 async fn admin_sites_create(
     State(state): State<AdminState>,
     session: Session,
@@ -492,9 +521,6 @@ async fn admin_sites_create(
     match create_site(&state.db, form.short_name, form.full_title, template_name).await {
         Ok(site) => {
             let user_sub = current_user_sub(&session).await?;
-            let user = crate::upsert_user_login(&state.db, &user_sub)
-                .await
-                .map_err(|error| SiteError::internal(format!("failed to load user: {error}")))?;
             let _ = log_audit_event(
                 &state.db,
                 ADMIN_ACTOR_SUB,
@@ -505,24 +531,9 @@ async fn admin_sites_create(
                 Some(json!({ "short_name": &site.short_name, "full_title": &site.full_title })),
             )
             .await;
-            let existing = crate::get_membership_for_subject(&state.db, site.id, &user_sub)
-                .await
-                .map_err(|error| {
-                    SiteError::internal(format!("failed to load membership: {error}"))
-                })?;
-            if existing.is_none() {
-                let membership = create_membership(
-                    &state.db,
-                    crate::NewMembership {
-                        site_id: site.id,
-                        user_id: user.id,
-                        role: "owner".to_string(),
-                    },
-                )
-                .await
-                .map_err(|error| {
-                    SiteError::internal(format!("failed to create membership: {error}"))
-                })?;
+            if let Some(membership) =
+                ensure_site_owner_membership(&state.db, &user_sub, site.id).await?
+            {
                 let _ = log_audit_event(
                     &state.db,
                     ADMIN_ACTOR_SUB,
@@ -2158,5 +2169,40 @@ fn link(href: &str, label: &str) -> AdminLink {
     AdminLink {
         href: href.to_string(),
         label: label.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ensure_site_owner_membership_is_idempotent() {
+        let db = crate::db::db_start("sqlite::memory:")
+            .await
+            .expect("failed to start db");
+        let site = crate::create_site(
+            &db,
+            "test".to_string(),
+            "Test Site".to_string(),
+            DEFAULT_TEMPLATE_NAME.to_string(),
+        )
+        .await
+        .expect("failed to create site");
+
+        let first = match ensure_site_owner_membership(&db, "tester", site.id).await {
+            Ok(value) => value,
+            Err(_) => panic!("failed to create membership"),
+        };
+        assert!(first.is_some(), "expected membership on first call");
+        if let Some(membership) = first {
+            assert_eq!(membership.role, "owner");
+        }
+
+        let second = match ensure_site_owner_membership(&db, "tester", site.id).await {
+            Ok(value) => value,
+            Err(_) => panic!("failed to check membership"),
+        };
+        assert!(second.is_none(), "expected no membership on second call");
     }
 }
