@@ -101,7 +101,6 @@ admin_page_template!(AdminIndexTemplate, "admin_index.html");
 admin_page_template!(AdminSitesNewTemplate, "admin_sites_new.html");
 admin_page_template!(AdminSearchTemplate, "admin_content_search.html");
 admin_page_template!(AdminContentDetailTemplate, "admin_content_detail.html");
-admin_page_template!(AdminContentSourceTemplate, "admin_content_source.html");
 admin_page_template!(AdminContentAdvancedTemplate, "admin_content_advanced.html");
 admin_page_template!(
     AdminContentRevisionsTemplate,
@@ -151,6 +150,21 @@ struct AdminContentNewTemplate {
     tags: Vec<AdminTagOption>,
     links: Vec<AdminLink>,
     heading: String,
+}
+
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_content_source.html")]
+struct AdminContentSourceTemplate {
+    template_shared: AdminTemplateData,
+    heading: String,
+    links: Vec<AdminLink>,
+    title: String,
+    slug: String,
+    page_type: String,
+    draft: bool,
+    published_at: String,
+    page_content: String,
+    assets_html: String,
 }
 
 #[derive(Template, WebTemplate)]
@@ -1363,30 +1377,30 @@ async fn admin_site_content_source(
     let assets_html = render_asset_embed_library(state.db.as_ref(), content.site_id)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load assets: {error}")))?;
+    let preview_href = format!("/{}/", content_primary_route(&content).trim_matches('/'));
+    let back_href = format!("/admin/site/{}/content/{}", content.site_id, content.id);
+    let page_type = content.page_type.to_string();
+    let draft = content.draft;
+    let published_at = content.content_publish_timestamp();
+    let title = content.title;
+    let slug = content.slug;
+    let page_content = content.page_content;
+    let heading = format!("Source: {}", title);
 
     Ok(AdminContentSourceTemplate {
-        template_shared: AdminTemplateData {
-            page_title: "Content Source".to_string(),
-            page_message: None,
-        },
-        heading: format!("Source: {}", content.title),
-        rows: vec![],
+        template_shared: AdminTemplateData::new("Content Source"),
+        heading,
         links: vec![
-            AdminLink::new(
-                &format!("/{}/", content_primary_route(&content).trim_matches('/')),
-                "Preview",
-            ),
-            AdminLink::new(
-                &format!("/admin/site/{}/content/{}", content.site_id, content.id),
-                "Back to content",
-            ),
+            AdminLink::new(&preview_href, "Preview"),
+            AdminLink::new(&back_href, "Back to content"),
         ],
-        inline_body: format!(
-            "{}{}",
-            admin_site_content_source_form_html(&content),
-            assets_html
-        ),
-        pre_body: String::new(),
+        title,
+        slug,
+        page_type,
+        draft,
+        published_at,
+        page_content,
+        assets_html,
     })
 }
 
@@ -1448,59 +1462,6 @@ async fn admin_site_content_source_update(
         "/admin/site/{}/content/{}",
         content.site_id, content.id
     )))
-}
-
-fn admin_site_content_source_form_html(content: &crate::entities::content_item::Model) -> String {
-    let title = escape_html(content.title.as_str());
-    let slug = escape_html(content.slug.as_str());
-    let content_body = escape_html(content.page_content.as_str());
-    let published_at = escape_html(&content.content_publish_timestamp());
-
-    let post_selected = if content.page_type.is_post() {
-        "selected"
-    } else {
-        ""
-    };
-    let page_selected = if content.page_type.is_page() {
-        "selected"
-    } else {
-        ""
-    };
-    let draft_selected = if content.draft { "selected" } else { "" };
-    let published_selected = if content.draft { "" } else { "selected" };
-
-    format!(
-        r#"
-      <form method="post" action="">
-        <label for="page_type">Page Type</label>
-        <select id="page_type" name="page_type" required>
-          <option value="post" {post_selected}>Post</option>
-          <option value="page" {page_selected}>Page</option>
-        </select>
-
-        <label for="title">Title</label>
-        <input id="title" name="title" value="{title}" required />
-
-        <label for="slug">Slug</label>
-        <input id="slug" name="slug" value="{slug}" required />
-
-        <label for="draft">Publish State</label>
-        <select id="draft" name="draft">
-          <option value="true" {draft_selected}>Draft</option>
-          <option value="false" {published_selected}>Published</option>
-        </select>
-
-        <label for="published_at">Published At (RFC3339)</label>
-        <input id="published_at" name="published_at" value="{published_at}" />
-
-        <label for="page_content">Content</label>
-        <div id="editor" class="editor-shell"></div>
-        <textarea id="page_content" name="page_content" rows="14" class="editor-source">{content_body}</textarea>
-
-        <button type="submit">Save content</button>
-      </form>
-    "#
-    )
 }
 
 async fn render_asset_embed_library(

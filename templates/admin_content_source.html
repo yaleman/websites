@@ -1,31 +1,81 @@
 {% extends "base_template.html" %}
 {% block body %}
-{% if !rows.is_empty() %}
-<table>
-  <thead>
-    <tr>
-      <th>Title</th>
-      <th>Value</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for row in rows %}
-    <tr>
-      <td>{{ row.label }}</td>
-      <td>{{ row.value }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% endif %}
+<form method="post" action="" class="editor-form">
+  <div class="form-grid">
+    <div class="form-field">
+      <label for="page_type">Page Type</label>
+      <select id="page_type" name="page_type" required>
+        <option value="post" {% if page_type == "post" %}selected{% endif %}>Post</option>
+        <option value="page" {% if page_type == "page" %}selected{% endif %}>Page</option>
+      </select>
+    </div>
+    <div class="form-field">
+      <label for="title">Title</label>
+      <input id="title" name="title" value="{{ title }}" required />
+    </div>
+    <div class="form-field">
+      <label for="slug">Slug</label>
+      <input id="slug" name="slug" value="{{ slug }}" required />
+    </div>
+    <div class="form-field">
+      <label for="draft">Publish State</label>
+      <select id="draft" name="draft">
+        <option value="true" {% if draft %}selected{% endif %}>Draft</option>
+        <option value="false" {% if !draft %}selected{% endif %}>Published</option>
+      </select>
+    </div>
+    <div class="form-field">
+      <label for="published_at">Published At (RFC3339)</label>
+      <input id="published_at" name="published_at" value="{{ published_at }}" />
+    </div>
+  </div>
 
-{% if !pre_body.is_empty() %}
-<pre>{{ pre_body }}</pre>
-{% endif %}
+  <div class="editor-toolbar" data-editor-toolbar>
+    <div class="editor-toolbar__group">
+      <button type="button" class="editor-button" data-command="bold">Bold</button>
+      <button type="button" class="editor-button" data-command="italic">Italic</button>
+      <button type="button" class="editor-button" data-command="code">Code</button>
+      <button type="button" class="editor-button" data-command="link">Link</button>
+      <button type="button" class="editor-button" data-command="image">Image</button>
+    </div>
+    <div class="editor-toolbar__group">
+      <button type="button" class="editor-button" data-command="h2">H2</button>
+      <button type="button" class="editor-button" data-command="h3">H3</button>
+    </div>
+    <div class="editor-toolbar__group">
+      <button type="button" class="editor-button" data-command="ul">Bullets</button>
+      <button type="button" class="editor-button" data-command="ol">Numbered</button>
+      <button type="button" class="editor-button" data-command="quote">Quote</button>
+    </div>
+    <div class="editor-toolbar__group">
+      <button type="button" class="editor-button" data-command="preview" aria-pressed="false">
+        Preview
+      </button>
+    </div>
+  </div>
+  <div class="editor-image-tools">
+    <div class="form-field">
+      <label for="image_url">Image URL</label>
+      <input id="image_url" type="url" placeholder="https://example.com/image.png" />
+    </div>
+    <div class="form-field">
+      <label for="image_alt">Alt text</label>
+      <input id="image_alt" type="text" placeholder="Describe the image" />
+    </div>
+  </div>
+  <div id="editor" class="editor-shell"></div>
+  <textarea id="page_content" name="page_content" rows="14" class="editor-source">{{ page_content }}</textarea>
+  <section class="editor-preview" data-editor-preview hidden>
+    <div class="editor-preview__header">
+      <h2>Preview</h2>
+    </div>
+    <div class="editor-preview__body" data-editor-preview-body></div>
+  </section>
 
-{% if !inline_body.is_empty() %}
-<section class="inline-body">
-  {{ inline_body | safe }}
-</section>
-{% endif %}
+  <div class="form-actions">
+    <button type="submit" class="save">Save content</button>
+  </div>
+</form>
+
+{{ assets_html | safe }}
 {% endblock %}
