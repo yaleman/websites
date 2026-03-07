@@ -156,9 +156,9 @@ The admin interface is primarily server-rendered.
 
 Templates are stored at:
 
-```
+```text
 
-./templates/<template_name>/
+./site_templates/<template_name>/
 
 ```
 
@@ -197,7 +197,8 @@ Raw HTML inside Markdown is allowed to support imports from existing sites.
 
 project-root/
 ├─ database.sqlite
-├─ templates/
+├─ admin_templates/ 
+├─ site_templates/
 │  ├─ default/
 │  │  ├─ post.html
 │  │  ├─ page.html
@@ -609,7 +610,7 @@ Templates live under:
 
 ```
 
-./templates/<template_name>/
+./site_templates/<template_name>/
 
 ```
 
@@ -617,7 +618,7 @@ Example:
 
 ```
 
-templates/default/
+site_templates/default/
 
 ```
 

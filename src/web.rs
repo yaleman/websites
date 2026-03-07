@@ -62,9 +62,8 @@ macro_rules! admin_page_template {
         #[derive(Template, WebTemplate)]
         #[template(path = $path)]
         struct $name {
-            title: String,
+            template_shared: AdminTemplateData,
             heading: String,
-            message: String,
             rows: Vec<AdminRow>,
             links: Vec<AdminLink>,
             inline_body: String,
@@ -85,18 +84,30 @@ admin_page_template!(
     "admin_content_revisions.html"
 );
 admin_page_template!(AdminRevisionDiffTemplate, "admin_revision_diff.html");
-admin_page_template!(AdminTagsTemplate, "admin_tags.html");
 admin_page_template!(AdminAssetsTemplate, "admin_assets.html");
 admin_page_template!(AdminAssetsNewTemplate, "admin_assets_new.html");
 admin_page_template!(AdminRenderTemplate, "admin_render.html");
 
 #[derive(Template, WebTemplate)]
+#[template(path = "admin_tags.html")]
+struct AdminTagsTemplate {
+    template_shared: AdminTemplateData,
+    heading: String,
+    rows: Vec<AdminRow>,
+    links: Vec<AdminLink>,
+    inline_body: String,
+    pre_body: String,
+    site_id: Uuid,
+}
+
+#[derive(Template, WebTemplate)]
 #[template(path = "sites.html")]
 struct AdminSitesTemplate {
-    title: String,
+    template_data: AdminTemplateData,
+    // title: String,
     heading: String,
-    message: String,
-    sites: Vec<AdminSiteRow>,
+    // message: String,
+    sites: Vec<crate::entities::site::Model>,
     links: Vec<AdminLink>,
 }
 
@@ -114,29 +125,31 @@ struct AdminContentNewTemplate {
     heading: String,
 }
 
+struct AdminTemplateData {
+    page_title: String,
+    page_message: Option<String>,
+}
+
 #[derive(Template, WebTemplate)]
 #[template(path = "site_settings.html")]
 struct AdminSiteSettingsTemplate {
-    title: String,
-    site_id: String,
+    template_data: AdminTemplateData,
+    site_id: Uuid,
     site_short_name: String,
-    message: String,
     full_title: String,
     template_name: String,
-    content_href: String,
-    memberships_href: String,
 }
 
 #[derive(Template, WebTemplate)]
 #[template(path = "memberships.html")]
 struct AdminMembershipsTemplate {
-    title: String,
-    site_id: String,
+    template_data: AdminTemplateData,
+    // title: String,
+    site_id: Uuid,
     site_short_name: String,
-    message: String,
-    content_href: String,
-    settings_href: String,
-    create_href: String,
+    // message: String,
+    // settings_href: String,
+    // create_href: String,
     memberships: Vec<AdminMembershipRow>,
 }
 
@@ -144,13 +157,6 @@ struct AdminMembershipsTemplate {
 struct AdminRow {
     label: String,
     value: String,
-}
-
-#[derive(Debug)]
-struct AdminSiteRow {
-    short_name: String,
-    full_title: String,
-    content_href: String,
 }
 
 #[derive(Debug)]
@@ -468,19 +474,12 @@ async fn admin_index(State(_state): State<AdminState>) -> AdminIndexTemplate {
     ];
 
     AdminIndexTemplate {
-        title: "Admin".to_string(),
+        template_shared: AdminTemplateData {
+            page_title: "Admin Dashboard".to_string(),
+            page_message: None,
+        },
         heading: "Administration".to_string(),
-        message: "".to_string(),
-        rows: vec![
-            // AdminRow {
-            //     label: "Dashboard".to_string(),
-            //     value: "/admin".to_string(),
-            // },
-            // AdminRow {
-            //     label: "Sites list".to_string(),
-            //     value: "/admin/sites".to_string(),
-            // },
-        ],
+        rows: vec![],
         links,
         inline_body: String::new(),
         pre_body: String::new(),
@@ -489,24 +488,15 @@ async fn admin_index(State(_state): State<AdminState>) -> AdminIndexTemplate {
 
 async fn admin_sites(State(state): State<AdminState>) -> Result<AdminSitesTemplate, SiteError> {
     match list_sites(state.db.as_ref()).await {
-        Ok(sites) => {
-            let rows = sites
-                .into_iter()
-                .map(|site| AdminSiteRow {
-                    short_name: site.short_name,
-                    full_title: site.full_title,
-                    content_href: format!("/admin/site/{}/content", site.id),
-                })
-                .collect();
-
-            Ok(AdminSitesTemplate {
-                title: "Sites".to_string(),
-                heading: "Managed Sites".to_string(),
-                message: "".to_string(),
-                links: vec![link("/admin/sites/new", "New site")],
-                sites: rows,
-            })
-        }
+        Ok(sites) => Ok(AdminSitesTemplate {
+            template_data: AdminTemplateData {
+                page_title: "Sites".to_string(),
+                page_message: None,
+            },
+            heading: "Managed Sites".to_string(),
+            links: vec![link("/admin/sites/new", "New site")],
+            sites,
+        }),
         Err(error) => Err(SiteError::internal(format!(
             "failed to load sites: {error}"
         ))),
@@ -515,9 +505,11 @@ async fn admin_sites(State(state): State<AdminState>) -> Result<AdminSitesTempla
 
 async fn admin_sites_new() -> Response {
     AdminSitesNewTemplate {
-        title: "New Site".to_string(),
+        template_shared: AdminTemplateData {
+            page_title: "Create Site".to_string(),
+            page_message: None,
+        },
         heading: "Create Site".to_string(),
-        message: "Use this form to create a site.".to_string(),
         rows: vec![],
         links: vec![link("/admin/sites", "Back to sites")],
         inline_body: admin_sites_new_form_html().to_string(),
@@ -859,9 +851,12 @@ async fn admin_site_content_list(
                 .collect();
 
             Ok(AdminContentListTemplate {
-                title: "Content".to_string(),
+                template_shared: AdminTemplateData {
+                    page_title: "Content".to_string(),
+                    page_message: None,
+                },
                 heading: site.full_title,
-                message: "".to_string(),
+
                 rows,
                 links: vec![
                     link(&format!("/admin/site/{site_id}/content/new"), "New content"),
@@ -922,13 +917,12 @@ async fn admin_site_memberships(
         .collect();
 
     Ok(AdminMembershipsTemplate {
-        title: "Memberships".to_string(),
-        site_id: site.id.to_string(),
+        template_data: AdminTemplateData {
+            page_title: "Memberships".to_string(),
+            page_message: None,
+        },
+        site_id: site.id,
         site_short_name: site.short_name,
-        message: "Manage site membership roles.".to_string(),
-        content_href: format!("/admin/site/{site_id}/content"),
-        settings_href: format!("/admin/site/{site_id}/settings"),
-        create_href: format!("/admin/site/{site_id}/memberships/new"),
         memberships: membership_rows,
     })
 }
@@ -1110,9 +1104,11 @@ async fn admin_site_search(
     }
 
     Ok(AdminSearchTemplate {
-        title: "Search".to_string(),
+        template_shared: AdminTemplateData {
+            page_title: "Search".to_string(),
+            page_message: Some(message),
+        },
         heading: format!("Search Content {site_id}"),
-        message,
         rows,
         links: vec![
             link(&format!("/admin/site/{site_id}/content"), "Back to content"),
@@ -1297,9 +1293,12 @@ async fn admin_site_content_detail(
 
     let route = content_primary_route(&content);
     Ok(AdminContentDetailTemplate {
-        title: "Content Detail".to_string(),
+        template_shared: AdminTemplateData {
+            page_title: "Content Detail".to_string(),
+            page_message: Some(format!("Creator: {}", content.creator_sub)),
+        },
         heading: format!("Content: /{route}"),
-        message: format!("Creator: {}", content.creator_sub),
+
         rows,
         links: vec![
             link(
@@ -1351,9 +1350,11 @@ async fn admin_site_content_source(
         .map_err(|error| SiteError::internal(format!("failed to load assets: {error}")))?;
 
     Ok(AdminContentSourceTemplate {
-        title: "Content Source".to_string(),
+        template_shared: AdminTemplateData {
+            page_title: "Content Source".to_string(),
+            page_message: None,
+        },
         heading: format!("Source: {}", content.title),
-        message: "Edit raw markdown and metadata, then save to create a revision.".to_string(),
         rows: vec![],
         links: vec![
             link(
@@ -1567,9 +1568,11 @@ async fn admin_site_content_advanced(
         })?;
 
     Ok(AdminContentAdvancedTemplate {
-        title: "Content Advanced".to_string(),
+        template_shared: AdminTemplateData {
+            page_title: "Content Advanced View".to_string(),
+            page_message: None,
+        },
         heading: "Advanced content details".to_string(),
-        message: "Computed route and revision-aware detail fields available here.".to_string(),
         rows: vec![
             AdminRow {
                 label: "alias_count".to_string(),
@@ -1638,9 +1641,11 @@ async fn admin_site_content_revisions(
         .collect();
 
     Ok(AdminContentRevisionsTemplate {
-        title: "Content Revisions".to_string(),
+        template_shared: AdminTemplateData {
+            page_title: "Content Revisions".to_string(),
+            page_message: None,
+        },
         heading: format!("Revisions for {content_id}"),
-        message: "Latest revision is first in list order by revision number.".to_string(),
         rows,
         links: vec![link(
             &format!("/admin/site/{site_id}/content/{content_id}"),
@@ -1706,12 +1711,15 @@ async fn admin_site_revision_diff(
     };
 
     Ok(AdminRevisionDiffTemplate {
-        title: "Revision Diff".to_string(),
+        template_shared: AdminTemplateData {
+            page_title: "Revision Diff".to_string(),
+
+            page_message: Some(format!(
+                "Comparing revision {} for content {}.",
+                revision.revision_number, revision.content_id
+            )),
+        },
         heading: format!("Diff for rev-{}", revision.revision_number),
-        message: format!(
-            "Comparing revision {} for content {}.",
-            revision.revision_number, revision.content_id
-        ),
         rows: vec![
             AdminRow {
                 label: "revision_id".to_string(),
@@ -1757,10 +1765,13 @@ async fn admin_site_tags(
                 })
                 .collect();
 
-            Ok(AdminSearchTemplate {
-                title: "Tags".to_string(),
+            Ok(AdminTagsTemplate {
+                template_shared: AdminTemplateData {
+                    page_title: "Tags".to_string(),
+                    page_message: None,
+                },
+                site_id,
                 heading: format!("Site Tags ({site_id})"),
-                message: "Tag definitions for this site.".to_string(),
                 rows,
                 links: vec![link(
                     &format!("/admin/site/{site_id}/content"),
@@ -1796,9 +1807,11 @@ async fn admin_site_assets(
                 .collect();
 
             Ok(AdminAssetsTemplate {
-                title: "Assets".to_string(),
+                template_shared: AdminTemplateData {
+                    page_title: "Assets".to_string(),
+                    page_message: None,
+                },
                 heading: format!("Site Assets ({site_id})"),
-                message: "Upload assets and review metadata and thumbnails.".to_string(),
                 rows,
                 links: vec![
                     link(&format!("/admin/site/{site_id}/assets/new"), "Upload asset"),
@@ -1822,9 +1835,11 @@ async fn admin_site_assets_new(
     require_site_role(&state, &session, site_id, SiteRole::Author).await?;
     match get_by_id(state.db.as_ref(), site_id).await {
         Ok(site) => Ok(AdminAssetsNewTemplate {
-            title: "Upload Asset".to_string(),
+            template_shared: AdminTemplateData {
+                page_title: "Upload Asset".to_string(),
+                page_message: None,
+            },
             heading: format!("Upload Asset {}", site.short_name),
-            message: "Upload a media asset and generate a thumbnail.".to_string(),
             rows: vec![AdminRow {
                 label: "site_id".to_string(),
                 value: site.id.to_string(),
@@ -2172,14 +2187,15 @@ async fn admin_site_settings(
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
 
     Ok(AdminSiteSettingsTemplate {
-        title: "Site Settings".to_string(),
-        site_id: site.id.to_string(),
+        template_data: AdminTemplateData {
+            page_title: "Site Settings".to_string(),
+            page_message: None,
+        },
+
+        site_id: site.id,
         site_short_name: site.short_name,
-        message: "Update site metadata and template selection.".to_string(),
         full_title: site.full_title,
         template_name: site.template_name,
-        content_href: format!("/admin/site/{site_id}/content"),
-        memberships_href: format!("/admin/site/{site_id}/memberships"),
     })
 }
 
@@ -2237,9 +2253,14 @@ async fn admin_site_render(
         .await
         .map_err(|error| SiteError::internal(format!("failed to render site {site_id}: {error}")))
         .map(|files_written| AdminRenderTemplate {
-            title: "Render".to_string(),
+            template_shared: AdminTemplateData {
+                page_title: "Render Site".to_string(),
+                page_message: Some(format!(
+                    "Site rendered with {} file(s) written.",
+                    files_written
+                )),
+            },
             heading: format!("Rendered site {site_id}"),
-            message: format!("Rendered {files_written} file(s)."),
             rows: vec![],
             links: vec![link(
                 &format!("/admin/site/{site_id}/content"),
