@@ -3,6 +3,9 @@
 /admin-ui-assets/editor.js
 /admin-ui-assets/editor.css
 /admin-ui-assets/*.map
+/playwright-report
+/test-results
+.DS_Store
 database.sqlite
 build_rs_cov.profraw
 tarpaulin-report.html

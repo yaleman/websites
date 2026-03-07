@@ -20,6 +20,10 @@ run = "pnpm run build:admin"
 [tasks.frontend_check]
 run = "pnpm install --frozen-lockfile && pnpm exec tsc --noEmit"
 
+[tasks.frontend_e2e]
+depends = ["frontend_build"]
+run = "pnpm exec playwright test"
+
 [tasks.start]
 depends = ["frontend_build"]
 run = "cargo run"

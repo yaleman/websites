@@ -13,6 +13,7 @@
   "license": "ISC",
   "packageManager": "pnpm@10.30.3",
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@rspack/cli": "^1.7.7",
     "@rspack/core": "^1.7.7",
     "typescript": "^5.9.3"
