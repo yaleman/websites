@@ -1103,20 +1103,6 @@ pub async fn get_content(
     Ok(content)
 }
 
-/// Returns a single site by id.
-pub async fn get_site(
-    db: &DatabaseConnection,
-    site_id: Uuid,
-) -> StdResult<entities::site::Model, String> {
-    let model = entities::site::Entity::find_by_id(site_id)
-        .one(db)
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "site not found".to_string())?;
-
-    Ok(model)
-}
-
 /// Creates a content alias entry.
 pub async fn create_alias<C: ConnectionTrait>(
     db: &C,
@@ -1720,8 +1706,8 @@ pub async fn list_asset_variants(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::test_db_start;
     use crate::entities::audit_event::log_audit_event;
+    use crate::{db::test_db_start, entities::site::get_by_id};
     use sea_orm::{DatabaseConnection, TransactionTrait};
     use tempfile::TempDir;
     use tokio::fs;
@@ -1796,7 +1782,7 @@ mod tests {
         let sites = list_sites(&db).await.expect("failed to list sites");
         assert!(sites.iter().any(|model| model.id == site.id));
 
-        let fetched = get_site(&db, site.id).await.expect("failed to get site");
+        let fetched = get_by_id(&db, site.id).await.expect("failed to get site");
         assert_eq!(fetched.id, site.id);
     }
 
@@ -1822,30 +1808,29 @@ mod tests {
     #[tokio::test]
     async fn transaction_rolls_back_on_error() {
         let db = setup_db().await;
+        let txn = db.begin().await.expect("failed to start transaction");
 
-        let result = db
-            .transaction::<_, _, String>(|txn| {
-                Box::pin(async move {
-                    create_site(
-                        txn,
-                        "dupe".to_string(),
-                        "Dupe Site".to_string(),
-                        "default".to_string(),
-                    )
-                    .await?;
-                    create_site(
-                        txn,
-                        "dupe".to_string(),
-                        "Dupe Site 2".to_string(),
-                        "default".to_string(),
-                    )
-                    .await?;
-                    Ok(())
-                })
-            })
-            .await;
+        let site_1 = create_site(
+            &txn,
+            "dupe".to_string(),
+            "Dupe Site".to_string(),
+            "default".to_string(),
+        )
+        .await;
+        let site_2 = create_site(
+            &txn,
+            "dupe".to_string(),
+            "Dupe Site 2".to_string(),
+            "default".to_string(),
+        )
+        .await;
+        assert!(site_1.is_ok(), "expected first site creation to succeed");
+        assert!(
+            site_2.is_err(),
+            "expected second site creation to fail with duplicate short name"
+        );
+        drop(txn);
 
-        assert!(result.is_err(), "expected transaction error");
         let sites = list_sites(&db).await.expect("failed to list sites");
         assert!(sites.is_empty(), "expected no sites after rollback");
     }

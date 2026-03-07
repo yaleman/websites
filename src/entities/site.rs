@@ -2,6 +2,8 @@ use chrono::DateTime as ChronoDateTime;
 use chrono::Utc;
 use sea_orm::entity::prelude::*;
 
+use crate::errors::SiteError;
+
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "site")]
 pub struct Model {
@@ -18,3 +20,13 @@ pub struct Model {
 pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
+
+/// Returns a single site by id.
+pub async fn get_by_id(db: &DatabaseConnection, site_id: Uuid) -> Result<Model, SiteError> {
+    let model = Entity::find_by_id(site_id)
+        .one(db)
+        .await?
+        .ok_or(SiteError::NotFound)?;
+
+    Ok(model)
+}
