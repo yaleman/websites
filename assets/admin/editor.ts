@@ -7,8 +7,47 @@ import "./editor.css";
 
 const bindToolbar = (editor: Editor) => {
   const toolbar = document.querySelector<HTMLElement>("[data-editor-toolbar]");
+  const previewContainer = document.querySelector<HTMLElement>("[data-editor-preview]");
+  const previewBody = document.querySelector<HTMLElement>("[data-editor-preview-body]");
+  const previewButton = toolbar?.querySelector<HTMLButtonElement>(
+    'button[data-command="preview"]',
+  );
+
+  const updatePreview = () => {
+    if (!previewBody) {
+      return;
+    }
+    previewBody.innerHTML = editor.getHTML();
+  };
+
+  const setPreviewVisible = (visible: boolean) => {
+    if (!previewContainer) {
+      return;
+    }
+    if (visible) {
+      previewContainer.removeAttribute("hidden");
+    } else {
+      previewContainer.setAttribute("hidden", "");
+    }
+    if (previewButton) {
+      previewButton.classList.toggle("is-active", visible);
+      previewButton.setAttribute("aria-pressed", visible ? "true" : "false");
+    }
+  };
+
+  const togglePreview = () => {
+    if (!previewContainer) {
+      return;
+    }
+    const willShow = previewContainer.hasAttribute("hidden");
+    setPreviewVisible(willShow);
+    if (willShow) {
+      updatePreview();
+    }
+  };
+
   if (!toolbar) {
-    return;
+    return { updatePreview };
   }
 
   const handleCommand = (commandName: string) => {
@@ -68,6 +107,9 @@ const bindToolbar = (editor: Editor) => {
       case "quote":
         editor.chain().focus().toggleBlockquote().run();
         return;
+      case "preview":
+        togglePreview();
+        return;
       default:
         return;
     }
@@ -92,6 +134,8 @@ const bindToolbar = (editor: Editor) => {
     event.preventDefault();
     handleCommand(commandName);
   });
+
+  return { updatePreview };
 };
 
 const initEditor = () => {
@@ -103,6 +147,8 @@ const initEditor = () => {
   }
 
   textarea.style.display = "none";
+
+  let previewControls = { updatePreview: () => {} };
 
   try {
     const editor = new Editor({
@@ -117,10 +163,12 @@ const initEditor = () => {
       ],
       onUpdate: ({ editor }) => {
         textarea.value = editor.getMarkdown();
+        previewControls.updatePreview();
       },
     });
 
-    bindToolbar(editor);
+    previewControls = bindToolbar(editor);
+    previewControls.updatePreview();
     document.body?.classList.add("editor-ready");
   } catch {
     textarea.style.display = "";
