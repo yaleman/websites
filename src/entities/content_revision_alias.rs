@@ -4,8 +4,8 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "content_revision_alias")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    pub id: String,
-    pub revision_id: String,
+    pub id: Uuid,
+    pub revision_id: Uuid,
     pub alias_path: String,
     pub kind: String,
 }

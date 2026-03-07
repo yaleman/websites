@@ -1,26 +1,24 @@
-use crate::cli::{
-    AssetCommands, AuditCommands, Commands, ContentCommands, OidcConfig, ServeCommands,
-    SiteCommands, UserCommands,
-};
-use chrono::{DateTime, Datelike, SecondsFormat, Utc};
+use crate::entities::PageType;
+use chrono::{DateTime, Datelike, Utc};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, Database, DatabaseBackend,
-    DatabaseConnection, DbErr, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
-    Statement,
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, DbErr, EntityTrait,
+    IntoActiveModel, QueryFilter, QueryOrder, Set,
 };
-use serde_json::json;
+use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::result::Result as StdResult;
-use std::{collections::HashSet, sync::Arc};
+use std::str::FromStr;
 use tera::{Context, Tera};
 use tokio::fs;
+use tracing::error;
 use url::Url;
 use uuid::Uuid;
 
 pub mod cli;
+pub mod db;
 pub mod entities;
 pub mod errors;
 pub mod middleware;
@@ -30,31 +28,31 @@ pub mod tls;
 pub mod web;
 
 pub struct NewContent {
-    pub site_id: String,
-    pub page_type: String,
+    pub site_id: Uuid,
+    pub page_type: PageType,
     pub title: String,
     pub slug: String,
     pub page_content: String,
     pub draft: bool,
     pub creator_sub: String,
-    pub published_at: Option<String>,
+    pub published_at: Option<DateTime<Utc>>,
 }
 
 pub struct NewAlias {
-    pub content_id: String,
-    pub site_id: String,
+    pub content_id: Uuid,
+    pub site_id: Uuid,
     pub alias_path: String,
     pub kind: String,
 }
 
 pub struct NewTag {
-    pub site_id: String,
+    pub site_id: Uuid,
     pub name: String,
 }
 
 pub struct NewContentTag {
-    pub content_id: String,
-    pub site_id: String,
+    pub content_id: Uuid,
+    pub site_id: Uuid,
     pub tag_name: String,
 }
 
@@ -63,13 +61,13 @@ pub struct NewUser {
 }
 
 pub struct NewMembership {
-    pub site_id: String,
-    pub user_id: String,
+    pub site_id: Uuid,
+    pub user_id: Uuid,
     pub role: String,
 }
 
 pub struct NewAsset {
-    pub site_id: String,
+    pub site_id: Uuid,
     pub uploader_sub: String,
     pub original_filename: String,
     pub storage_basename: String,
@@ -80,7 +78,7 @@ pub struct NewAsset {
 }
 
 pub struct NewAssetVariant {
-    pub asset_id: String,
+    pub asset_id: Uuid,
     pub variant_kind: String,
     pub filename: String,
     pub mime_type: String,
@@ -90,28 +88,14 @@ pub struct NewAssetVariant {
 }
 
 pub struct UpdateContent {
-    pub content_id: String,
-    pub page_type: Option<String>,
+    pub content_id: Uuid,
+    pub page_type: Option<PageType>,
     pub title: Option<String>,
     pub slug: Option<String>,
     pub page_content: Option<String>,
     pub draft: Option<bool>,
-    pub published_at: Option<String>,
+    pub published_at: Option<DateTime<Utc>>,
     pub editor_sub: String,
-}
-
-/// Runs all schema statements required by the current platform specification.
-pub async fn ensure_schema(db: &DatabaseConnection) -> StdResult<(), String> {
-    for statement in migration::SCHEMA_SQL {
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            (*statement).to_owned(),
-        ))
-        .await
-        .map_err(|error: DbErr| error.to_string())?;
-    }
-
-    Ok(())
 }
 
 /// Records an audit event for administrative actions.
@@ -121,21 +105,23 @@ pub async fn log_audit_event(
     event_type: &str,
     entity_type: &str,
     entity_id: &str,
-    site_id: Option<&str>,
-    payload_json: Option<&str>,
+    site_id: Option<Uuid>,
+    payload_json: Option<serde_json::Value>,
 ) -> StdResult<entities::audit_event::Model, String> {
     let model = entities::audit_event::ActiveModel {
-        id: Set(uuid_v7()),
-        site_id: Set(site_id.map(ToString::to_string)),
+        id: Set(Uuid::now_v7()),
+        site_id: Set(site_id),
         actor_sub: Set(actor_sub.to_string()),
         event_type: Set(event_type.to_string()),
         entity_type: Set(entity_type.to_string()),
         entity_id: Set(entity_id.to_string()),
-        created_at: Set(utc_now()),
-        payload_json: Set(payload_json.map(ToString::to_string)),
+        created_at: Set(Utc::now()),
+        payload_json: Set(payload_json),
     };
 
-    let model = model.insert(db).await.map_err(|error| error.to_string())?;
+    let model = model.insert(db).await.map_err(|error| {
+        error!("Failed to create audit event: {error}");
+        error.to_string()})?;
 
     Ok(model)
 }
@@ -143,11 +129,11 @@ pub async fn log_audit_event(
 /// Returns audit events, optionally filtered by site_id.
 pub async fn list_audit_events(
     db: &DatabaseConnection,
-    site_id: Option<&str>,
+    site_id: Option<Uuid>,
 ) -> StdResult<Vec<entities::audit_event::Model>, String> {
     let query = entities::audit_event::Entity::find();
     let query = if let Some(site_id) = site_id {
-        query.filter(entities::audit_event::Column::SiteId.eq(site_id.to_owned()))
+        query.filter(entities::audit_event::Column::SiteId.eq(site_id))
     } else {
         query
     };
@@ -170,18 +156,18 @@ const DEFAULT_TAG_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"u
 /// Renders all published content for a site into ./rendered/<site_short_name>.
 pub async fn render_site(
     db: &DatabaseConnection,
-    site_id: &str,
+    site_id: Uuid,
     templates_dir: &str,
     rendered_dir: &str,
 ) -> StdResult<usize, String> {
-    let site = entities::site::Entity::find_by_id(site_id.to_owned())
+    let site = entities::site::Entity::find_by_id(site_id)
         .one(db)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "site not found".to_string())?;
 
     let content_items = entities::content_item::Entity::find()
-        .filter(entities::content_item::Column::SiteId.eq(site.id.clone()))
+        .filter(entities::content_item::Column::SiteId.eq(site.id))
         .filter(entities::content_item::Column::Draft.eq(false))
         .order_by_desc(entities::content_item::Column::CreatedAt)
         .all(db)
@@ -245,7 +231,7 @@ pub async fn render_site(
         routes.insert(content_primary_route(item));
 
         let aliases = entities::content_alias::Entity::find()
-            .filter(entities::content_alias::Column::ContentId.eq(item.id.clone()))
+            .filter(entities::content_alias::Column::ContentId.eq(item.id))
             .all(db)
             .await
             .map_err(|error: DbErr| error.to_string())?;
@@ -254,12 +240,12 @@ pub async fn render_site(
         }
 
         let html = markdown::to_html(&item.page_content);
-        let template = if item.page_type == "post" {
+        let template = if item.page_type == PageType::Post {
             "post.html"
         } else {
             "page.html"
         };
-        let tags = load_tag_names(db, &item.id).await?;
+        let tags = load_tag_names(db, item.id).await?;
         let tag_links = render_tag_links(&tags);
         let mut context = Context::new();
         context.insert("title", &item.title);
@@ -317,7 +303,7 @@ pub async fn render_site(
 
     let post_items = content_items
         .iter()
-        .filter(|item| item.page_type == "post")
+        .filter(|item| item.page_type.is_post())
         .cloned()
         .collect::<Vec<_>>();
 
@@ -336,7 +322,7 @@ pub async fn render_site(
     let atom_entries = render_atom_entries_xml(&post_items);
     let updated = post_items
         .first()
-        .map(content_publish_timestamp)
+        .map(|m| m.content_publish_timestamp())
         .unwrap_or_else(|| Utc::now().to_rfc3339());
     let mut atom_context = Context::new();
     atom_context.insert("site", &site.full_title);
@@ -350,7 +336,7 @@ pub async fn render_site(
     files_written = files_written.saturating_add(1);
 
     let tags = entities::tag::Entity::find()
-        .filter(entities::tag::Column::SiteId.eq(site.id.clone()))
+        .filter(entities::tag::Column::SiteId.eq(site.id))
         .all(db)
         .await
         .map_err(|error: DbErr| error.to_string())?;
@@ -358,7 +344,7 @@ pub async fn render_site(
     for tag in tags {
         let mut tag_rows = String::new();
         let links = entities::content_tag::Entity::find()
-            .filter(entities::content_tag::Column::TagId.eq(tag.id.clone()))
+            .filter(entities::content_tag::Column::TagId.eq(tag.id))
             .all(db)
             .await
             .map_err(|error: DbErr| error.to_string())?;
@@ -408,7 +394,7 @@ pub async fn render_site(
     let uploads_root = Path::new("uploads/media-storage");
     copy_media_variants(
         db,
-        &site.id,
+        site.id,
         uploads_root,
         &tmp_root.join("media/images"),
         &mut files_written,
@@ -480,13 +466,13 @@ async fn copy_directory_recursive(
 
 async fn copy_media_variants(
     db: &sea_orm::DatabaseConnection,
-    site_id: &str,
+    site_id: Uuid,
     source_root: &Path,
     destination_root: &Path,
     files_written: &mut usize,
 ) -> StdResult<(), String> {
     let assets = entities::asset::Entity::find()
-        .filter(entities::asset::Column::SiteId.eq(site_id.to_string()))
+        .filter(entities::asset::Column::SiteId.eq(site_id))
         .all(db)
         .await
         .map_err(|error: DbErr| error.to_string())?;
@@ -568,10 +554,10 @@ fn sanitize_tag_slug(tag_name: &str) -> String {
 
 async fn load_tag_names(
     db: &DatabaseConnection,
-    content_id: &str,
+    content_id: Uuid,
 ) -> StdResult<Vec<String>, String> {
     let links = entities::content_tag::Entity::find()
-        .filter(entities::content_tag::Column::ContentId.eq(content_id.to_owned()))
+        .filter(entities::content_tag::Column::ContentId.eq(content_id))
         .all(db)
         .await
         .map_err(|error: DbErr| error.to_string())?;
@@ -607,11 +593,11 @@ fn render_tag_links(tags: &[String]) -> String {
 fn render_rss_items_xml(content_items: &[entities::content_item::Model]) -> String {
     let mut rows = String::new();
     for item in content_items {
+        let pub_date = item.content_publish_timestamp_rfc2822();
         let route = content_primary_route(item);
         let route = route.trim_matches('/');
         let link = format!("/{route}/");
         let summary = escape_xml_text(item.page_content.as_str());
-        let pub_date = content_publish_timestamp_rfc2822(item);
         let title = escape_xml_text(item.title.as_str());
         rows.push_str(&format!(
             "<item><title>{}</title><link>{}</link><guid isPermaLink=\"false\">{}</guid><pubDate>{}</pubDate><description>{}</description></item>",
@@ -627,9 +613,9 @@ fn render_atom_entries_xml(content_items: &[entities::content_item::Model]) -> S
         let route = content_primary_route(item);
         let route = route.trim_matches('/');
         let link = format!("/{route}/");
-        let updated = content_publish_timestamp(item);
+        let updated = item.content_publish_timestamp();
         let title = escape_xml_text(item.title.as_str());
-        let published = content_publish_timestamp_rfc2822(item);
+        let published = item.content_publish_timestamp_rfc2822();
         let summary = escape_xml_text(item.page_content.as_str());
         rows.push_str(&format!(
             "<entry><title>{}</title><link href=\"{}\"/><id>{}</id><published>{}</published><updated>{}</updated><summary>{}</summary></entry>",
@@ -648,27 +634,9 @@ fn escape_xml_text(input: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-fn content_publish_timestamp(content: &entities::content_item::Model) -> String {
-    content
-        .published_at
-        .clone()
-        .unwrap_or_else(|| content.created_at.clone())
-}
-
-fn content_publish_timestamp_rfc2822(content: &entities::content_item::Model) -> String {
-    DateTime::parse_from_rfc3339(content_publish_timestamp(content).as_str())
-        .map(|timestamp| timestamp.to_rfc2822())
-        .unwrap_or_else(|_| Utc::now().to_rfc2822())
-}
-
 fn content_is_publishable_at(content: &entities::content_item::Model, now: DateTime<Utc>) -> bool {
-    let timestamp = content
-        .published_at
-        .as_deref()
-        .unwrap_or(content.created_at.as_str());
-    DateTime::parse_from_rfc3339(timestamp)
-        .map(|value| value.with_timezone(&Utc) <= now)
-        .unwrap_or(true)
+    let timestamp = content.published_at.unwrap_or(content.created_at);
+    timestamp <= now
 }
 
 /// Creates a site record and returns the persisted row.
@@ -678,17 +646,20 @@ pub async fn create_site(
     full_title: String,
     template_name: String,
 ) -> StdResult<entities::site::Model, String> {
-    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let now = Utc::now();
     let model = entities::site::ActiveModel {
-        id: Set(uuid_v7()),
+        id: Set(Uuid::now_v7()),
         short_name: Set(short_name),
         full_title: Set(full_title),
         template_name: Set(template_name),
-        created_at: Set(now.clone()),
-        updated_at: Set(now),
+        created_at: Set(now),
+        updated_at: Set(None),
     };
 
-    let model = model.insert(db).await.map_err(|error| error.to_string())?;
+    let model = model.insert(db).await.map_err(|error| {
+        error!("Failed to insert site into db! {error}");
+        error.to_string()
+    })?;
 
     Ok(model)
 }
@@ -703,22 +674,14 @@ pub async fn list_sites(db: &DatabaseConnection) -> StdResult<Vec<entities::site
     Ok(sites)
 }
 
-fn uuid_v7() -> String {
-    Uuid::now_v7().to_string()
-}
-
-fn utc_now() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
 /// Creates one content record and one revision snapshot in the same operation.
 pub async fn create_content(
     db: &DatabaseConnection,
     input: NewContent,
 ) -> StdResult<entities::content_item::Model, String> {
-    let now = utc_now();
-    let content_id = uuid_v7();
-    let revision_id = uuid_v7();
+    let now = Utc::now();
+    let content_id = Uuid::now_v7();
+    let revision_id = Uuid::now_v7();
     let NewContent {
         site_id,
         page_type,
@@ -731,22 +694,22 @@ pub async fn create_content(
     } = input;
 
     let published_at = if !draft {
-        Some(published_at.unwrap_or_else(utc_now))
+        Some(published_at.unwrap_or(Utc::now()))
     } else {
         published_at
     };
 
     let content = entities::content_item::ActiveModel {
-        id: Set(content_id.clone()),
-        site_id: Set(site_id.clone()),
-        page_type: Set(page_type.clone()),
+        id: Set(content_id),
+        site_id: Set(site_id),
+        page_type: Set(page_type),
         title: Set(title.clone()),
         slug: Set(slug.clone()),
         page_content: Set(page_content.clone()),
         draft: Set(draft),
         creator_sub: Set(creator_sub),
-        created_at: Set(now.clone()),
-        last_updated: Set(now.clone()),
+        created_at: Set(now),
+        last_updated: Set(None),
         published_at: Set(published_at),
     }
     .insert(db)
@@ -755,7 +718,7 @@ pub async fn create_content(
 
     let revision = entities::content_revision::ActiveModel {
         id: Set(revision_id),
-        content_id: Set(content.id.clone()),
+        content_id: Set(content.id),
         site_id: Set(site_id),
         revision_number: Set(1),
         title: Set(title),
@@ -764,7 +727,7 @@ pub async fn create_content(
         draft: Set(draft),
         page_type: Set(page_type),
         editor_sub: Set(content.creator_sub.clone()),
-        created_at: Set(now.clone()),
+        created_at: Set(now),
     }
     .insert(db)
     .await
@@ -780,8 +743,8 @@ pub async fn update_content(
     db: &DatabaseConnection,
     input: UpdateContent,
 ) -> StdResult<entities::content_item::Model, String> {
-    let now = utc_now();
-    let existing = entities::content_item::Entity::find_by_id(&input.content_id)
+    let now = Utc::now();
+    let existing = entities::content_item::Entity::find_by_id(input.content_id)
         .one(db)
         .await
         .map_err(|error| error.to_string())?
@@ -791,9 +754,9 @@ pub async fn update_content(
     let published_at = if let Some(published_at) = input.published_at {
         Some(published_at)
     } else if publish_now {
-        Some(now.clone())
+        Some(now)
     } else {
-        existing.published_at.clone()
+        existing.published_at
     };
 
     let mut active = existing.clone().into_active_model();
@@ -813,7 +776,7 @@ pub async fn update_content(
         active.draft = Set(draft);
     }
     active.published_at = Set(published_at);
-    active.last_updated = Set(now.clone());
+    active.last_updated = Set(Some(now));
 
     let content: entities::content_item::Model = active
         .update(db)
@@ -821,7 +784,7 @@ pub async fn update_content(
         .map_err(|error: DbErr| error.to_string())?;
 
     let revisions = entities::content_revision::Entity::find()
-        .filter(entities::content_revision::Column::ContentId.eq(input.content_id.as_str()))
+        .filter(entities::content_revision::Column::ContentId.eq(input.content_id))
         .all(db)
         .await
         .map_err(|error: DbErr| error.to_string())?;
@@ -830,15 +793,15 @@ pub async fn update_content(
         .saturating_add(1);
 
     let revision = entities::content_revision::ActiveModel {
-        id: Set(uuid_v7()),
-        content_id: Set(content.id.clone()),
-        site_id: Set(content.site_id.clone()),
+        id: Set(Uuid::now_v7()),
+        content_id: Set(content.id),
+        site_id: Set(content.site_id),
         revision_number: Set(revision_number),
         title: Set(content.title.clone()),
         slug: Set(content.slug.clone()),
         page_content: Set(content.page_content.clone()),
         draft: Set(content.draft),
-        page_type: Set(content.page_type.clone()),
+        page_type: Set(content.page_type),
         editor_sub: Set(input.editor_sub),
         created_at: Set(now),
     }
@@ -847,15 +810,15 @@ pub async fn update_content(
     .map_err(|error| error.to_string())?;
 
     let content_tags = entities::content_tag::Entity::find()
-        .filter(entities::content_tag::Column::ContentId.eq(content.id.clone()))
+        .filter(entities::content_tag::Column::ContentId.eq(content.id))
         .all(db)
         .await
         .map_err(|error: DbErr| error.to_string())?;
 
     for content_tag in content_tags {
         entities::content_revision_tag::ActiveModel {
-            id: Set(uuid_v7()),
-            revision_id: Set(revision.id.clone()),
+            id: Set(Uuid::now_v7()),
+            revision_id: Set(revision.id),
             tag_id: Set(content_tag.tag_id),
         }
         .insert(db)
@@ -864,15 +827,15 @@ pub async fn update_content(
     }
 
     let aliases = entities::content_alias::Entity::find()
-        .filter(entities::content_alias::Column::ContentId.eq(content.id.clone()))
+        .filter(entities::content_alias::Column::ContentId.eq(content.id))
         .all(db)
         .await
         .map_err(|error: DbErr| error.to_string())?;
 
     for alias in aliases {
         let _revision_alias = entities::content_revision_alias::ActiveModel {
-            id: Set(uuid_v7()),
-            revision_id: Set(revision.id.clone()),
+            id: Set(Uuid::now_v7()),
+            revision_id: Set(revision.id),
             alias_path: Set(alias.alias_path),
             kind: Set(alias.kind),
         }
@@ -887,13 +850,13 @@ pub async fn update_content(
 /// Returns all content records for a site, optionally filtered by page_type.
 pub async fn list_content(
     db: &DatabaseConnection,
-    site_id: &str,
-    page_type: Option<&str>,
+    site_id: Uuid,
+    page_type: Option<PageType>,
 ) -> StdResult<Vec<entities::content_item::Model>, String> {
     let query = entities::content_item::Entity::find()
-        .filter(entities::content_item::Column::SiteId.eq(site_id.to_owned()));
+        .filter(entities::content_item::Column::SiteId.eq(site_id));
     let query = if let Some(filter) = page_type {
-        query.filter(entities::content_item::Column::PageType.eq(filter.to_owned()))
+        query.filter(entities::content_item::Column::PageType.eq(filter))
     } else {
         query
     };
@@ -906,7 +869,7 @@ pub async fn list_content(
 /// Search content for a site by title, slug, or body substring.
 pub async fn search_content(
     db: &DatabaseConnection,
-    site_id: &str,
+    site_id: Uuid,
     query: &str,
 ) -> StdResult<Vec<entities::content_item::Model>, String> {
     let condition = Condition::any()
@@ -915,7 +878,7 @@ pub async fn search_content(
         .add(entities::content_item::Column::PageContent.contains(query));
 
     let items = entities::content_item::Entity::find()
-        .filter(entities::content_item::Column::SiteId.eq(site_id.to_owned()))
+        .filter(entities::content_item::Column::SiteId.eq(site_id))
         .filter(condition)
         .all(db)
         .await
@@ -938,7 +901,7 @@ struct WordpressItem {
 
 pub async fn import_wordpress(
     db: &DatabaseConnection,
-    site_id: &str,
+    site_id: Uuid,
     file_path: &str,
     creator_sub: &str,
 ) -> StdResult<usize, String> {
@@ -949,10 +912,8 @@ pub async fn import_wordpress(
     let mut imported = 0usize;
 
     for item in items {
-        let post_type = item.post_type.unwrap_or_else(|| "post".to_string());
-        if post_type != "post" && post_type != "page" {
-            continue;
-        }
+        let post_type = PageType::from_str(&item.post_type.unwrap_or_else(|| "post".to_string()))
+            .unwrap_or(PageType::Post);
 
         let title = item.title.unwrap_or_else(|| "Untitled".to_string());
         let slug = item
@@ -970,7 +931,7 @@ pub async fn import_wordpress(
         let content_model = create_content(
             db,
             NewContent {
-                site_id: site_id.to_string(),
+                site_id,
                 page_type: post_type,
                 title,
                 slug,
@@ -987,8 +948,8 @@ pub async fn import_wordpress(
             let _ = create_alias(
                 db,
                 NewAlias {
-                    content_id: content_model.id.clone(),
-                    site_id: site_id.to_string(),
+                    content_id: content_model.id,
+                    site_id,
                     alias_path,
                     kind: "alias".to_string(),
                 },
@@ -1002,8 +963,8 @@ pub async fn import_wordpress(
             let _ = create_alias(
                 db,
                 NewAlias {
-                    content_id: content_model.id.clone(),
-                    site_id: site_id.to_string(),
+                    content_id: content_model.id,
+                    site_id,
                     alias_path,
                     kind: "alias".to_string(),
                 },
@@ -1085,12 +1046,15 @@ fn assign_wordpress_field(item: &mut WordpressItem, tag: &str, value: &str) {
     }
 }
 
-fn wordpress_date_to_rfc3339(value: &str) -> Option<String> {
+fn wordpress_date_to_rfc3339(value: &str) -> Option<DateTime<Utc>> {
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed == "0000-00-00 00:00:00" {
         return None;
     }
-    Some(format!("{}Z", trimmed.replace(' ', "T")))
+    let rfc3339 = format!("{}Z", trimmed.replace(' ', "T"));
+    DateTime::parse_from_rfc3339(&rfc3339)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
 }
 
 fn wordpress_link_to_alias(link: &str) -> Option<String> {
@@ -1134,7 +1098,7 @@ fn normalize_slug(value: &str) -> String {
 /// Returns a single content item by id.
 pub async fn get_content(
     db: &DatabaseConnection,
-    content_id: &str,
+    content_id: Uuid,
 ) -> StdResult<entities::content_item::Model, String> {
     let content = entities::content_item::Entity::find_by_id(content_id)
         .one(db)
@@ -1148,9 +1112,9 @@ pub async fn get_content(
 /// Returns a single site by id.
 pub async fn get_site(
     db: &DatabaseConnection,
-    site_id: &str,
+    site_id: Uuid,
 ) -> StdResult<entities::site::Model, String> {
-    let model = entities::site::Entity::find_by_id(site_id.to_owned())
+    let model = entities::site::Entity::find_by_id(site_id)
         .one(db)
         .await
         .map_err(|error| error.to_string())?
@@ -1165,7 +1129,7 @@ pub async fn create_alias(
     input: NewAlias,
 ) -> StdResult<entities::content_alias::Model, String> {
     let model = entities::content_alias::ActiveModel {
-        id: Set(uuid_v7()),
+        id: Set(Uuid::now_v7()),
         content_id: Set(input.content_id),
         site_id: Set(input.site_id),
         alias_path: Set(input.alias_path),
@@ -1181,13 +1145,13 @@ pub async fn create_alias(
 /// Returns all content aliases, optionally scoped to content_id.
 pub async fn list_aliases(
     db: &DatabaseConnection,
-    site_id: &str,
-    content_id: Option<&str>,
+    site_id: Uuid,
+    content_id: Option<Uuid>,
 ) -> StdResult<Vec<entities::content_alias::Model>, String> {
     let query = entities::content_alias::Entity::find()
-        .filter(entities::content_alias::Column::SiteId.eq(site_id.to_owned()));
+        .filter(entities::content_alias::Column::SiteId.eq(site_id));
     let query = if let Some(content_id) = content_id {
-        query.filter(entities::content_alias::Column::ContentId.eq(content_id.to_owned()))
+        query.filter(entities::content_alias::Column::ContentId.eq(content_id))
     } else {
         query
     };
@@ -1203,7 +1167,7 @@ pub async fn create_tag(
     input: NewTag,
 ) -> StdResult<entities::tag::Model, String> {
     let model = entities::tag::ActiveModel {
-        id: Set(uuid_v7()),
+        id: Set(Uuid::now_v7()),
         site_id: Set(input.site_id),
         name: Set(input.name),
     };
@@ -1216,10 +1180,10 @@ pub async fn create_tag(
 /// Returns all tags for a site.
 pub async fn list_tags(
     db: &DatabaseConnection,
-    site_id: &str,
+    site_id: Uuid,
 ) -> StdResult<Vec<entities::tag::Model>, String> {
     let tags = entities::tag::Entity::find()
-        .filter(entities::tag::Column::SiteId.eq(site_id.to_owned()))
+        .filter(entities::tag::Column::SiteId.eq(site_id))
         .all(db)
         .await
         .map_err(|error| error.to_string())?;
@@ -1232,7 +1196,7 @@ pub async fn add_content_tag(
     db: &DatabaseConnection,
     input: NewContentTag,
 ) -> StdResult<entities::content_tag::Model, String> {
-    let content = entities::content_item::Entity::find_by_id(&input.content_id)
+    let content = entities::content_item::Entity::find_by_id(input.content_id)
         .one(db)
         .await
         .map_err(|error| error.to_string())?
@@ -1243,7 +1207,7 @@ pub async fn add_content_tag(
     }
 
     let tag = if let Some(tag) = entities::tag::Entity::find()
-        .filter(entities::tag::Column::SiteId.eq(input.site_id.as_str()))
+        .filter(entities::tag::Column::SiteId.eq(input.site_id))
         .filter(entities::tag::Column::Name.eq(input.tag_name.clone()))
         .one(db)
         .await
@@ -1252,8 +1216,8 @@ pub async fn add_content_tag(
         tag
     } else {
         entities::tag::ActiveModel {
-            id: Set(uuid_v7()),
-            site_id: Set(input.site_id.clone()),
+            id: Set(Uuid::now_v7()),
+            site_id: Set(input.site_id),
             name: Set(input.tag_name),
         }
         .insert(db)
@@ -1262,7 +1226,7 @@ pub async fn add_content_tag(
     };
 
     let model = entities::content_tag::ActiveModel {
-        id: Set(uuid_v7()),
+        id: Set(Uuid::now_v7()),
         content_id: Set(input.content_id),
         tag_id: Set(tag.id),
     }
@@ -1276,10 +1240,10 @@ pub async fn add_content_tag(
 /// Returns tags currently attached to a content item.
 pub async fn list_content_tags(
     db: &DatabaseConnection,
-    content_id: &str,
+    content_id: Uuid,
 ) -> StdResult<Vec<entities::tag::Model>, String> {
     let links = entities::content_tag::Entity::find()
-        .filter(entities::content_tag::Column::ContentId.eq(content_id.to_owned()))
+        .filter(entities::content_tag::Column::ContentId.eq(content_id))
         .all(db)
         .await
         .map_err(|error| error.to_string())?;
@@ -1304,10 +1268,10 @@ pub async fn list_content_tags(
 /// Returns all aliases for a specific content revision.
 pub async fn list_revision_aliases(
     db: &DatabaseConnection,
-    revision_id: &str,
+    revision_id: Uuid,
 ) -> StdResult<Vec<entities::content_revision_alias::Model>, String> {
     let revision_aliases = entities::content_revision_alias::Entity::find()
-        .filter(entities::content_revision_alias::Column::RevisionId.eq(revision_id.to_owned()))
+        .filter(entities::content_revision_alias::Column::RevisionId.eq(revision_id))
         .all(db)
         .await
         .map_err(|error| error.to_string())?;
@@ -1318,10 +1282,10 @@ pub async fn list_revision_aliases(
 /// Returns all tags captured for a specific content revision.
 pub async fn list_revision_tags(
     db: &DatabaseConnection,
-    revision_id: &str,
+    revision_id: Uuid,
 ) -> StdResult<Vec<entities::tag::Model>, String> {
     let links = entities::content_revision_tag::Entity::find()
-        .filter(entities::content_revision_tag::Column::RevisionId.eq(revision_id.to_owned()))
+        .filter(entities::content_revision_tag::Column::RevisionId.eq(revision_id))
         .all(db)
         .await
         .map_err(|error| error.to_string())?;
@@ -1346,10 +1310,10 @@ pub async fn list_revision_tags(
 /// Returns all revisions for a content item sorted by revision number.
 pub async fn list_revisions(
     db: &DatabaseConnection,
-    content_id: &str,
+    content_id: Uuid,
 ) -> StdResult<Vec<entities::content_revision::Model>, String> {
     let revisions = entities::content_revision::Entity::find()
-        .filter(entities::content_revision::Column::ContentId.eq(content_id.to_owned()))
+        .filter(entities::content_revision::Column::ContentId.eq(content_id))
         .order_by_desc(entities::content_revision::Column::RevisionNumber)
         .all(db)
         .await
@@ -1361,7 +1325,7 @@ pub async fn list_revisions(
 /// Returns a single revision by id.
 pub async fn get_revision(
     db: &DatabaseConnection,
-    revision_id: &str,
+    revision_id: Uuid,
 ) -> StdResult<entities::content_revision::Model, String> {
     let revision = entities::content_revision::Entity::find_by_id(revision_id)
         .one(db)
@@ -1375,11 +1339,11 @@ pub async fn get_revision(
 /// Returns a revision by number, if present.
 pub async fn get_revision_by_number(
     db: &DatabaseConnection,
-    content_id: &str,
+    content_id: Uuid,
     revision_number: i32,
 ) -> StdResult<Option<entities::content_revision::Model>, String> {
     let revision = entities::content_revision::Entity::find()
-        .filter(entities::content_revision::Column::ContentId.eq(content_id.to_owned()))
+        .filter(entities::content_revision::Column::ContentId.eq(content_id))
         .filter(entities::content_revision::Column::RevisionNumber.eq(revision_number))
         .one(db)
         .await
@@ -1390,26 +1354,17 @@ pub async fn get_revision_by_number(
 
 pub fn content_primary_route(content: &entities::content_item::Model) -> String {
     let slug = content.slug.trim_matches('/').to_string();
-    if content.page_type != "post" {
+    if content.page_type.is_post() {
         return slug;
     }
 
-    let date_source = content
-        .published_at
-        .as_deref()
-        .unwrap_or(content.created_at.as_str());
+    let date_source = content.published_at.unwrap_or(content.created_at);
 
-    format!(
-        "{}/{}",
-        content_date_path(date_source).unwrap_or_else(|| "0000/00/00".to_string()),
-        slug
-    )
+    format!("{}/{}", content_date_path(&date_source), slug)
 }
 
-fn content_date_path(value: &str) -> Option<String> {
-    DateTime::parse_from_rfc3339(value)
-        .ok()
-        .map(|date| format!("{:04}/{:02}/{:02}", date.year(), date.month(), date.day()))
+fn content_date_path(date: &DateTime<Utc>) -> String {
+    format!("{:04}/{:02}/{:02}", date.year(), date.month(), date.day())
 }
 
 /// Creates a user record and returns the persisted row.
@@ -1418,9 +1373,9 @@ pub async fn create_user(
     input: NewUser,
 ) -> StdResult<entities::user::Model, String> {
     let model = entities::user::ActiveModel {
-        id: Set(uuid_v7()),
+        id: Set(Uuid::now_v7()),
         subject: Set(input.subject),
-        created_at: Set(utc_now()),
+        created_at: Set(Utc::now()),
         last_login_at: Set(None),
     };
 
@@ -1452,14 +1407,14 @@ pub async fn upsert_user_login(
 
     let user = if let Some(existing) = existing {
         let mut active = existing.into_active_model();
-        active.last_login_at = Set(Some(utc_now()));
+        active.last_login_at = Set(Some(Utc::now()));
         active.update(db).await.map_err(|error| error.to_string())?
     } else {
         entities::user::ActiveModel {
-            id: Set(uuid_v7()),
+            id: Set(Uuid::now_v7()),
             subject: Set(subject.to_string()),
-            created_at: Set(utc_now()),
-            last_login_at: Set(Some(utc_now())),
+            created_at: Set(Utc::now()),
+            last_login_at: Set(Some(Utc::now())),
         }
         .insert(db)
         .await
@@ -1475,7 +1430,7 @@ pub async fn create_membership(
     input: NewMembership,
 ) -> StdResult<entities::site_membership::Model, String> {
     let model = entities::site_membership::ActiveModel {
-        id: Set(uuid_v7()),
+        id: Set(Uuid::now_v7()),
         site_id: Set(input.site_id),
         user_id: Set(input.user_id),
         role: Set(input.role),
@@ -1489,10 +1444,10 @@ pub async fn create_membership(
 /// Returns memberships for a site.
 pub async fn list_memberships(
     db: &DatabaseConnection,
-    site_id: &str,
+    site_id: Uuid,
 ) -> StdResult<Vec<entities::site_membership::Model>, String> {
     let memberships = entities::site_membership::Entity::find()
-        .filter(entities::site_membership::Column::SiteId.eq(site_id.to_owned()))
+        .filter(entities::site_membership::Column::SiteId.eq(site_id))
         .all(db)
         .await
         .map_err(|error| error.to_string())?;
@@ -1506,7 +1461,7 @@ pub async fn create_asset(
     input: NewAsset,
 ) -> StdResult<entities::asset::Model, String> {
     let model = entities::asset::ActiveModel {
-        id: Set(uuid_v7()),
+        id: Set(Uuid::now_v7()),
         site_id: Set(input.site_id),
         uploader_sub: Set(input.uploader_sub),
         original_filename: Set(input.original_filename),
@@ -1515,7 +1470,7 @@ pub async fn create_asset(
         byte_length: Set(input.byte_length),
         width: Set(input.width),
         height: Set(input.height),
-        created_at: Set(utc_now()),
+        created_at: Set(Utc::now()),
     };
 
     let model = model.insert(db).await.map_err(|error| error.to_string())?;
@@ -1526,10 +1481,10 @@ pub async fn create_asset(
 /// Returns all assets for a site.
 pub async fn list_assets(
     db: &DatabaseConnection,
-    site_id: &str,
+    site_id: Uuid,
 ) -> StdResult<Vec<entities::asset::Model>, String> {
     let assets = entities::asset::Entity::find()
-        .filter(entities::asset::Column::SiteId.eq(site_id.to_owned()))
+        .filter(entities::asset::Column::SiteId.eq(site_id))
         .all(db)
         .await
         .map_err(|error| error.to_string())?;
@@ -1543,7 +1498,7 @@ pub async fn create_asset_variant(
     input: NewAssetVariant,
 ) -> StdResult<entities::asset_variant::Model, String> {
     let model = entities::asset_variant::ActiveModel {
-        id: Set(uuid_v7()),
+        id: Set(Uuid::now_v7()),
         asset_id: Set(input.asset_id),
         variant_kind: Set(input.variant_kind),
         filename: Set(input.filename),
@@ -1561,677 +1516,13 @@ pub async fn create_asset_variant(
 /// Returns all variants for an asset.
 pub async fn list_asset_variants(
     db: &DatabaseConnection,
-    asset_id: &str,
+    asset_id: Uuid,
 ) -> StdResult<Vec<entities::asset_variant::Model>, String> {
     let variants = entities::asset_variant::Entity::find()
-        .filter(entities::asset_variant::Column::AssetId.eq(asset_id.to_owned()))
+        .filter(entities::asset_variant::Column::AssetId.eq(asset_id))
         .all(db)
         .await
         .map_err(|error| error.to_string())?;
 
     Ok(variants)
-}
-
-pub async fn execute(
-    command: Commands,
-    database_url: &str,
-    oidc: &OidcConfig,
-) -> Result<(), String> {
-    let db = Arc::new(
-        Database::connect(database_url)
-            .await
-            .map_err(|error| error.to_string())?,
-    );
-    match command {
-        Commands::Init => {
-            ensure_schema(&db).await?;
-            println!("database initialized: {}", database_url);
-            Ok(())
-        }
-        Commands::ShowConfig => {
-            println!("tls_cert_path={:?}", &oidc.tls_cert_path.display());
-            println!("tls_key_path={:?}", &oidc.tls_key_path.display());
-            println!("frontend_url={}", &oidc.frontend_url);
-            println!("oidc_client_id={}", cli_value(&oidc.oidc_client_id));
-            println!("oidc_discovery_url={}", cli_value(&oidc.oidc_discovery_url));
-            Ok(())
-        }
-        Commands::Site { command } => match command {
-            SiteCommands::Create {
-                short_name,
-                full_title,
-                template_name,
-            } => {
-                let site = create_site(&db, short_name, full_title, template_name).await?;
-                let _ = log_audit_event(
-                    &db,
-                    "system",
-                    "create_site",
-                    "site",
-                    &site.id,
-                    Some(&site.id),
-                    Some(&format!(
-                        "{}",
-                        json!(
-                            {"short_name":&site.short_name,"full_title":&site.full_title}
-                        )
-                    )),
-                )
-                .await?;
-                println!("created site: {} ({})", site.id, site.short_name);
-                Ok(())
-            }
-            SiteCommands::List => {
-                let sites = list_sites(&db).await?;
-                if sites.is_empty() {
-                    println!("no sites");
-                    return Ok(());
-                }
-
-                println!("short_name\tfull_title\ttemplate_name");
-                for site in sites {
-                    println!(
-                        "{}\t{}\t{}",
-                        site.short_name, site.full_title, site.template_name
-                    );
-                }
-                Ok(())
-            }
-            SiteCommands::MemberAdd {
-                site_id,
-                user_id,
-                role,
-            } => {
-                let membership = create_membership(
-                    &db,
-                    NewMembership {
-                        site_id,
-                        user_id,
-                        role,
-                    },
-                )
-                .await?;
-                let _ = log_audit_event(
-                    &db,
-                    "system",
-                    "create_membership",
-                    "site_membership",
-                    &membership.id,
-                    Some(&membership.site_id),
-                    Some(&format!("{}", json!(
-                         {"site_id":&membership.site_id,"user_id":&membership.user_id,"role":&membership.role}
-                    ))),
-                )
-                .await?;
-                println!("created membership: {} {}", membership.id, membership.role);
-                Ok(())
-            }
-            SiteCommands::MemberList { site_id } => {
-                let memberships = list_memberships(&db, &site_id).await?;
-                if memberships.is_empty() {
-                    println!("no memberships");
-                    return Ok(());
-                }
-
-                println!("id\tsite_id\tuser_id\trole");
-                for row in memberships {
-                    println!("{}\t{}\t{}\t{}", row.id, row.site_id, row.user_id, row.role);
-                }
-                Ok(())
-            }
-            SiteCommands::TagCreate { site_id, name } => {
-                let tag = create_tag(&db, NewTag { site_id, name }).await?;
-                let _ = log_audit_event(
-                    &db,
-                    "system",
-                    "create_tag",
-                    "tag",
-                    &tag.id,
-                    Some(&tag.site_id),
-                    Some(&format!("{}", json!({"name":&tag.name}))),
-                )
-                .await?;
-                println!("created tag: {} {}", tag.id, tag.name);
-                Ok(())
-            }
-            SiteCommands::TagList { site_id } => {
-                let tags = list_tags(&db, &site_id).await?;
-                if tags.is_empty() {
-                    println!("no tags");
-                    return Ok(());
-                }
-
-                println!("id\tname");
-                for row in tags {
-                    println!("{}\t{}", row.id, row.name);
-                }
-                Ok(())
-            }
-            SiteCommands::Render {
-                site_id,
-                templates_dir,
-                rendered_dir,
-            } => {
-                let files_written =
-                    render_site(&db, &site_id, &templates_dir, &rendered_dir).await?;
-                println!("rendered site {} files {}", site_id, files_written);
-                Ok(())
-            }
-        },
-        Commands::User { command } => match command {
-            UserCommands::Create { subject } => {
-                let user = create_user(&db, NewUser { subject }).await?;
-                let _ = log_audit_event(
-                    &db,
-                    "system",
-                    "create_user",
-                    "user",
-                    &user.id,
-                    None,
-                    Some(&format!("{}", json!({"subject":&user.subject}))),
-                )
-                .await?;
-                println!("created user: {} {}", user.id, user.subject);
-                Ok(())
-            }
-            UserCommands::List => {
-                let users = list_users(&db).await?;
-                if users.is_empty() {
-                    println!("no users");
-                    return Ok(());
-                }
-
-                println!("id\tsubject\tlast_login_at");
-                for row in users {
-                    println!("{}\t{}\t{:?}", row.id, row.subject, row.last_login_at);
-                }
-                Ok(())
-            }
-        },
-        Commands::Asset { command } => match command {
-            AssetCommands::Create {
-                site_id,
-                uploader_sub,
-                original_filename,
-                storage_basename,
-                mime_type,
-                byte_length,
-                width,
-                height,
-            } => {
-                let asset = create_asset(
-                    &db,
-                    NewAsset {
-                        site_id,
-                        uploader_sub,
-                        original_filename,
-                        storage_basename,
-                        mime_type,
-                        byte_length,
-                        width,
-                        height,
-                    },
-                )
-                .await?;
-                let _ = log_audit_event(
-                    &db,
-                    &asset.uploader_sub,
-                    "create_asset",
-                    "asset",
-                    &asset.id,
-                    Some(&asset.site_id),
-                    Some(&format!(
-                        "{}",
-                        json!({"original_filename":&asset.original_filename,"storage_basename":&asset.storage_basename})
-                    )),
-                )
-                .await?;
-                println!("created asset: {} {}", asset.id, asset.original_filename);
-                Ok(())
-            }
-            AssetCommands::List { site_id } => {
-                let assets = list_assets(&db, &site_id).await?;
-                if assets.is_empty() {
-                    println!("no assets");
-                    return Ok(());
-                }
-
-                println!("id\toriginal_filename\tstorage_basename\tmime_type");
-                for row in assets {
-                    println!(
-                        "{}\t{}\t{}\t{}",
-                        row.id, row.original_filename, row.storage_basename, row.mime_type
-                    );
-                }
-                Ok(())
-            }
-            AssetCommands::VariantCreate {
-                asset_id,
-                variant_kind,
-                filename,
-                mime_type,
-                byte_length,
-                width,
-                height,
-            } => {
-                let variant = create_asset_variant(
-                    &db,
-                    NewAssetVariant {
-                        asset_id,
-                        variant_kind,
-                        filename,
-                        mime_type,
-                        byte_length,
-                        width,
-                        height,
-                    },
-                )
-                .await?;
-                let _ = log_audit_event(
-                    &db,
-                    "system",
-                    "create_asset_variant",
-                    "asset_variant",
-                    &variant.id,
-                    Some(&variant.asset_id),
-                    Some(&format!(
-                        "{}",
-                        json!({"variant_kind":&variant.variant_kind,"filename":&variant.filename})
-                    )),
-                )
-                .await?;
-                println!("created variant: {} {}", variant.id, variant.filename);
-                Ok(())
-            }
-            AssetCommands::VariantList { asset_id } => {
-                let variants = list_asset_variants(&db, &asset_id).await?;
-                if variants.is_empty() {
-                    println!("no variants");
-                    return Ok(());
-                }
-
-                println!("id\tasset_id\tvariant_kind\tfilename\tmime_type");
-                for row in variants {
-                    println!(
-                        "{}\t{}\t{}\t{}\t{}",
-                        row.id, row.asset_id, row.variant_kind, row.filename, row.mime_type
-                    );
-                }
-                Ok(())
-            }
-        },
-        Commands::Serve { command } => match command {
-            ServeCommands::Admin { listen } => web::run_admin_server(db.clone(), &listen, oidc)
-                .await
-                .map_err(|err| err.to_string()),
-        },
-        Commands::Audit { command } => match command {
-            AuditCommands::List { site_id } => {
-                let events = list_audit_events(&db, site_id.as_deref()).await?;
-                if events.is_empty() {
-                    println!("no audit events");
-                    return Ok(());
-                }
-
-                println!(
-                    "id\tsite_id\tactor_sub\tevent_type\tentity_type\tentity_id\tcreated_at\tpayload_json"
-                );
-                for event in events {
-                    let site_id = event.site_id.unwrap_or_else(|| "-".to_string());
-                    let payload = event.payload_json.unwrap_or_else(|| "null".to_string());
-                    println!(
-                        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                        event.id,
-                        site_id,
-                        event.actor_sub,
-                        event.event_type,
-                        event.entity_type,
-                        event.entity_id,
-                        event.created_at,
-                        payload
-                    );
-                }
-                Ok(())
-            }
-        },
-        Commands::Content { command } => match command {
-            ContentCommands::Create {
-                site_id,
-                page_type,
-                title,
-                slug,
-                page_content,
-                creator_sub,
-                draft,
-                published_at,
-            } => {
-                let content = create_content(
-                    &db,
-                    NewContent {
-                        site_id,
-                        page_type,
-                        title,
-                        slug,
-                        page_content,
-                        creator_sub,
-                        draft,
-                        published_at,
-                    },
-                )
-                .await?;
-                let _ = log_audit_event(
-                    &db,
-                    &content.creator_sub,
-                    "create_content",
-                    "content_item",
-                    &content.id,
-                    Some(&content.site_id),
-                    Some(&format!(
-                        "{}",
-                        json!({
-                            "page_type": &content.page_type,
-                            "slug": &content.slug,
-                            "title": &content.title,
-                            "draft": content.draft
-                        })
-                    )),
-                )
-                .await?;
-                println!("created content: {} {}", content.id, content.title);
-                Ok(())
-            }
-            ContentCommands::List { site_id, page_type } => {
-                let page_filter = page_type.as_deref();
-                let content = list_content(&db, &site_id, page_filter).await?;
-                if content.is_empty() {
-                    println!("no content");
-                    return Ok(());
-                }
-
-                println!("id\ttitle\tslug\tpage_type\tdraft\tcreated_at\tpublished_at\turl");
-                for row in content {
-                    let published_at = row
-                        .published_at
-                        .as_ref()
-                        .map_or_else(|| "n/a".to_string(), |value| value.clone());
-                    let public_path = content_primary_route(&row);
-                    let public_url = format!("/{}/", public_path.trim_matches('/'));
-                    println!(
-                        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                        row.id,
-                        row.title,
-                        row.slug,
-                        row.page_type,
-                        row.draft,
-                        row.created_at,
-                        published_at,
-                        public_url
-                    );
-                }
-                Ok(())
-            }
-            ContentCommands::AliasCreate {
-                content_id,
-                site_id,
-                alias_path,
-                kind,
-            } => {
-                let alias = create_alias(
-                    &db,
-                    NewAlias {
-                        content_id,
-                        site_id,
-                        alias_path,
-                        kind,
-                    },
-                )
-                .await?;
-                let _ = log_audit_event(
-                    &db,
-                    "system",
-                    "create_alias",
-                    "content_alias",
-                    &alias.id,
-                    Some(&alias.site_id),
-                    Some(&format!(
-                        "{}",
-                        json!({
-                            "content_id": &alias.content_id,
-                            "alias_path": &alias.alias_path,
-                            "kind": &alias.kind
-                        })
-                    )),
-                )
-                .await?;
-                println!("created alias: {} {}", alias.id, alias.alias_path);
-                Ok(())
-            }
-            ContentCommands::AliasList {
-                site_id,
-                content_id,
-            } => {
-                let content_filter = content_id.as_deref();
-                let aliases = list_aliases(&db, &site_id, content_filter).await?;
-                if aliases.is_empty() {
-                    println!("no aliases");
-                    return Ok(());
-                }
-
-                println!("id\tcontent_id\talias_path\tkind");
-                for row in aliases {
-                    println!(
-                        "{}\t{}\t{}\t{}",
-                        row.id, row.content_id, row.alias_path, row.kind
-                    );
-                }
-                Ok(())
-            }
-            ContentCommands::Revisions { content_id } => {
-                let revisions = list_revisions(&db.clone(), &content_id).await?;
-                if revisions.is_empty() {
-                    println!("no revisions");
-                    return Ok(());
-                }
-
-                println!("id\trevision_number\ttitle\tdraft\tcreated_at");
-                for row in revisions {
-                    println!(
-                        "{}\t{}\t{}\t{}\t{}",
-                        row.id, row.revision_number, row.title, row.draft, row.created_at
-                    );
-                }
-                Ok(())
-            }
-            ContentCommands::RevisionAliases { revision_id } => {
-                let aliases = list_revision_aliases(&db, &revision_id).await?;
-                if aliases.is_empty() {
-                    println!("no revision aliases");
-                    return Ok(());
-                }
-
-                println!("id\talias_path\tkind");
-                for row in aliases {
-                    println!("{}\t{}\t{}", row.id, row.alias_path, row.kind);
-                }
-                Ok(())
-            }
-            ContentCommands::RevisionTags { revision_id } => {
-                let tags = list_revision_tags(&db, &revision_id).await?;
-                if tags.is_empty() {
-                    println!("no revision tags");
-                    return Ok(());
-                }
-
-                println!("id\tname");
-                for row in tags {
-                    println!("{}\t{}", row.id, row.name);
-                }
-                Ok(())
-            }
-            ContentCommands::Inspect { content_id } => {
-                let content = get_content(&db, &content_id).await?;
-                let aliases = list_aliases(&db, &content.site_id, Some(&content_id)).await?;
-                let tags = list_content_tags(&db, &content_id).await?;
-                let revisions = list_revisions(&db, &content_id).await?;
-
-                let public_path = content_primary_route(&content);
-                println!("id:\t{}", content.id);
-                println!("site_id:\t{}", content.site_id);
-                println!("title:\t{}", content.title);
-                println!("slug:\t{}", content.slug);
-                println!("page_type:\t{}", content.page_type);
-                println!("draft:\t{}", content.draft);
-                println!(
-                    "published_at:\t{}",
-                    content.published_at.as_deref().unwrap_or("n/a")
-                );
-                println!("created_at:\t{}", content.created_at);
-                println!("updated_at:\t{}", content.last_updated);
-                println!("primary_route:\t/{}", public_path.trim_matches('/'));
-                println!("aliases:");
-                if aliases.is_empty() {
-                    println!("\t(none)");
-                } else {
-                    for alias in aliases {
-                        println!("\t{}\t{}", alias.kind, alias.alias_path);
-                    }
-                }
-                println!("tags:");
-                if tags.is_empty() {
-                    println!("\t(none)");
-                } else {
-                    for tag in tags {
-                        println!("\t{}", tag.name);
-                    }
-                }
-                println!("revisions:\t{}", revisions.len());
-                if let Some(latest_revision) = revisions.first() {
-                    println!(
-                        "latest_revision:\t{} @ {}",
-                        latest_revision.revision_number, latest_revision.created_at
-                    );
-                }
-                Ok(())
-            }
-            ContentCommands::Update {
-                content_id,
-                page_type,
-                title,
-                slug,
-                page_content,
-                draft,
-                published_at,
-                editor_sub,
-            } => {
-                let content = update_content(
-                    &db,
-                    UpdateContent {
-                        content_id,
-                        page_type,
-                        title,
-                        slug,
-                        page_content,
-                        draft,
-                        published_at,
-                        editor_sub,
-                    },
-                )
-                .await?;
-                let _ = log_audit_event(
-                    &db,
-                    &content.creator_sub,
-                    "update_content",
-                    "content_item",
-                    &content.id,
-                    Some(&content.site_id),
-                    Some(&format!(
-                        "{}",
-                        json!({
-                            "content_id": &content.id,
-                            "page_type": &content.page_type,
-                            "slug": &content.slug,
-                            "title": &content.title
-                        })
-                    )),
-                )
-                .await?;
-                println!("updated content: {} {}", content.id, content.title);
-                Ok(())
-            }
-            ContentCommands::TagAdd {
-                content_id,
-                site_id,
-                tag_name,
-            } => {
-                let content_tag = add_content_tag(
-                    &db,
-                    NewContentTag {
-                        content_id,
-                        site_id,
-                        tag_name,
-                    },
-                )
-                .await?;
-                let _ = log_audit_event(
-                    &db,
-                    "system",
-                    "add_content_tag",
-                    "content_tag",
-                    &content_tag.id,
-                    Some(&content_tag.content_id),
-                    Some(&format!(
-                        "{}",
-                        json!({
-                            "content_id": &content_tag.content_id,
-                            "tag_id": &content_tag.tag_id
-                        })
-                    )),
-                )
-                .await?;
-                println!(
-                    "linked content tag: {} {}",
-                    content_tag.id, content_tag.tag_id
-                );
-                Ok(())
-            }
-            ContentCommands::TagList { content_id } => {
-                let tags = list_content_tags(&db, &content_id).await?;
-                if tags.is_empty() {
-                    println!("no tags");
-                    return Ok(());
-                }
-
-                println!("id\tname");
-                for row in tags {
-                    println!("{}\t{}", row.id, row.name);
-                }
-                Ok(())
-            }
-            ContentCommands::ImportWordpress {
-                site_id,
-                file_path,
-                creator_sub,
-            } => {
-                let imported = import_wordpress(&db, &site_id, &file_path, &creator_sub).await?;
-                let _ = log_audit_event(
-                    &db,
-                    &creator_sub,
-                    "import_wordpress",
-                    "content_item",
-                    &site_id,
-                    Some(&site_id),
-                    Some(&format!("{}", json!({"imported": imported}))),
-                )
-                .await?;
-                println!("imported {} wordpress items", imported);
-                Ok(())
-            }
-        },
-    }
-}
-
-fn cli_value(value: &Option<String>) -> String {
-    value
-        .as_deref()
-        .map_or_else(|| "<unset>".to_string(), |value| value.to_string())
 }

@@ -16,3 +16,7 @@
 - Prefer workspace-level dependency declarations and `workspace = true` member usage to keep crate versions aligned.
 - Binaries should parse CLI arguments and environment variables via `clap`.
 - All askama templates should derive `askama_web::WebTemplate` so we don't have to manually implement `IntoResponse`
+
+## System Design Updates
+
+- 2026-03-07: Replaced raw SQL schema bootstrapping with SeaORM migrations (`sea-orm-migration`) and set SQLite foreign keys via the connection URL.
