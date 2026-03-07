@@ -4,8 +4,8 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "asset_variant")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    pub id: String,
-    pub asset_id: String,
+    pub id: Uuid,
+    pub asset_id: Uuid,
     pub variant_kind: String,
     pub filename: String,
     pub mime_type: String,

@@ -1,3 +1,4 @@
+use crate::entities::PageType;
 use crate::errors::SiteError;
 use crate::middleware::log_requests;
 use crate::tls::build_tls_config;
@@ -18,6 +19,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     routing::get,
 };
+use chrono::{DateTime, Utc};
 use image::{GenericImageView, ImageFormat};
 use openidconnect::{
     AuthorizationCode, ClientId, CsrfToken, EndpointMaybeSet, EndpointNotSet, EndpointSet,
@@ -325,12 +327,9 @@ async fn admin_sites_create(
                 ADMIN_ACTOR_SUB,
                 "create_site",
                 "site",
-                &site.id,
-                Some(&site.id),
-                Some(&format!(
-                    "{}",
-                    json!({ "short_name": &site.short_name, "full_title": &site.full_title })
-                )),
+                &site.id.to_string(),
+                Some(site.id),
+                Some(json!({ "short_name": &site.short_name, "full_title": &site.full_title })),
             )
             .await;
             Ok(Redirect::to("/admin/sites"))
@@ -573,7 +572,8 @@ async fn admin_site_content_list(
     State(state): State<AdminState>,
     Path(site_id): Path<String>,
 ) -> Result<AdminPageTemplate, SiteError> {
-    match list_content(&state.db, &site_id, None).await {
+    let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    match list_content(&state.db, site_id_uuid, None).await {
         Ok(content) => {
             let rows = content
                 .into_iter()
@@ -614,12 +614,13 @@ async fn admin_site_search(
     Path(site_id): Path<String>,
     Query(query): Query<SearchQuery>,
 ) -> Result<AdminPageTemplate, SiteError> {
+    let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
     let query_text = query.q.unwrap_or_default();
     let mut rows = Vec::new();
     let mut message = "Search content by title, slug, or body text.".to_string();
 
     if !query_text.trim().is_empty() {
-        match search_content(&state.db, &site_id, query_text.trim()).await {
+        match search_content(&state.db, site_id_uuid, query_text.trim()).await {
             Ok(items) => {
                 message = format!("Found {} result(s) for \"{}\".", items.len(), query_text);
                 rows = items
@@ -673,14 +674,15 @@ async fn admin_site_content_new(
     State(state): State<AdminState>,
     Path(site_id): Path<String>,
 ) -> Result<AdminPageTemplate, SiteError> {
-    match get_site(&state.db, &site_id).await {
+    let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    match get_site(&state.db, site_id_uuid).await {
         Ok(site) => Ok(AdminPageTemplate {
             title: "New Content".to_string(),
             heading: format!("Create Content {}", site.short_name),
             message: "Create a page or post and start drafting immediately.".to_string(),
             rows: vec![AdminRow {
                 label: "site_id".to_string(),
-                value: site.id,
+                value: site.id.to_string(),
             }],
             links: vec![
                 link(&format!("/admin/site/{site_id}/content"), "Back to content"),
@@ -703,14 +705,11 @@ async fn admin_site_content_create(
     Path(site_id): Path<String>,
     Form(form): Form<CreateContentForm>,
 ) -> Result<Redirect, SiteError> {
-    let page_type = form.page_type;
-    if page_type != "post" && page_type != "page" {
-        return Err(SiteError::internal(
-            "invalid page_type, expected post or page".to_string(),
-        ));
-    }
+    let page_type = PageType::from_str(&form.page_type)
+        .map_err(|error| SiteError::internal(error.to_string()))?;
+    let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
 
-    match get_site(&state.db, &site_id).await {
+    match get_site(&state.db, site_id_uuid).await {
         Ok(site) => match create_content(
             &state.db,
             NewContent {
@@ -732,17 +731,14 @@ async fn admin_site_content_create(
                     ADMIN_ACTOR_SUB,
                     "create_content",
                     "content_item",
-                    &content.id,
-                    Some(&content.site_id),
-                    Some(&format!(
-                        "{}",
-                        json!({
-                            "page_type": &content.page_type,
-                            "slug": &content.slug,
-                            "title": &content.title,
-                            "draft": content.draft
-                        })
-                    )),
+                    &content.id.to_string(),
+                    Some(content.site_id),
+                    Some(json!({
+                        "page_type": content.page_type.to_string(),
+                        "slug": &content.slug,
+                        "title": &content.title,
+                        "draft": content.draft
+                    })),
                 )
                 .await;
                 Ok(Redirect::to(&format!(
@@ -792,26 +788,29 @@ async fn admin_site_content_detail(
     State(state): State<AdminState>,
     Path((_site_id, content_id)): Path<(String, String)>,
 ) -> Result<AdminPageTemplate, SiteError> {
-    let content = get_content(&state.db, &content_id).await.map_err(|err| {
-        SiteError::internal(format!("failed to load content {content_id}: {err}"))
-    })?;
-    let content_id = content.id.clone();
-    let content_site_id = content.site_id.clone();
+    let content_id_uuid = parse_uuid_param(&content_id, "content_id")?;
+    let content = get_content(&state.db, content_id_uuid)
+        .await
+        .map_err(|err| {
+            SiteError::internal(format!("failed to load content {content_id}: {err}"))
+        })?;
+    let content_id = content.id.to_string();
+
     let published_at = content
         .published_at
-        .clone()
+        .map(|value| value.to_rfc3339())
         .unwrap_or_else(|| "n/a".to_string());
-    let page_type = content.page_type.clone();
+    let page_type = content.page_type.to_string();
     let slug = content.slug.clone();
     let title = content.title.clone();
     let rows = vec![
         AdminRow {
             label: "id".to_string(),
-            value: content_id.clone(),
+            value: content_id,
         },
         AdminRow {
             label: "site_id".to_string(),
-            value: content_site_id.clone(),
+            value: content.site_id.to_string(),
         },
         AdminRow {
             label: "title".to_string(),
@@ -845,26 +844,26 @@ async fn admin_site_content_detail(
             link(
                 &format!(
                     "/admin/site/{}/content/{}/source",
-                    content_site_id, content_id
+                    content.site_id, content.id
                 ),
                 "Source",
             ),
             link(
                 &format!(
                     "/admin/site/{}/content/{}/advanced",
-                    content_site_id, content_id
+                    content.site_id, content.id
                 ),
                 "Advanced",
             ),
             link(
                 &format!(
                     "/admin/site/{}/content/{}/revisions",
-                    content_site_id, content_id
+                    content.site_id, content.id
                 ),
                 "Revisions",
             ),
             link(
-                &format!("/admin/site/{}/content", content_site_id),
+                &format!("/admin/site/{}/content", content.site_id),
                 "Back to content",
             ),
         ],
@@ -878,10 +877,13 @@ async fn admin_site_content_source(
     State(state): State<AdminState>,
     Path((_site_id, content_id)): Path<(String, String)>,
 ) -> Result<AdminPageTemplate, SiteError> {
-    let content = get_content(&state.db, &content_id).await.map_err(|error| {
-        SiteError::internal(format!("failed to load source for {content_id}: {error}"))
-    })?;
-    let assets_html = render_asset_embed_library(&state.db, &content.site_id)
+    let content_id_uuid = parse_uuid_param(&content_id, "content_id")?;
+    let content = get_content(&state.db, content_id_uuid)
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!("failed to load source for {content_id}: {error}"))
+        })?;
+    let assets_html = render_asset_embed_library(&state.db, content.site_id)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load assets: {error}")))?;
 
@@ -909,13 +911,17 @@ async fn admin_site_content_source_update(
     Form(form): Form<UpdateContentForm>,
 ) -> Result<Redirect, SiteError> {
     let draft = matches!(form.draft.as_str(), "true" | "1" | "yes");
-    let published_at = normalize_optional(form.published_at);
+    let published_at =
+        parse_optional_datetime(normalize_optional(form.published_at), "published_at")?;
+    let content_id_uuid = parse_uuid_param(&content_id, "content_id")?;
+    let page_type = PageType::from_str(&form.page_type)
+        .map_err(|error| SiteError::internal(error.to_string()))?;
 
     match update_content(
         &state.db,
         crate::UpdateContent {
-            content_id: content_id.clone(),
-            page_type: Some(form.page_type),
+            content_id: content_id_uuid,
+            page_type: Some(page_type),
             title: Some(form.title),
             slug: Some(form.slug),
             page_content: Some(form.page_content),
@@ -932,16 +938,14 @@ async fn admin_site_content_source_update(
                 ADMIN_ACTOR_SUB,
                 "update_content",
                 "content_item",
-                &content.id,
-                Some(&content.site_id),
-                Some(&format!(
-                    "{}",
-                    json!({
-                        "page_type": &content.page_type,
+                &content.id.to_string(),
+                Some(content.site_id),
+                Some(json!({
+                        "page_type": content.page_type.to_string(),
                         "slug": &content.slug,
                         "title": &content.title,
                         "draft": content.draft
-                    })
+                    }
                 )),
             )
             .await;
@@ -959,13 +963,19 @@ async fn admin_site_content_source_update(
 fn admin_site_content_source_form_html(content: &crate::entities::content_item::Model) -> String {
     let title = escape_html(content.title.as_str());
     let slug = escape_html(content.slug.as_str());
-    let page_type = content.page_type.as_str();
     let content_body = escape_html(content.page_content.as_str());
-    let published_at = content.published_at.clone().unwrap_or_default();
-    let published_at = escape_html(published_at.as_str());
+    let published_at = escape_html(&content.content_publish_timestamp());
 
-    let post_selected = if page_type == "post" { "selected" } else { "" };
-    let page_selected = if page_type == "page" { "selected" } else { "" };
+    let post_selected = if content.page_type.is_post() {
+        "selected"
+    } else {
+        ""
+    };
+    let page_selected = if content.page_type.is_page() {
+        "selected"
+    } else {
+        ""
+    };
     let draft_selected = if content.draft { "selected" } else { "" };
     let published_selected = if content.draft { "" } else { "selected" };
 
@@ -1005,7 +1015,7 @@ fn admin_site_content_source_form_html(content: &crate::entities::content_item::
 
 async fn render_asset_embed_library(
     db: &DatabaseConnection,
-    site_id: &str,
+    site_id: Uuid,
 ) -> Result<String, String> {
     let assets = list_assets(db, site_id).await?;
     if assets.is_empty() {
@@ -1017,7 +1027,7 @@ async fn render_asset_embed_library(
 
     let mut rows = String::new();
     for asset in assets {
-        let variants = list_asset_variants(db, &asset.id).await?;
+        let variants = list_asset_variants(db, asset.id).await?;
         let mut variant_links = Vec::new();
         variant_links.push(format!(
             "<code>![{}](/media/images/{})</code>",
@@ -1059,18 +1069,21 @@ async fn admin_site_content_advanced(
     State(state): State<AdminState>,
     Path((_site_id, content_id)): Path<(String, String)>,
 ) -> Result<AdminPageTemplate, SiteError> {
-    let content = get_content(&state.db, &content_id).await.map_err(|error| {
-        SiteError::internal(format!("failed to load content {content_id}: {error}"))
-    })?;
+    let content_id_uuid = parse_uuid_param(&content_id, "content_id")?;
+    let content = get_content(&state.db, content_id_uuid)
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!("failed to load content {content_id}: {error}"))
+        })?;
 
-    let aliases = list_aliases(&state.db, &content.site_id, Some(&content.id))
+    let aliases = list_aliases(&state.db, content.site_id, Some(content.id))
         .await
         .map_err(|error| {
             SiteError::internal(format!(
                 "failed to load aliases for content {content_id}: {error}"
             ))
         })?;
-    let tags = list_content_tags(&state.db, &content.id)
+    let tags = list_content_tags(&state.db, content.id)
         .await
         .map_err(|error| {
             SiteError::internal(format!(
@@ -1093,11 +1106,14 @@ async fn admin_site_content_advanced(
             },
             AdminRow {
                 label: "created_at".to_string(),
-                value: content.created_at,
+                value: content.created_at.to_rfc3339(),
             },
             AdminRow {
                 label: "updated_at".to_string(),
-                value: content.last_updated,
+                value: content
+                    .last_updated
+                    .map(|value| value.to_rfc3339())
+                    .unwrap_or_else(|| "n/a".to_string()),
             },
         ],
         links: vec![link(
@@ -1113,7 +1129,8 @@ async fn admin_site_content_revisions(
     State(state): State<AdminState>,
     Path((site_id, content_id)): Path<(String, String)>,
 ) -> Result<AdminPageTemplate, SiteError> {
-    let revisions = list_revisions(&state.db, &content_id)
+    let content_id_uuid = parse_uuid_param(&content_id, "content_id")?;
+    let revisions = list_revisions(&state.db, content_id_uuid)
         .await
         .map_err(|error| {
             SiteError::internal(format!(
@@ -1168,24 +1185,23 @@ async fn admin_site_revision_diff(
     State(state): State<AdminState>,
     Path((site_id, content_id, revision_id)): Path<(String, String, String)>,
 ) -> Result<AdminPageTemplate, SiteError> {
-    let revision = get_revision(&state.db, &revision_id)
+    let revision_id_uuid = parse_uuid_param(&revision_id, "revision_id")?;
+    let content_id_uuid = parse_uuid_param(&content_id, "content_id")?;
+    let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    let revision = get_revision(&state.db, revision_id_uuid)
         .await
         .map_err(|error| {
             SiteError::internal(format!("failed to load revision {revision_id}: {error}"))
         })?;
-    if revision.content_id != content_id || revision.site_id != site_id {
+    if revision.content_id != content_id_uuid || revision.site_id != site_id_uuid {
         return Err(SiteError::internal(
             "revision does not belong to requested content".to_string(),
         ));
     }
 
     let previous = if revision.revision_number > 1 {
-        match get_revision_by_number(
-            &state.db,
-            &revision.content_id,
-            revision.revision_number - 1,
-        )
-        .await
+        match get_revision_by_number(&state.db, revision.content_id, revision.revision_number - 1)
+            .await
         {
             Ok(previous) => previous,
             Err(error) => {
@@ -1219,11 +1235,11 @@ async fn admin_site_revision_diff(
         rows: vec![
             AdminRow {
                 label: "revision_id".to_string(),
-                value: revision.id,
+                value: revision.id.to_string(),
             },
             AdminRow {
                 label: "created_at".to_string(),
-                value: revision.created_at,
+                value: revision.created_at.to_rfc3339(),
             },
             AdminRow {
                 label: "editor_sub".to_string(),
@@ -1249,13 +1265,14 @@ async fn admin_site_tags(
     State(state): State<AdminState>,
     Path(site_id): Path<String>,
 ) -> Result<AdminPageTemplate, SiteError> {
-    match list_tags(&state.db, &site_id).await {
+    let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    match list_tags(&state.db, site_id_uuid).await {
         Ok(tags) => {
             let rows = tags
                 .into_iter()
                 .map(|tag| AdminRow {
                     label: tag.name,
-                    value: tag.id,
+                    value: tag.id.to_string(),
                 })
                 .collect();
 
@@ -1282,7 +1299,8 @@ async fn admin_site_assets(
     State(state): State<AdminState>,
     Path(site_id): Path<String>,
 ) -> Result<AdminPageTemplate, SiteError> {
-    match list_assets(&state.db, &site_id).await {
+    let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    match list_assets(&state.db, site_id_uuid).await {
         Ok(assets) => {
             let rows = assets
                 .into_iter()
@@ -1318,14 +1336,15 @@ async fn admin_site_assets_new(
     State(state): State<AdminState>,
     Path(site_id): Path<String>,
 ) -> Result<AdminPageTemplate, SiteError> {
-    match get_site(&state.db, &site_id).await {
+    let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    match get_site(&state.db, site_id_uuid).await {
         Ok(site) => Ok(AdminPageTemplate {
             title: "Upload Asset".to_string(),
             heading: format!("Upload Asset {}", site.short_name),
             message: "Upload a media asset and generate a thumbnail.".to_string(),
             rows: vec![AdminRow {
                 label: "site_id".to_string(),
-                value: site.id,
+                value: site.id.to_string(),
             }],
             links: vec![
                 link(&format!("/admin/site/{site_id}/assets"), "Back to assets"),
@@ -1345,7 +1364,8 @@ async fn admin_site_assets_create(
     Path(site_id): Path<String>,
     mut multipart: Multipart,
 ) -> Result<Redirect, SiteError> {
-    let site = match get_site(&state.db, &site_id).await {
+    let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    let site = match get_site(&state.db, site_id_uuid).await {
         Ok(site) => site,
         Err(error) => {
             return Err(SiteError::internal(format!(
@@ -1448,7 +1468,7 @@ async fn admin_site_assets_create(
     let asset = match create_asset(
         &state.db,
         NewAsset {
-            site_id: site.id.clone(),
+            site_id: site.id,
             uploader_sub: ADMIN_ACTOR_SUB.to_string(),
             original_filename: original_filename.clone(),
             storage_basename: storage_basename.clone(),
@@ -1473,23 +1493,20 @@ async fn admin_site_assets_create(
         ADMIN_ACTOR_SUB,
         "create_asset",
         "asset",
-        &asset.id,
-        Some(&asset.site_id),
-        Some(&format!(
-            "{}",
-            json!({
-                "original_filename": &asset.original_filename,
-                "storage_basename": &asset.storage_basename,
-                "mime_type": &asset.mime_type
-            })
-        )),
+        &asset.id.to_string(),
+        Some(asset.site_id),
+        Some(json!({
+            "original_filename": &asset.original_filename,
+            "storage_basename": &asset.storage_basename,
+            "mime_type": &asset.mime_type
+        })),
     )
     .await;
 
     let _ = create_asset_variant(
         &state.db,
         NewAssetVariant {
-            asset_id: asset.id.clone(),
+            asset_id: asset.id,
             variant_kind: "original".to_string(),
             filename: storage_basename,
             mime_type: mime_type.clone(),
@@ -1516,7 +1533,7 @@ async fn admin_site_assets_create(
         let _ = create_asset_variant(
             &state.db,
             NewAssetVariant {
-                asset_id: asset.id.clone(),
+                asset_id: asset.id,
                 variant_kind: "thumbnail".to_string(),
                 filename,
                 mime_type: thumbnail.mime_type,
@@ -1637,18 +1654,36 @@ fn escape_html(value: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
+fn parse_uuid_param(value: &str, label: &str) -> Result<Uuid, SiteError> {
+    Uuid::parse_str(value).map_err(|error| SiteError::internal(format!("invalid {label}: {error}")))
+}
+
+fn parse_optional_datetime(
+    value: Option<String>,
+    label: &str,
+) -> Result<Option<DateTime<Utc>>, SiteError> {
+    value
+        .map(|raw| {
+            DateTime::parse_from_rfc3339(&raw)
+                .map(|parsed| parsed.with_timezone(&Utc))
+                .map_err(|error| SiteError::internal(format!("invalid {label}: {error}")))
+        })
+        .transpose()
+}
+
 async fn admin_site_settings(
     State(state): State<AdminState>,
     Path(site_id): Path<String>,
 ) -> Result<AdminPageTemplate, SiteError> {
-    get_site(&state.db, &site_id)
+    let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
+    get_site(&state.db, site_id_uuid)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))
         .map(|site| {
             let rows = vec![
                 AdminRow {
                     label: "id".to_string(),
-                    value: site.id,
+                    value: site.id.to_string(),
                 },
                 AdminRow {
                     label: "short_name".to_string(),
@@ -1681,9 +1716,9 @@ async fn admin_site_settings(
 
 async fn admin_site_render(
     State(state): State<AdminState>,
-    Path(site_id): Path<String>,
+    Path(site_id): Path<Uuid>,
 ) -> Result<AdminPageTemplate, SiteError> {
-    render_site(&state.db, &site_id, "templates", "./rendered")
+    render_site(&state.db, site_id, "templates", "./rendered")
         .await
         .map_err(|error| SiteError::internal(format!("failed to render site {site_id}: {error}")))
         .map(|files_written| AdminPageTemplate {

@@ -1,8 +1,9 @@
 use clap::Parser;
 
 use websites::{
+    cli::execute,
     cli::{Commands, ServeCommands},
-    execute, telemetry,
+    telemetry,
 };
 
 #[tokio::main]
@@ -19,7 +20,7 @@ async fn main() {
         },
     });
 
-    if let Err(error) = execute(command, &cli.database_url, &cli.oidc).await {
+    if let Err(error) = execute(command, &cli.db_path, &cli.oidc).await {
         eprintln!("error: {}", error);
         std::process::exit(1);
     }

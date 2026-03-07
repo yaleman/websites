@@ -1,13 +1,15 @@
+use chrono::DateTime as ChronoDateTime;
+use chrono::Utc;
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "user")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    pub id: String,
+    pub id: Uuid,
     pub subject: String,
-    pub created_at: String,
-    pub last_login_at: Option<String>,
+    pub created_at: ChronoDateTime<Utc>,
+    pub last_login_at: Option<ChronoDateTime<Utc>>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
