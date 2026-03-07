@@ -494,23 +494,7 @@ async fn admin_sites_create(
             let user_sub = current_user_sub(&session).await?;
             let user = crate::upsert_user_login(&state.db, &user_sub)
                 .await
-                .map_err(crate::errors::SiteError::internal)?;
-            let existing = crate::get_membership_for_subject(&state.db, site.id, &user_sub)
-                .await
-                .map_err(crate::errors::SiteError::internal)?;
-            if existing.is_none()
-                && let Err(error) = crate::create_membership(
-                    &state.db,
-                    crate::NewMembership {
-                        site_id: site.id,
-                        user_id: user.id,
-                        role: "owner".to_string(),
-                    },
-                )
-                .await
-            {
-                tracing::error!("Failed to create site membership: {error}");
-            }
+                .map_err(|error| SiteError::internal(format!("failed to load user: {error}")))?;
             let _ = log_audit_event(
                 &state.db,
                 ADMIN_ACTOR_SUB,
@@ -521,36 +505,39 @@ async fn admin_sites_create(
                 Some(json!({ "short_name": &site.short_name, "full_title": &site.full_title })),
             )
             .await;
-            let user_sub = current_user_sub(&session).await?;
-            let user = crate::upsert_user_login(&state.db, &user_sub)
+            let existing = crate::get_membership_for_subject(&state.db, site.id, &user_sub)
                 .await
-                .map_err(|error| SiteError::internal(format!("failed to load user: {error}")))?;
-            let membership = create_membership(
-                &state.db,
-                crate::NewMembership {
-                    site_id: site.id,
-                    user_id: user.id,
-                    role: "owner".to_string(),
-                },
-            )
-            .await
-            .map_err(|error| {
-                SiteError::internal(format!("failed to create membership: {error}"))
-            })?;
-            let _ = log_audit_event(
-                &state.db,
-                ADMIN_ACTOR_SUB,
-                "create_membership",
-                "site_membership",
-                &membership.id.to_string(),
-                Some(membership.site_id),
-                Some(json!({
-                    "site_id": membership.site_id.to_string(),
-                    "user_id": membership.user_id.to_string(),
-                    "role": membership.role
-                })),
-            )
-            .await;
+                .map_err(|error| {
+                    SiteError::internal(format!("failed to load membership: {error}"))
+                })?;
+            if existing.is_none() {
+                let membership = create_membership(
+                    &state.db,
+                    crate::NewMembership {
+                        site_id: site.id,
+                        user_id: user.id,
+                        role: "owner".to_string(),
+                    },
+                )
+                .await
+                .map_err(|error| {
+                    SiteError::internal(format!("failed to create membership: {error}"))
+                })?;
+                let _ = log_audit_event(
+                    &state.db,
+                    ADMIN_ACTOR_SUB,
+                    "create_membership",
+                    "site_membership",
+                    &membership.id.to_string(),
+                    Some(membership.site_id),
+                    Some(json!({
+                        "site_id": membership.site_id.to_string(),
+                        "user_id": membership.user_id.to_string(),
+                        "role": membership.role
+                    })),
+                )
+                .await;
+            }
             Ok(Redirect::to("/admin/sites"))
         }
         Err(error) => Err(SiteError::internal(format!(
