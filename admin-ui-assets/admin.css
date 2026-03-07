@@ -119,3 +119,52 @@ pre {
 .editor-source {
   min-height: 280px;
 }
+
+.content-editor__header {
+  margin-bottom: 1.5rem;
+}
+
+.content-editor__meta {
+  margin-bottom: 1.5rem;
+}
+
+.meta-card {
+  border: 1px solid #bdbdbd;
+  background: #f7f7ff;
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+}
+
+.meta-label {
+  display: block;
+  font-size: 0.85rem;
+  color: #4d4d4d;
+  margin-bottom: 0.25rem;
+}
+
+.meta-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 0.95rem;
+}
+
+.editor-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+}
+
+.form-actions {
+  margin-top: 0.5rem;
+}
