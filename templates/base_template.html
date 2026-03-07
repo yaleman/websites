@@ -20,7 +20,7 @@
         <a href="/admin/logout">Logout</a>
       </nav>
 
-      {% if !message.is_empty() %}
+      {% if let Some(message) = template_shared.message %}
       <p class="message">{{ message }}</p>
       {% endif %}
 

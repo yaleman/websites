@@ -12,19 +12,19 @@
     <main class="content-editor">
       <header class="content-editor__header">
         <h1>Memberships {{ site_short_name }}</h1>
-        <p class="message">{{ message }}</p>
+        {% if let Some(message) = template_data.message %}<p class="message">{{ message }}</p>{% endif %}
         <nav>
           <a href="/admin">Dashboard</a>
           <a href="/admin/sites">Sites</a>
-          <a href="{{ content_href }}">Back to content</a>
-          <a href="{{ settings_href }}">Site settings</a>
+          <a href="/admin/site/{{ site.id }}/content">Back to content</a>
+          <a href="/admin/site/{{ site.id }}/settings">Site settings</a>
         </nav>
       </header>
 
       <section class="content-editor__meta">
         <div class="meta-card">
           <span class="meta-label">Site ID</span>
-          <span class="meta-value">{{ site_id }}</span>
+          <span class="meta-value">{{ site.id }}</span>
         </div>
       </section>
 
@@ -78,7 +78,7 @@
 
       <section>
         <h2>Add membership</h2>
-        <form method="post" action="{{ create_href }}">
+        <form method="post" action="/admin/site/{{site_id}}/memberships/new">
           <label for="subject">User subject</label>
           <input id="subject" name="subject" required />
 

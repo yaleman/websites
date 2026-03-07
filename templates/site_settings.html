@@ -3,20 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{ title }}</title>
+    <title>{{ template_data.page_title }}</title>
     <link rel="stylesheet" href="/admin/assets/admin.css" />
     <link rel="stylesheet" href="/admin/assets/editor.css" />
   </head>
   <body>
     <main class="content-editor">
       <header class="content-editor__header">
-        <h1>Site settings {{ site_short_name }}</h1>
-        <p class="message">{{ message }}</p>
+        <h1>Site settings {{ template_data.page_title }}</h1>
+        {% if let Some(page_message) = template_data.page_message %}
+        <p class="message">{{ page_message }}</p>
+        {% endif %}
         <nav>
           <a href="/admin">Dashboard</a>
           <a href="/admin/sites">Sites</a>
-          <a href="{{ content_href }}">Back to content</a>
-          <a href="{{ memberships_href }}">Memberships</a>
+          <a href="/admin/site/{{ site_id }}/content">Back to content</a>
+          <a href="/admin/site/{{ site_id }}/memberships">Memberships</a>
         </nav>
       </header>
 
@@ -31,7 +33,7 @@
         </div>
       </section>
 
-      <form method="post" action="" class="editor-form">
+      <form method="post" action class="editor-form">
         <div class="form-grid">
           <div class="form-field">
             <label for="full_title">Full Title</label>
