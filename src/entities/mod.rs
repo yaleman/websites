@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use sea_orm::prelude::StringLen;
 use sea_orm::{DeriveActiveEnum, EnumIter};
 use serde::{Deserialize, Serialize};
@@ -82,6 +80,7 @@ impl PageType {
 
 #[test]
 fn test_pagetype() {
+    use std::str::FromStr;
     let post = PageType::Post;
     let page = PageType::Page;
 
