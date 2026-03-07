@@ -87,6 +87,7 @@ struct AdminContentNewTemplate {
     message: String,
     content_href: String,
     settings_href: String,
+    tags: Vec<AdminTagOption>,
 }
 
 #[derive(Template, WebTemplate)]
@@ -113,6 +114,11 @@ struct AdminSiteRow {
     short_name: String,
     full_title: String,
     content_href: String,
+}
+
+#[derive(Debug)]
+struct AdminTagOption {
+    name: String,
 }
 
 #[derive(Debug)]
@@ -143,6 +149,8 @@ struct CreateContentForm {
     slug: String,
     page_content: String,
     draft: Option<bool>,
+    #[serde(default)]
+    tags: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1076,6 +1084,14 @@ async fn admin_site_content_new(
 ) -> Result<AdminContentNewTemplate, SiteError> {
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
     require_site_role(&state, &session, site_id_uuid, SiteRole::Author).await?;
+    let tags = list_tags(&state.db, site_id_uuid)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load tags: {error}")))?;
+    let tags = tags
+        .into_iter()
+        .map(|tag| AdminTagOption { name: tag.name })
+        .collect();
+
     match get_site(&state.db, site_id_uuid).await {
         Ok(site) => Ok(AdminContentNewTemplate {
             title: "New Content".to_string(),
@@ -1084,6 +1100,7 @@ async fn admin_site_content_new(
             message: "Create a page or post and start drafting immediately.".to_string(),
             content_href: format!("/admin/site/{site_id}/content"),
             settings_href: format!("/admin/site/{site_id}/settings"),
+            tags,
         }),
         Err(error) => Err(SiteError::internal(format!(
             "failed to load site {site_id}: {error}"
@@ -1101,6 +1118,7 @@ async fn admin_site_content_create(
         .map_err(|error| SiteError::internal(error.to_string()))?;
     let site_id_uuid = parse_uuid_param(&site_id, "site_id")?;
     require_site_role(&state, &session, site_id_uuid, SiteRole::Author).await?;
+    let tag_names = form.tags.clone();
 
     match get_site(&state.db, site_id_uuid).await {
         Ok(site) => match create_content(
@@ -1119,6 +1137,29 @@ async fn admin_site_content_create(
         .await
         {
             Ok(content) => {
+                if !tag_names.is_empty() {
+                    let revision = get_revision_by_number(&state.db, content.id, 1)
+                        .await
+                        .map_err(|error| {
+                            SiteError::internal(format!(
+                                "failed to load revision for tags: {error}"
+                            ))
+                        })?
+                        .ok_or_else(|| {
+                            SiteError::internal("missing revision for new content".to_string())
+                        })?;
+                    crate::assign_tags_to_content(
+                        &state.db,
+                        content.site_id,
+                        content.id,
+                        revision.id,
+                        tag_names,
+                    )
+                    .await
+                    .map_err(|error| {
+                        SiteError::internal(format!("failed to assign tags: {error}"))
+                    })?;
+                }
                 let _ = log_audit_event(
                     &state.db,
                     ADMIN_ACTOR_SUB,

@@ -302,6 +302,31 @@ async function addMembership(
   );
 }
 
+async function createTag(harness: TestHarness, name: string): Promise<void> {
+  await runCommand(
+    "cargo",
+    [
+      "run",
+      "--",
+      "--database-url",
+      harness.dbPath,
+      "--tls-cert-path",
+      harness.tlsCertPath,
+      "--tls-key-path",
+      harness.tlsKeyPath,
+      "--frontend-url",
+      "https://127.0.0.1",
+      "site",
+      "tag-create",
+      "--site-id",
+      harness.siteId,
+      "--name",
+      name,
+    ],
+    { env: harness.env },
+  );
+}
+
 async function seedSession(
   harness: TestHarness,
   subject: string,
@@ -343,6 +368,7 @@ test.describe("content new editor", () => {
     try {
       const userId = await createUser(harness, "test-user");
       await addMembership(harness, userId, "owner");
+      await createTag(harness, "news");
       const sessionId = await seedSession(harness, "test-user");
 
       const context = await browser.newContext({ ignoreHTTPSErrors: true });
@@ -363,6 +389,9 @@ test.describe("content new editor", () => {
       await expect(page.locator("#editor")).toBeVisible();
       await page.locator(".ProseMirror").first().waitFor({ state: "visible" });
       await expect(page.locator("#page_content")).toBeHidden();
+      await expect(page.locator("#tags")).toBeVisible();
+      await expect(page.locator("#tags option", { hasText: "news" })).toBeVisible();
+      await page.locator("#tags").selectOption("news");
 
       await page.goto(
         `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/memberships`,

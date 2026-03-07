@@ -47,6 +47,18 @@
           </div>
         </div>
 
+        <label for="tags">Tags</label>
+        {% if tags.is_empty() %}
+        <p class="inline-body">No tags defined yet.</p>
+        {% else %}
+        <select id="tags" name="tags" multiple size="6">
+          {% for tag in tags %}
+          <option value="{{ tag.name }}">{{ tag.name }}</option>
+          {% endfor %}
+        </select>
+        <p class="inline-body">Hold Command or Control to select multiple tags.</p>
+        {% endif %}
+
         <label for="page_content">Content</label>
         <div class="editor-toolbar" data-editor-toolbar>
           <div class="editor-toolbar__group">
