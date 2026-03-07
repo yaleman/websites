@@ -23,6 +23,7 @@ The system manages site metadata, content, tags, assets, and memberships in a SQ
 - Prefer workspace-level dependency declarations and `workspace = true` member usage to keep crate versions aligned.
 - Binaries should parse CLI arguments and environment variables via `clap`.
 - All askama templates should derive `askama_web::WebTemplate` so we don't have to manually implement `IntoResponse`
+- All admin templates should be based on `base_template.html` to keep navigation/UI consistent.
 
 ## System Design Updates
 
