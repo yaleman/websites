@@ -4,3 +4,5 @@
 /admin-ui-assets/editor.css
 /admin-ui-assets/*.map
 database.sqlite
+build_rs_cov.profraw
+tarpaulin-report.html
