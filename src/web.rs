@@ -7,10 +7,10 @@ use crate::tls::build_tls_config;
 use crate::{
     NewAsset, NewAssetVariant, NewContent, cli::OidcConfig, content_primary_route, create_asset,
     create_asset_variant, create_content, create_membership, create_site, delete_membership,
-    get_membership_by_id, get_revision, get_revision_by_number, list_aliases, list_asset_variants,
-    list_assets, list_content, list_content_tags, list_memberships, list_revisions, list_sites,
-    list_tags, list_users_by_ids, render_content_preview, render_site, search_content,
-    update_content, update_membership_role, update_site_settings,
+    get_membership_by_id, get_revision, get_revision_by_number, list_aliases, list_assets,
+    list_content, list_content_tags, list_memberships, list_revisions, list_sites, list_tags,
+    list_users_by_ids, render_content_preview, render_site, search_content, update_content,
+    update_membership_role, update_site_settings,
 };
 use anyhow::Context;
 use askama::Template;
@@ -166,7 +166,6 @@ struct AdminContentSourceTemplate {
     draft: bool,
     published_at: String,
     page_content: String,
-    assets_html: String,
     site_id: Uuid,
     allow_external_image: bool,
 }
@@ -1413,9 +1412,6 @@ async fn admin_site_content_source(
         .await
         .map_err(|err| SiteError::internal(format!("failed to load content {content_id}: {err}")))?
         .ok_or(SiteError::NotFound)?;
-    let assets_html = render_asset_embed_library(state.db.as_ref(), content.site_id)
-        .await
-        .map_err(|error| SiteError::internal(format!("failed to load assets: {error}")))?;
     let preview_href = format!(
         "/admin/site/{}/content/{}/preview",
         content.site_id, content.id
@@ -1442,7 +1438,6 @@ async fn admin_site_content_source(
         draft,
         published_at,
         page_content,
-        assets_html,
         site_id: content.site_id,
         allow_external_image: true,
     })
@@ -1522,58 +1517,6 @@ async fn admin_site_content_preview(
             ))
         })?;
     Ok(Html(rendered))
-}
-
-async fn render_asset_embed_library(
-    db: &DatabaseConnection,
-    site_id: Uuid,
-) -> Result<String, String> {
-    let assets = list_assets(db, site_id).await?;
-    if assets.is_empty() {
-        return Ok(
-            "<section class=\"embed-library\"><h2>Media Embeds</h2><p>No assets uploaded.</p></section>"
-                .to_string(),
-        );
-    }
-
-    let mut rows = String::new();
-    for asset in assets {
-        let variants = list_asset_variants(db, asset.id).await?;
-        let mut variant_links = Vec::new();
-        variant_links.push(format!(
-            "<code>![{}](/media/images/{})</code>",
-            escape_html(&asset.original_filename),
-            escape_html(&asset.storage_basename)
-        ));
-        for variant in variants {
-            if variant.filename == asset.storage_basename {
-                continue;
-            }
-            variant_links.push(format!(
-                "<code>![{}](/media/images/{})</code>",
-                escape_html(&asset.original_filename),
-                escape_html(&variant.filename)
-            ));
-        }
-
-        rows.push_str(&format!(
-            "<li><strong>{}</strong> ({})<div class=\"embed-snippets\">{}</div></li>",
-            escape_html(&asset.original_filename),
-            escape_html(&asset.mime_type),
-            variant_links.join("<br/>")
-        ));
-    }
-
-    Ok(format!(
-        r#"
-      <section class="embed-library">
-        <h2>Media Embeds</h2>
-        <p>Use these snippets to embed assets.</p>
-        <ul>{}</ul>
-      </section>
-    "#,
-        rows
-    ))
 }
 
 async fn admin_site_content_advanced(
