@@ -1,4 +1,4 @@
-use crate::{entities::PageType, errors::SiteError};
+use crate::entities::PageType;
 use chrono::{DateTime, Datelike, Utc};
 use quick_xml::Reader;
 use quick_xml::events::Event;
@@ -1089,19 +1089,6 @@ fn normalize_slug(value: &str) -> String {
     }
 }
 
-/// Returns a single content item by id.
-pub async fn get_content(
-    db: &DatabaseConnection,
-    content_id: Uuid,
-) -> StdResult<entities::content_item::Model, SiteError> {
-    let content = entities::content_item::Entity::find_by_id(content_id)
-        .one(db)
-        .await?;
-    let content = content.ok_or(SiteError::NotFound)?;
-
-    Ok(content)
-}
-
 /// Creates a content alias entry.
 pub async fn create_alias<C: ConnectionTrait>(
     db: &C,
@@ -1861,9 +1848,12 @@ mod tests {
             .expect("failed to search content");
         assert_eq!(search.len(), 1);
 
-        let fetched = get_content(&db, content.id)
+        let fetched = entities::content_item::Entity::find_by_id(content.id)
+            .filter(entities::content_item::Column::SiteId.eq(site.id))
+            .one(&db)
             .await
-            .expect("failed to get content");
+            .expect("failed to fetch content by id")
+            .expect("content not found");
         assert_eq!(fetched.id, content.id);
 
         let alias = create_alias(

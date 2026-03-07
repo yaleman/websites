@@ -1,16 +1,16 @@
-use crate::entities::PageType;
 use crate::entities::audit_event::log_audit_event;
 use crate::entities::site::get_by_id;
+use crate::entities::{self, PageType};
 use crate::errors::SiteError;
 use crate::middleware::log_requests;
 use crate::tls::build_tls_config;
 use crate::{
     NewAsset, NewAssetVariant, NewContent, cli::OidcConfig, content_primary_route, create_asset,
     create_asset_variant, create_content, create_membership, create_site, delete_membership,
-    get_content, get_membership_by_id, get_revision, get_revision_by_number, list_aliases,
-    list_asset_variants, list_assets, list_content, list_content_tags, list_memberships,
-    list_revisions, list_sites, list_tags, list_users_by_ids, render_site, search_content,
-    update_content, update_membership_role, update_site_settings,
+    get_membership_by_id, get_revision, get_revision_by_number, list_aliases, list_asset_variants,
+    list_assets, list_content, list_content_tags, list_memberships, list_revisions, list_sites,
+    list_tags, list_users_by_ids, render_site, search_content, update_content,
+    update_membership_role, update_site_settings,
 };
 use anyhow::Context;
 use askama::Template;
@@ -30,7 +30,10 @@ use openidconnect::{
     core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata},
 };
 use reqwest::redirect::Policy;
-use sea_orm::{ConnectionTrait, DatabaseConnection, TransactionTrait};
+use sea_orm::{
+    ColumnTrait as _, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    TransactionTrait,
+};
 use serde::Deserialize;
 use serde_json::json;
 use similar::TextDiff;
@@ -96,7 +99,6 @@ macro_rules! admin_page_template {
 
 admin_page_template!(AdminIndexTemplate, "admin_index.html");
 admin_page_template!(AdminSitesNewTemplate, "admin_sites_new.html");
-admin_page_template!(AdminContentListTemplate, "admin_content_list.html");
 admin_page_template!(AdminSearchTemplate, "admin_content_search.html");
 admin_page_template!(AdminContentDetailTemplate, "admin_content_detail.html");
 admin_page_template!(AdminContentSourceTemplate, "admin_content_source.html");
@@ -109,6 +111,18 @@ admin_page_template!(AdminRevisionDiffTemplate, "admin_revision_diff.html");
 admin_page_template!(AdminAssetsTemplate, "admin_assets.html");
 admin_page_template!(AdminAssetsNewTemplate, "admin_assets_new.html");
 admin_page_template!(AdminRenderTemplate, "admin_render.html");
+
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_content_list.html")]
+struct AdminContentListTemplate {
+    template_shared: AdminTemplateData,
+    heading: String,
+    site_id: Uuid,
+    content_items: Vec<entities::content_item::Model>,
+    links: Vec<AdminLink>,
+    inline_body: String,
+    pre_body: String,
+}
 
 #[derive(Template, WebTemplate)]
 #[template(path = "admin_tags.html")]
@@ -848,39 +862,26 @@ async fn admin_site_content_list(
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
 
     match list_content(state.db.as_ref(), site_id, None).await {
-        Ok(content) => {
-            let rows = content
-                .into_iter()
-                .map(|item| AdminRow {
-                    label: item.title,
-                    value: format!(
-                        "{0} (type: {1}) [detail: /admin/site/{2}/content/{3}]",
-                        item.id, item.page_type, item.site_id, item.id
-                    ),
-                })
-                .collect();
-
-            Ok(AdminContentListTemplate {
-                template_shared: AdminTemplateData {
-                    page_title: "Content".to_string(),
-                    page_message: None,
-                },
-                heading: site.full_title,
-
-                rows,
-                links: vec![
-                    AdminLink::new(&format!("/admin/site/{site_id}/content/new"), "New content"),
-                    AdminLink::new(&format!("/admin/site/{site_id}/search"), "Search content"),
-                    AdminLink::new(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
-                    AdminLink::new(&format!("/admin/site/{site_id}/tags"), "Tags"),
-                    AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Assets"),
-                    AdminLink::new(&format!("/admin/site/{site_id}/render"), "Render"),
-                    AdminLink::new(&format!("/admin/site/{site_id}/settings"), "Site settings"),
-                ],
-                inline_body: String::new(),
-                pre_body: String::new(),
-            })
-        }
+        Ok(pages) => Ok(AdminContentListTemplate {
+            template_shared: AdminTemplateData {
+                page_title: "Content".to_string(),
+                page_message: None,
+            },
+            heading: site.full_title,
+            site_id,
+            content_items: pages,
+            links: vec![
+                AdminLink::new(&format!("/admin/site/{site_id}/content/new"), "New content"),
+                AdminLink::new(&format!("/admin/site/{site_id}/search"), "Search content"),
+                AdminLink::new(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
+                AdminLink::new(&format!("/admin/site/{site_id}/tags"), "Tags"),
+                AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Assets"),
+                AdminLink::new(&format!("/admin/site/{site_id}/render"), "Render"),
+                AdminLink::new(&format!("/admin/site/{site_id}/settings"), "Site settings"),
+            ],
+            inline_body: String::new(),
+            pre_body: String::new(),
+        }),
         Err(error) => Err(SiteError::internal(format!(
             "failed to load content for site {site_id}: {error}"
         ))),
@@ -1260,11 +1261,12 @@ async fn admin_site_content_detail(
 ) -> Result<AdminContentDetailTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
 
-    let content = get_content(state.db.as_ref(), content_id)
+    let content = entities::content_item::Entity::find_by_id(content_id)
+        .filter(entities::content_item::Column::SiteId.eq(site_id))
+        .one(state.db.as_ref())
         .await
-        .map_err(|err| {
-            SiteError::internal(format!("failed to load content {content_id}: {err}"))
-        })?;
+        .map_err(|err| SiteError::internal(format!("failed to load content {content_id}: {err}")))?
+        .ok_or(SiteError::NotFound)?;
     let content_id = content.id.to_string();
 
     let published_at = content
@@ -1352,11 +1354,12 @@ async fn admin_site_content_source(
 ) -> Result<AdminContentSourceTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Author).await?;
 
-    let content = get_content(state.db.as_ref(), content_id)
+    let content = entities::content_item::Entity::find_by_id(content_id)
+        .filter(entities::content_item::Column::SiteId.eq(site_id))
+        .one(state.db.as_ref())
         .await
-        .map_err(|error| {
-            SiteError::internal(format!("failed to load source for {content_id}: {error}"))
-        })?;
+        .map_err(|err| SiteError::internal(format!("failed to load content {content_id}: {err}")))?
+        .ok_or(SiteError::NotFound)?;
     let assets_html = render_asset_embed_library(state.db.as_ref(), content.site_id)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load assets: {error}")))?;
@@ -1558,11 +1561,12 @@ async fn admin_site_content_advanced(
     Path((site_id, content_id)): Path<(Uuid, Uuid)>,
 ) -> Result<AdminContentAdvancedTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
-    let content = get_content(state.db.as_ref(), content_id)
+    let content = entities::content_item::Entity::find_by_id(content_id)
+        .filter(entities::content_item::Column::SiteId.eq(site_id))
+        .one(state.db.as_ref())
         .await
-        .map_err(|error| {
-            SiteError::internal(format!("failed to load content {content_id}: {error}"))
-        })?;
+        .map_err(|err| SiteError::internal(format!("failed to load content {content_id}: {err}")))?
+        .ok_or(SiteError::NotFound)?;
 
     let aliases = list_aliases(state.db.as_ref(), content.site_id, Some(content.id))
         .await
