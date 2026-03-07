@@ -86,9 +86,11 @@ struct AdminContentNewTemplate {
     site_id: String,
     site_short_name: String,
     message: String,
-    content_href: String,
-    settings_href: String,
+    // content_href: String,
+    // settings_href: String,
     tags: Vec<AdminTagOption>,
+    links: Vec<AdminLink>,
+    heading: String,
 }
 
 #[derive(Template, WebTemplate)]
@@ -1137,10 +1139,12 @@ async fn admin_site_content_new(
         title: "New Content".to_string(),
         site_id: site.id.to_string(),
         site_short_name: site.short_name,
-        message: "Create a page or post and start drafting immediately.".to_string(),
-        content_href: format!("/admin/site/{site_id}/content"),
-        settings_href: format!("/admin/site/{site_id}/settings"),
+        message: "".to_string(),
+        // content_href: format!("/admin/site/{site_id}/content"),
+        // settings_href: format!("/admin/site/{site_id}/settings"),
         tags,
+        heading: "Create Content".to_string(),
+        links: Vec::new(),
     })
 }
 

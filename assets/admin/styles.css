@@ -1,0 +1,46 @@
+:root {
+	--small-border-radius: 0.25rem;
+	--medium-border-radius: 0.5rem;
+	--large-border-radius: 0.75rem;
+
+	--dark-purple: rgb(100, 0, 215);
+	--dark-green: rgb(0, 101, 2);
+	--text-white: rgb(255, 255, 255);
+	--text-darK: #000;
+	--border-light: #aaa;
+}
+
+button {
+	background-color: var(--dark-purple);
+	border-radius: var(--small-border-radius);
+	color: var(--text-white);
+}
+
+button.save {
+	background-color: var(--dark-green);
+	color: var(--text-white);
+}
+
+input {
+	border: 1px solid var(--border-light);
+	border-radius: var(--small-border-radius);
+	padding: var(--small-border-radius) var(--small-border-radius);
+	width: 100%;
+	box-sizing: border-box;
+	background-color: white;
+	color: var(--text-dark);
+}
+
+select {
+	border: 1px solid var(--border-light);
+	border-radius: var(--small-border-radius);
+	padding: var(--small-border-radius) var(--small-border-radius);
+	width: 100%;
+	box-sizing: border-box;
+	background-color: white;
+	color: var(--text-dark);
+}
+
+h1.page-title {
+	margin: 0;
+}
