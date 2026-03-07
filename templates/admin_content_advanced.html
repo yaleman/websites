@@ -1,0 +1,31 @@
+{% extends "base_template.html" %}
+{% block body %}
+{% if !rows.is_empty() %}
+<table>
+  <thead>
+    <tr>
+      <th>Title</th>
+      <th>Value</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.label }}</td>
+      <td>{{ row.value }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if !pre_body.is_empty() %}
+<pre>{{ pre_body }}</pre>
+{% endif %}
+
+{% if !inline_body.is_empty() %}
+<section class="inline-body">
+  {{ inline_body | safe }}
+</section>
+{% endif %}
+{% endblock %}

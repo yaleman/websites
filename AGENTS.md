@@ -24,6 +24,7 @@ The system manages site metadata, content, tags, assets, and memberships in a SQ
 - Binaries should parse CLI arguments and environment variables via `clap`.
 - All askama templates should derive `askama_web::WebTemplate` so we don't have to manually implement `IntoResponse`
 - All admin templates should be based on `base_template.html` to keep navigation/UI consistent.
+- Each admin view should have its own template file (no shared admin view template).
 
 ## System Design Updates
 
