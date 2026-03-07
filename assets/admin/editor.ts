@@ -162,12 +162,12 @@ const initEditor = () => {
 			element: root,
 			content: textarea.value || "",
 			contentType: "markdown",
-			extensions: [
-				StarterKit,
-				Image,
-				Link.configure({ openOnClick: false }),
-				Markdown,
-			],
+      extensions: [
+        StarterKit.configure({ link: false }),
+        Image,
+        Link.configure({ openOnClick: false }),
+        Markdown,
+      ],
 			onUpdate: ({ editor }) => {
 				textarea.value = editor.getMarkdown();
 				previewControls.updatePreview();
