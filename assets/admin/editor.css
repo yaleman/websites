@@ -1,3 +1,48 @@
+.editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.4rem;
+  border: 1px solid #b8b8b8;
+  border-radius: 6px 6px 0 0;
+  background: #f6f7fb;
+}
+
+.editor-toolbar__group {
+  display: flex;
+  gap: 0.35rem;
+  padding-right: 0.5rem;
+  border-right: 1px solid #d6d6d6;
+}
+
+.editor-toolbar__group:last-child {
+  border-right: 0;
+  padding-right: 0;
+}
+
+.editor-button {
+  border: 1px solid #c2c2c2;
+  background: #ffffff;
+  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.85rem;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.editor-button:hover,
+.editor-button:focus {
+  border-color: #6a7ae8;
+  box-shadow: 0 0 0 2px rgba(106, 122, 232, 0.2);
+  outline: none;
+}
+
+.editor-toolbar + .editor-shell {
+  border-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
 .editor-shell {
   border: 1px solid #b8b8b8;
   border-radius: 6px;
@@ -6,14 +51,10 @@
   background: #fff;
 }
 
-.editor-shell .milkdown {
+.editor-shell .ProseMirror {
   min-height: 300px;
 }
 
-.editor-shell .milkdown .editor {
-  min-height: 300px;
-}
-
-.editor-shell .milkdown .editor:focus {
+.editor-shell .ProseMirror:focus {
   outline: none;
 }
