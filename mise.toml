@@ -30,5 +30,5 @@ run = "cargo tarpaulin --lib --out Html --exclude-files src/cli.rs"
 [tasks.coveralls]
 run = [
     "cargo tarpaulin --coveralls ${COVERALLS_REPO_TOKEN} --exclude-files src/cli.rs",
-    "@echo \"Coveralls repo information is at https://coveralls.io/github/yaleman/websites\"",
+    "echo \"Coveralls repo information is at https://coveralls.io/github/yaleman/websites\"",
 ]

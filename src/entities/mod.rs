@@ -77,3 +77,24 @@ impl PageType {
         matches!(self, PageType::Page)
     }
 }
+
+#[test]
+fn test_pagetype() {
+    let post = PageType::Post;
+    let page = PageType::Page;
+
+    assert_eq!(post.as_ref(), "post");
+    assert_eq!(page.as_ref(), "page");
+
+    assert_eq!(post.to_string(), "post");
+    assert_eq!(page.to_string(), "page");
+
+    assert_eq!(PageType::from_str("post").unwrap(), PageType::Post);
+    assert_eq!(PageType::from_str("page").unwrap(), PageType::Page);
+
+    assert!(post.is_post());
+    assert!(!post.is_page());
+
+    assert!(!page.is_post());
+    assert!(page.is_page());
+}
