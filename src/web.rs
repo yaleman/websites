@@ -32,9 +32,10 @@ use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 use serde_json::json;
 use similar::TextDiff;
+use std::env;
 use std::io::Cursor;
 use std::net::SocketAddr;
-use std::path::Path as StdPath;
+use std::path::{Path as StdPath, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::fs;
@@ -233,12 +234,20 @@ pub async fn run_admin_server(
         state.oidc_frontend_url
     );
 
+    let assets_dir = resolve_admin_assets_dir();
+    tracing::info!("admin assets dir: {}", assets_dir.display());
+    if !assets_dir.join("editor.js").exists() {
+        tracing::warn!(
+            "admin editor assets not found; run `pnpm run build:admin` to generate them"
+        );
+    }
+
     let app = Router::new()
         .route("/", get(admin_root))
         .route("/admin/login", get(admin_login))
         .route("/oauth2/callback", get(admin_login_callback))
         .route("/admin/logout", get(admin_logout))
-        .nest_service("/admin/assets", ServeDir::new("admin-ui-assets"))
+        .nest_service("/admin/assets", ServeDir::new(assets_dir))
         .merge(protected_routes)
         .layer(session_layer)
         .layer(from_fn(log_requests))
@@ -251,6 +260,35 @@ pub async fn run_admin_server(
         .serve(app.into_make_service())
         .await
         .context("axum rustls server exited unexpectedly")
+}
+
+fn resolve_admin_assets_dir() -> PathBuf {
+    if let Ok(value) = env::var("WEBSITES_ADMIN_ASSETS_DIR") {
+        let path = PathBuf::from(value);
+        if path.exists() {
+            return path;
+        }
+    }
+
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut candidates = vec![cwd.join("admin-ui-assets")];
+
+    if let Ok(exe) = env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        candidates.push(dir.join("admin-ui-assets"));
+        if let Some(parent) = dir.parent() {
+            candidates.push(parent.join("admin-ui-assets"));
+        }
+    }
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+
+    cwd.join("admin-ui-assets")
 }
 
 async fn admin_root() -> Redirect {
