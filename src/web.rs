@@ -9,8 +9,8 @@ use crate::{
     create_asset_variant, create_content, create_membership, create_site, delete_membership,
     get_membership_by_id, get_revision, get_revision_by_number, list_aliases, list_asset_variants,
     list_assets, list_content, list_content_tags, list_memberships, list_revisions, list_sites,
-    list_tags, list_users_by_ids, render_site, search_content, update_content,
-    update_membership_role, update_site_settings,
+    list_tags, list_users_by_ids, render_content_preview, render_site, search_content,
+    update_content, update_membership_role, update_site_settings,
 };
 use anyhow::Context;
 use askama::Template;
@@ -19,7 +19,7 @@ use axum::middleware::{Next, from_fn};
 use axum::{
     Router,
     extract::{Form, Multipart, Path, Query, Request, State},
-    response::{IntoResponse, Redirect, Response},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::get,
 };
 use chrono::{DateTime, Utc};
@@ -407,6 +407,10 @@ pub async fn run_admin_server(
         .route(
             "/admin/site/{site_id}/content/{content_id}/source",
             get(admin_site_content_source).post(admin_site_content_source_update),
+        )
+        .route(
+            "/admin/site/{site_id}/content/{content_id}/preview",
+            get(admin_site_content_preview),
         )
         .route(
             "/admin/site/{site_id}/content/{content_id}/advanced",
@@ -1377,7 +1381,10 @@ async fn admin_site_content_source(
     let assets_html = render_asset_embed_library(state.db.as_ref(), content.site_id)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load assets: {error}")))?;
-    let preview_href = format!("/{}/", content_primary_route(&content).trim_matches('/'));
+    let preview_href = format!(
+        "/admin/site/{}/content/{}/preview",
+        content.site_id, content.id
+    );
     let back_href = format!("/admin/site/{}/content/{}", content.site_id, content.id);
     let page_type = content.page_type.to_string();
     let draft = content.draft;
@@ -1462,6 +1469,22 @@ async fn admin_site_content_source_update(
         "/admin/site/{}/content/{}",
         content.site_id, content.id
     )))
+}
+
+async fn admin_site_content_preview(
+    State(state): State<AdminState>,
+    session: Session,
+    Path((site_id, content_id)): Path<(Uuid, Uuid)>,
+) -> Result<Html<String>, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
+    let rendered = render_content_preview(state.db.as_ref(), site_id, content_id, "templates")
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!(
+                "failed to render preview for content {content_id}: {error}"
+            ))
+        })?;
+    Ok(Html(rendered))
 }
 
 async fn render_asset_embed_library(

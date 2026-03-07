@@ -385,6 +385,63 @@ pub async fn render_site(
     Ok(files_written)
 }
 
+pub async fn render_content_preview(
+    db: &DatabaseConnection,
+    site_id: Uuid,
+    content_id: Uuid,
+    templates_dir: &str,
+) -> StdResult<String, String> {
+    let site = entities::site::Entity::find_by_id(site_id)
+        .one(db)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "site not found".to_string())?;
+
+    let content = entities::content_item::Entity::find_by_id(content_id)
+        .filter(entities::content_item::Column::SiteId.eq(site.id))
+        .one(db)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "content not found".to_string())?;
+
+    let template_root = Path::new(templates_dir).join(site.template_name.clone());
+    let post_template = load_template(&template_root, "post.html", DEFAULT_POST_TEMPLATE).await?;
+    let page_template = load_template(&template_root, "page.html", DEFAULT_PAGE_TEMPLATE).await?;
+
+    let mut tera = Tera::default();
+    tera.autoescape_on(vec![]);
+    tera.add_raw_template("post.html", &post_template)
+        .map_err(|error| error.to_string())?;
+    tera.add_raw_template("page.html", &page_template)
+        .map_err(|error| error.to_string())?;
+
+    let html = markdown::to_html(&content.page_content);
+    let template = if content.page_type == PageType::Post {
+        "post.html"
+    } else {
+        "page.html"
+    };
+    let tags = load_tag_names(db, content.id).await?;
+    let tag_links = render_tag_links(&tags);
+    let mut context = Context::new();
+    context.insert("title", &content.title);
+    context.insert("content", &html);
+    context.insert("slug", &content.slug);
+    context.insert("site_title", &site.full_title);
+    context.insert("page_type", &content.page_type);
+    context.insert("created_at", &content.created_at);
+    context.insert("published_at", &content.published_at);
+    context.insert("content_id", &content.id);
+    context.insert(
+        "primary_url",
+        &format!("/{}", content_primary_route(&content).trim_matches('/')),
+    );
+    context.insert("tags", &tags);
+    context.insert("tag_links", &tag_links);
+
+    render_template(&tera, template, &context)
+}
+
 async fn load_template(
     template_root: &Path,
     filename: &str,
