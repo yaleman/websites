@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -48,37 +48,20 @@ function runCommand(
   });
 }
 
-function waitForOutput(
-  child: ReturnType<typeof spawn>,
-  pattern: RegExp,
-  timeoutMs: number,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("server did not become ready in time"));
-    }, timeoutMs);
+async function loadEnvValue(name: string): Promise<string | undefined> {
+  const value = process.env[name];
+  if (value && value.length > 0) {
+    return value;
+  }
 
-    const onData = (data: Buffer) => {
-      const text = data.toString();
-      if (pattern.test(text)) {
-        clearTimeout(timeout);
-        cleanup();
-        resolve();
-      }
-    };
-
-    const cleanup = () => {
-      child.stdout?.off("data", onData);
-      child.stderr?.off("data", onData);
-    };
-
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", onData);
-    child.on("exit", () => {
-      clearTimeout(timeout);
-      cleanup();
-    });
-  });
+  try {
+    const envrc = await readFile(".envrc", "utf8");
+    const pattern = new RegExp(`export\\s+${name}=(?:\"([^\"]+)\"|([^\\s]+))`);
+    const match = envrc.match(pattern);
+    return match?.[1] ?? match?.[2];
+  } catch {
+    return undefined;
+  }
 }
 
 async function reservePort(): Promise<number> {
@@ -98,6 +81,39 @@ async function reservePort(): Promise<number> {
   });
 }
 
+async function waitForPort(
+  port: number,
+  server: ReturnType<typeof spawn>,
+  logs: { stdout: string; stderr: string },
+  timeoutMs: number,
+): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (server.exitCode !== null) {
+      throw new Error(
+        `server exited early:\n${logs.stderr}\n${logs.stdout}`,
+      );
+    }
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const socket = net.connect(port, "127.0.0.1", () => {
+          socket.end();
+          resolve();
+        });
+        socket.once("error", reject);
+      });
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+
+  throw new Error(
+    `server did not become ready in time:\n${logs.stderr}\n${logs.stdout}`,
+  );
+}
+
 test.describe("content new editor", () => {
   test.setTimeout(120_000);
 
@@ -106,13 +122,33 @@ test.describe("content new editor", () => {
     const dbPath = path.join(tempRoot, "database.sqlite");
     const databaseUrl = `sqlite://${dbPath}?mode=rwc`;
     const env = { ...process.env };
+    const tlsCertPath = await loadEnvValue("WEBSITES_TLS_CERT_PATH");
+    const tlsKeyPath = await loadEnvValue("WEBSITES_TLS_KEY_PATH");
+    if (!tlsCertPath || !tlsKeyPath) {
+      throw new Error(
+        "Missing WEBSITES_TLS_CERT_PATH/WEBSITES_TLS_KEY_PATH. Set env vars or update .envrc.",
+      );
+    }
 
     let server: ReturnType<typeof spawn> | null = null;
+    const serverLogs = { stdout: "", stderr: "" };
 
     try {
       await runCommand(
         "cargo",
-        ["run", "--", "init", "--database-url", dbPath],
+        [
+          "run",
+          "--",
+          "--database-url",
+          dbPath,
+          "--tls-cert-path",
+          tlsCertPath,
+          "--tls-key-path",
+          tlsKeyPath,
+          "--frontend-url",
+          "https://127.0.0.1",
+          "init",
+        ],
         { env },
       );
       const siteResult = await runCommand(
@@ -120,10 +156,16 @@ test.describe("content new editor", () => {
         [
           "run",
           "--",
-          "site",
-          "create",
           "--database-url",
           dbPath,
+          "--tls-cert-path",
+          tlsCertPath,
+          "--tls-key-path",
+          tlsKeyPath,
+          "--frontend-url",
+          "https://127.0.0.1",
+          "site",
+          "create",
           "--short-name",
           "test",
           "--full-title",
@@ -165,10 +207,16 @@ test.describe("content new editor", () => {
         [
           "run",
           "--",
-          "serve",
-          "admin",
           "--database-url",
           dbPath,
+          "--tls-cert-path",
+          tlsCertPath,
+          "--tls-key-path",
+          tlsKeyPath,
+          "--frontend-url",
+          `https://127.0.0.1:${port}`,
+          "serve",
+          "admin",
           "--listen",
           `127.0.0.1:${port}`,
         ],
@@ -177,21 +225,26 @@ test.describe("content new editor", () => {
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
-      await waitForOutput(server, /admin server listening on http:\/\//, 30_000);
+      server.stdout?.on("data", (data) => {
+        serverLogs.stdout += data.toString();
+      });
+      server.stderr?.on("data", (data) => {
+        serverLogs.stderr += data.toString();
+      });
+      await waitForPort(port, server, serverLogs, 30_000);
 
-      const context = await browser.newContext();
+      const context = await browser.newContext({ ignoreHTTPSErrors: true });
       await context.addCookies([
         {
           name: "id",
           value: sessionId,
-          url: `http://127.0.0.1:${port}`,
-          path: "/",
+          url: `https://127.0.0.1:${port}`,
         },
       ]);
 
       const page = await context.newPage();
       await page.goto(
-        `http://127.0.0.1:${port}/admin/site/${siteId}/content/new`,
+        `https://127.0.0.1:${port}/admin/site/${siteId}/content/new`,
         { waitUntil: "domcontentloaded" },
       );
 
