@@ -114,188 +114,249 @@ async function waitForPort(
   );
 }
 
+type TestHarness = {
+  tempRoot: string;
+  dbPath: string;
+  databaseUrl: string;
+  env: NodeJS.ProcessEnv;
+  tlsCertPath: string;
+  tlsKeyPath: string;
+  port: number;
+  server: ReturnType<typeof spawn>;
+  serverLogs: { stdout: string; stderr: string };
+  siteId: string;
+};
+
+async function resolveTlsPaths(): Promise<{ tlsCertPath: string; tlsKeyPath: string }> {
+  const tlsCertPath = await loadEnvValue("WEBSITES_TLS_CERT_PATH");
+  const tlsKeyPath = await loadEnvValue("WEBSITES_TLS_KEY_PATH");
+  if (!tlsCertPath || !tlsKeyPath) {
+    throw new Error(
+      "Missing WEBSITES_TLS_CERT_PATH/WEBSITES_TLS_KEY_PATH. Set env vars or update .envrc.",
+    );
+  }
+  return { tlsCertPath, tlsKeyPath };
+}
+
+async function setupHarness(): Promise<TestHarness> {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "websites-e2e-"));
+  const dbPath = path.join(tempRoot, "database.sqlite");
+  const databaseUrl = `sqlite://${dbPath}?mode=rwc`;
+  const env = { ...process.env };
+  const { tlsCertPath, tlsKeyPath } = await resolveTlsPaths();
+
+  await runCommand(
+    "cargo",
+    [
+      "run",
+      "--",
+      "--database-url",
+      dbPath,
+      "--tls-cert-path",
+      tlsCertPath,
+      "--tls-key-path",
+      tlsKeyPath,
+      "--frontend-url",
+      "https://127.0.0.1",
+      "init",
+    ],
+    { env },
+  );
+  const siteResult = await runCommand(
+    "cargo",
+    [
+      "run",
+      "--",
+      "--database-url",
+      dbPath,
+      "--tls-cert-path",
+      tlsCertPath,
+      "--tls-key-path",
+      tlsKeyPath,
+      "--frontend-url",
+      "https://127.0.0.1",
+      "site",
+      "create",
+      "--short-name",
+      "test",
+      "--full-title",
+      "Test Site",
+      "--template-name",
+      "default",
+    ],
+    { env },
+  );
+
+  const siteMatch = siteResult.stdout.match(/created site: ([^ ]+)/);
+  if (!siteMatch) {
+    throw new Error(`failed to parse site id: ${siteResult.stdout}`);
+  }
+  const siteId = siteMatch[1];
+
+  const port = await reservePort();
+  const serverLogs = { stdout: "", stderr: "" };
+  const server = spawn(
+    "cargo",
+    [
+      "run",
+      "--",
+      "--database-url",
+      dbPath,
+      "--tls-cert-path",
+      tlsCertPath,
+      "--tls-key-path",
+      tlsKeyPath,
+      "--frontend-url",
+      `https://127.0.0.1:${port}`,
+      "serve",
+      "admin",
+      "--listen",
+      `127.0.0.1:${port}`,
+    ],
+    {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  server.stdout?.on("data", (data) => {
+    serverLogs.stdout += data.toString();
+  });
+  server.stderr?.on("data", (data) => {
+    serverLogs.stderr += data.toString();
+  });
+  await waitForPort(port, server, serverLogs, 30_000);
+
+  return {
+    tempRoot,
+    dbPath,
+    databaseUrl,
+    env,
+    tlsCertPath,
+    tlsKeyPath,
+    port,
+    server,
+    serverLogs,
+    siteId,
+  };
+}
+
+async function createUser(
+  harness: TestHarness,
+  subject: string,
+): Promise<string> {
+  const result = await runCommand(
+    "cargo",
+    [
+      "run",
+      "--",
+      "--database-url",
+      harness.dbPath,
+      "--tls-cert-path",
+      harness.tlsCertPath,
+      "--tls-key-path",
+      harness.tlsKeyPath,
+      "--frontend-url",
+      "https://127.0.0.1",
+      "user",
+      "create",
+      "--subject",
+      subject,
+    ],
+    { env: harness.env },
+  );
+  const match = result.stdout.match(/created user: ([^ ]+)/);
+  if (!match) {
+    throw new Error(`failed to parse user id: ${result.stdout}`);
+  }
+  return match[1];
+}
+
+async function addMembership(
+  harness: TestHarness,
+  userId: string,
+  role: string,
+): Promise<void> {
+  await runCommand(
+    "cargo",
+    [
+      "run",
+      "--",
+      "--database-url",
+      harness.dbPath,
+      "--tls-cert-path",
+      harness.tlsCertPath,
+      "--tls-key-path",
+      harness.tlsKeyPath,
+      "--frontend-url",
+      "https://127.0.0.1",
+      "site",
+      "member-add",
+      "--site-id",
+      harness.siteId,
+      "--user-id",
+      userId,
+      "--role",
+      role,
+    ],
+    { env: harness.env },
+  );
+}
+
+async function seedSession(
+  harness: TestHarness,
+  subject: string,
+): Promise<string> {
+  const result = await runCommand(
+    "cargo",
+    [
+      "run",
+      "--bin",
+      "session_seed",
+      "--",
+      "--database-url",
+      harness.databaseUrl,
+      "--user-sub",
+      subject,
+    ],
+    { env: harness.env },
+  );
+  const sessionId = result.stdout.trim();
+  if (!sessionId) {
+    throw new Error("missing session id output");
+  }
+  return sessionId;
+}
+
+async function cleanupHarness(harness: TestHarness): Promise<void> {
+  if (!harness.server.killed) {
+    harness.server.kill("SIGTERM");
+  }
+  await rm(harness.tempRoot, { recursive: true, force: true });
+}
+
 test.describe("content new editor", () => {
   test.setTimeout(120_000);
 
   test("renders TipTap editor", async ({ browser }) => {
-    const tempRoot = await mkdtemp(path.join(tmpdir(), "websites-e2e-"));
-    const dbPath = path.join(tempRoot, "database.sqlite");
-    const databaseUrl = `sqlite://${dbPath}?mode=rwc`;
-    const env = { ...process.env };
-    const tlsCertPath = await loadEnvValue("WEBSITES_TLS_CERT_PATH");
-    const tlsKeyPath = await loadEnvValue("WEBSITES_TLS_KEY_PATH");
-    if (!tlsCertPath || !tlsKeyPath) {
-      throw new Error(
-        "Missing WEBSITES_TLS_CERT_PATH/WEBSITES_TLS_KEY_PATH. Set env vars or update .envrc.",
-      );
-    }
-
-    let server: ReturnType<typeof spawn> | null = null;
-    const serverLogs = { stdout: "", stderr: "" };
+    const harness = await setupHarness();
 
     try {
-      await runCommand(
-        "cargo",
-        [
-          "run",
-          "--",
-          "--database-url",
-          dbPath,
-          "--tls-cert-path",
-          tlsCertPath,
-          "--tls-key-path",
-          tlsKeyPath,
-          "--frontend-url",
-          "https://127.0.0.1",
-          "init",
-        ],
-        { env },
-      );
-      const siteResult = await runCommand(
-        "cargo",
-        [
-          "run",
-          "--",
-          "--database-url",
-          dbPath,
-          "--tls-cert-path",
-          tlsCertPath,
-          "--tls-key-path",
-          tlsKeyPath,
-          "--frontend-url",
-          "https://127.0.0.1",
-          "site",
-          "create",
-          "--short-name",
-          "test",
-          "--full-title",
-          "Test Site",
-          "--template-name",
-          "default",
-        ],
-        { env },
-      );
-
-      const siteMatch = siteResult.stdout.match(/created site: ([^ ]+)/);
-      if (!siteMatch) {
-        throw new Error(`failed to parse site id: ${siteResult.stdout}`);
-      }
-      const siteId = siteMatch[1];
-
-      const userResult = await runCommand(
-        "cargo",
-        [
-          "run",
-          "--",
-          "--database-url",
-          dbPath,
-          "--tls-cert-path",
-          tlsCertPath,
-          "--tls-key-path",
-          tlsKeyPath,
-          "--frontend-url",
-          "https://127.0.0.1",
-          "user",
-          "create",
-          "--subject",
-          "test-user",
-        ],
-        { env },
-      );
-      const userMatch = userResult.stdout.match(/created user: ([^ ]+)/);
-      if (!userMatch) {
-        throw new Error(`failed to parse user id: ${userResult.stdout}`);
-      }
-      const userId = userMatch[1];
-
-      await runCommand(
-        "cargo",
-        [
-          "run",
-          "--",
-          "--database-url",
-          dbPath,
-          "--tls-cert-path",
-          tlsCertPath,
-          "--tls-key-path",
-          tlsKeyPath,
-          "--frontend-url",
-          "https://127.0.0.1",
-          "site",
-          "member-add",
-          "--site-id",
-          siteId,
-          "--user-id",
-          userId,
-          "--role",
-          "owner",
-        ],
-        { env },
-      );
-
-      const sessionResult = await runCommand(
-        "cargo",
-        [
-          "run",
-          "--bin",
-          "session_seed",
-          "--",
-          "--database-url",
-          databaseUrl,
-          "--user-sub",
-          "test-user",
-        ],
-        { env },
-      );
-      const sessionId = sessionResult.stdout.trim();
-      if (!sessionId) {
-        throw new Error("missing session id output");
-      }
-
-      const port = await reservePort();
-      server = spawn(
-        "cargo",
-        [
-          "run",
-          "--",
-          "--database-url",
-          dbPath,
-          "--tls-cert-path",
-          tlsCertPath,
-          "--tls-key-path",
-          tlsKeyPath,
-          "--frontend-url",
-          `https://127.0.0.1:${port}`,
-          "serve",
-          "admin",
-          "--listen",
-          `127.0.0.1:${port}`,
-        ],
-        {
-          env,
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
-      server.stdout?.on("data", (data) => {
-        serverLogs.stdout += data.toString();
-      });
-      server.stderr?.on("data", (data) => {
-        serverLogs.stderr += data.toString();
-      });
-      await waitForPort(port, server, serverLogs, 30_000);
+      const userId = await createUser(harness, "test-user");
+      await addMembership(harness, userId, "owner");
+      const sessionId = await seedSession(harness, "test-user");
 
       const context = await browser.newContext({ ignoreHTTPSErrors: true });
       await context.addCookies([
         {
           name: "id",
           value: sessionId,
-          url: `https://127.0.0.1:${port}`,
+          url: `https://127.0.0.1:${harness.port}`,
         },
       ]);
 
       const page = await context.newPage();
       await page.goto(
-        `https://127.0.0.1:${port}/admin/site/${siteId}/content/new`,
+        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/new`,
         { waitUntil: "domcontentloaded" },
       );
 
@@ -303,10 +364,36 @@ test.describe("content new editor", () => {
       await page.locator(".ProseMirror").first().waitFor({ state: "visible" });
       await expect(page.locator("#page_content")).toBeHidden();
     } finally {
-      if (server && !server.killed) {
-        server.kill("SIGTERM");
-      }
-      await rm(tempRoot, { recursive: true, force: true });
+      await cleanupHarness(harness);
+    }
+  });
+
+  test("denies access without membership", async ({ browser }) => {
+    const harness = await setupHarness();
+
+    try {
+      await createUser(harness, "intruder");
+      const sessionId = await seedSession(harness, "intruder");
+
+      const context = await browser.newContext({ ignoreHTTPSErrors: true });
+      await context.addCookies([
+        {
+          name: "id",
+          value: sessionId,
+          url: `https://127.0.0.1:${harness.port}`,
+        },
+      ]);
+
+      const page = await context.newPage();
+      const response = await page.goto(
+        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/new`,
+        { waitUntil: "domcontentloaded" },
+      );
+
+      expect(response).not.toBeNull();
+      expect(response?.status()).toBe(401);
+    } finally {
+      await cleanupHarness(harness);
     }
   });
 });
