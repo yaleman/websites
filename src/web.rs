@@ -1355,10 +1355,16 @@ async fn admin_site_content_source(
         heading: format!("Source: {}", content.title),
         message: "Edit raw markdown and metadata, then save to create a revision.".to_string(),
         rows: vec![],
-        links: vec![link(
-            &format!("/admin/site/{}/content/{}", content.site_id, content.id),
-            "Back to content",
-        )],
+        links: vec![
+            link(
+                &format!("/{}/", content_primary_route(&content).trim_matches('/')),
+                "Preview",
+            ),
+            link(
+                &format!("/admin/site/{}/content/{}", content.site_id, content.id),
+                "Back to content",
+            ),
+        ],
         inline_body: format!(
             "{}{}",
             admin_site_content_source_form_html(&content),
