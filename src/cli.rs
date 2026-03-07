@@ -937,7 +937,9 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
             }
             ContentCommands::Inspect { content_id } => {
                 let content_id = parse_uuid(&content_id, "content_id")?;
-                let content = get_content(db_ref, content_id).await?;
+                let content = get_content(db_ref, content_id)
+                    .await
+                    .map_err(|error| format!("failed to get content: {error}"))?;
                 let aliases = list_aliases(db_ref, content.site_id, Some(content_id)).await?;
                 let tags = list_content_tags(db_ref, content_id).await?;
                 let revisions = list_revisions(db_ref, content_id).await?;
