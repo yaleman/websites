@@ -247,7 +247,6 @@ async fn admin_index(State(_state): State<AdminState>) -> AdminPageTemplate {
         link("/admin/sites", "Sites"),
         link("/admin/login", "Login"),
         link("/admin/logout", "Logout"),
-        link("/admin/login", "OIDC configured"),
     ];
 
     AdminPageTemplate {
