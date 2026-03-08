@@ -134,7 +134,7 @@ pub enum AuditCommands {
     /// List recent audit events.
     List {
         #[arg(long)]
-        site_id: Option<String>,
+        site_id: Option<Uuid>,
     },
 }
 
@@ -154,37 +154,37 @@ pub enum SiteCommands {
     // /// Add a user membership to a site.
     MemberAdd {
         #[arg(long)]
-        site_id: String,
+        site_id: Uuid,
         #[arg(long)]
-        user_id: String,
+        user_id: Uuid,
         #[arg(long, value_parser = ["owner", "editor", "author", "viewer"])]
         role: String,
     },
     /// List site memberships.
     MemberList {
         #[arg(long)]
-        site_id: String,
+        site_id: Uuid,
     },
     /// Create a site tag.
     TagCreate {
         #[arg(long)]
-        site_id: String,
+        site_id: Uuid,
         #[arg(long)]
         name: String,
     },
     /// List site tags.
     TagList {
         #[arg(long)]
-        site_id: String,
+        site_id: Uuid,
     },
     /// Render published content to the rendered output.
     Render {
         #[arg(long)]
-        site_id: String,
-        #[arg(long, default_value = crate::SITE_TEMPLATES_DIR)]
-        templates_dir: String,
-        #[arg(long, default_value = "./rendered")]
-        rendered_dir: String,
+        site_id: Uuid,
+        #[arg(long, default_value = crate::constants::SITE_TEMPLATES_DIR)]
+        templates_dir: PathBuf,
+        #[arg(long, default_value = crate::constants::RENDERED_DIR)]
+        rendered_dir: PathBuf,
     },
 }
 
@@ -204,7 +204,7 @@ pub enum AssetCommands {
     /// Create an asset record.
     Create {
         #[arg(long)]
-        site_id: String,
+        site_id: Uuid,
         #[arg(long)]
         uploader_sub: String,
         #[arg(long)]
@@ -223,12 +223,12 @@ pub enum AssetCommands {
     /// List assets for a site.
     List {
         #[arg(long)]
-        site_id: String,
+        site_id: Uuid,
     },
     /// Create a derivative variant for an asset.
     VariantCreate {
         #[arg(long)]
-        asset_id: String,
+        asset_id: Uuid,
         #[arg(long, value_parser = ["original", "thumbnail"])]
         variant_kind: String,
         #[arg(long)]
@@ -245,7 +245,7 @@ pub enum AssetCommands {
     /// List variants for an asset.
     VariantList {
         #[arg(long)]
-        asset_id: String,
+        asset_id: Uuid,
     },
 }
 
@@ -254,7 +254,7 @@ pub enum ContentCommands {
     /// Create a content item.
     Create {
         #[arg(long)]
-        site_id: String,
+        site_id: Uuid,
         #[arg(long, value_parser = ["post", "page"])]
         page_type: String,
         #[arg(long)]
@@ -273,16 +273,16 @@ pub enum ContentCommands {
     /// List content for a site.
     List {
         #[arg(long)]
-        site_id: String,
+        site_id: Uuid,
         #[arg(long)]
         page_type: Option<String>,
     },
     /// Create a content alias.
     AliasCreate {
         #[arg(long)]
-        content_id: String,
+        content_id: Uuid,
         #[arg(long)]
-        site_id: String,
+        site_id: Uuid,
         #[arg(long)]
         alias_path: String,
         #[arg(long, value_parser = ["primary", "alias"], default_value = "alias")]
@@ -291,34 +291,34 @@ pub enum ContentCommands {
     /// List aliases for a site.
     AliasList {
         #[arg(long)]
-        site_id: String,
+        site_id: Uuid,
         #[arg(long)]
-        content_id: Option<String>,
+        content_id: Option<Uuid>,
     },
     /// List revision history for one content id.
     Revisions {
         #[arg(long)]
-        content_id: String,
+        content_id: Uuid,
     },
     /// Show aliases captured for a revision.
     RevisionAliases {
         #[arg(long)]
-        revision_id: String,
+        revision_id: Uuid,
     },
     /// Show tags captured for a revision.
     RevisionTags {
         #[arg(long)]
-        revision_id: String,
+        revision_id: Uuid,
     },
     /// Show a full content detail with derived URL, aliases, tags, and revision count.
     Inspect {
         #[arg(long)]
-        content_id: String,
+        content_id: Uuid,
     },
     /// Update a content item and create a new revision.
     Update {
         #[arg(long)]
-        content_id: String,
+        content_id: Uuid,
         #[arg(long, value_parser = ["post", "page"])]
         page_type: Option<String>,
         #[arg(long)]
@@ -337,21 +337,21 @@ pub enum ContentCommands {
     /// Add tag to content (creates tag if missing).
     TagAdd {
         #[arg(long)]
-        content_id: String,
+        content_id: Uuid,
         #[arg(long)]
-        site_id: String,
+        site_id: Uuid,
         #[arg(long)]
         tag_name: String,
     },
     /// List tags attached to a content item.
     TagList {
         #[arg(long)]
-        content_id: String,
+        content_id: Uuid,
     },
     /// Import content from a WordPress WXR XML export.
     ImportWordpress {
         #[arg(long)]
-        site_id: String,
+        site_id: Uuid,
         #[arg(long, value_name = "FILE")]
         file_path: String,
         #[arg(long)]
@@ -384,29 +384,29 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 full_title,
                 template_name,
             } => {
-                let site = db_ref
-                    .transaction::<_, _, String>(|txn| {
-                        Box::pin(async move {
-                            let site =
-                                create_site(txn, short_name, full_title, template_name).await?;
-                            log_audit_event(
-                                txn,
-                                "system",
-                                "create_site",
-                                "site",
-                                &site.id.to_string(),
-                                Some(site.id),
-                                Some(json!({
-                                    "short_name": &site.short_name,
-                                    "full_title": &site.full_title
-                                })),
-                            )
-                            .await?;
-                            Ok(site)
-                        })
-                    })
+                let txn = db_ref
+                    .begin()
                     .await
-                    .map_err(|error| format!("failed to create site: {error}"))?;
+                    .map_err(|error| format!("failed to begin transaction: {error}"))?;
+
+                let site = create_site(&txn, short_name, full_title, template_name).await?;
+                log_audit_event(
+                    &txn,
+                    "system",
+                    "create_site",
+                    "site",
+                    &site.id.to_string(),
+                    Some(site.id),
+                    Some(json!({
+                        "short_name": &site.short_name,
+                        "full_title": &site.full_title
+                    })),
+                )
+                .await
+                .map_err(|err| format!("Failed to create audit event: {}", err))?;
+                txn.commit().await.map_err(|error| {
+                    format!("failed to commit transaction, rolling back: {error}")
+                })?;
                 println!("created site: {} ({})", site.id, site.short_name);
                 Ok(())
             }
@@ -431,8 +431,6 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 user_id,
                 role,
             } => {
-                let site_id = parse_uuid(&site_id, "site_id")?;
-                let user_id = parse_uuid(&user_id, "user_id")?;
                 let membership = db_ref
                     .transaction::<_, _, String>(|txn| {
                         Box::pin(async move {
@@ -458,7 +456,8 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                     "role": membership.role
                                 })),
                             )
-                            .await?;
+                            .await
+                            .map_err(|err| format!("Failed to create audit event: {}", err))?;
                             Ok(membership)
                         })
                     })
@@ -468,7 +467,6 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 Ok(())
             }
             SiteCommands::MemberList { site_id } => {
-                let site_id = parse_uuid(&site_id, "site_id")?;
                 let memberships = list_memberships(db_ref, site_id).await?;
                 if memberships.is_empty() {
                     println!("no memberships");
@@ -482,11 +480,12 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 Ok(())
             }
             SiteCommands::TagCreate { site_id, name } => {
-                let site_id = parse_uuid(&site_id, "site_id")?;
                 let tag = db_ref
                     .transaction::<_, _, String>(|txn| {
                         Box::pin(async move {
-                            let tag = create_tag(txn, NewTag { site_id, name }).await?;
+                            let tag = create_tag(txn, NewTag { site_id, name })
+                                .await
+                                .map_err(|error| format!("failed to create tag: {error}"))?;
                             log_audit_event(
                                 txn,
                                 "system",
@@ -496,7 +495,8 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                 Some(tag.site_id),
                                 Some(json!({"name": &tag.name})),
                             )
-                            .await?;
+                            .await
+                            .map_err(|err| format!("Failed to create audit event: {}", err))?;
                             Ok(tag)
                         })
                     })
@@ -506,8 +506,9 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 Ok(())
             }
             SiteCommands::TagList { site_id } => {
-                let site_id = parse_uuid(&site_id, "site_id")?;
-                let tags = list_tags(db_ref, site_id).await?;
+                let tags = list_tags(db_ref, site_id)
+                    .await
+                    .map_err(|err| format!("Failed to list tags: {err}"))?;
                 if tags.is_empty() {
                     println!("no tags");
                     return Ok(());
@@ -524,9 +525,9 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 templates_dir,
                 rendered_dir,
             } => {
-                let site_id = parse_uuid(&site_id, "site_id")?;
-                let files_written =
-                    render_site(db_ref, site_id, &templates_dir, &rendered_dir).await?;
+                let files_written = render_site(db_ref, site_id, &templates_dir, &rendered_dir)
+                    .await
+                    .map_err(|err| err.to_string())?;
                 println!("rendered site {} files {}", site_id, files_written);
                 Ok(())
             }
@@ -548,7 +549,8 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                 None,
                                 Some(json!({"subject": &user.subject})),
                             )
-                            .await?;
+                            .await
+                            .map_err(|err| format!("Failed to create audit event: {}", err))?;
                             Ok(user)
                         })
                     })
@@ -558,7 +560,9 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 Ok(())
             }
             UserCommands::List => {
-                let users = list_users(db_ref).await?;
+                let users = list_users(db_ref)
+                    .await
+                    .map_err(|err| format!("Failed to list users: {err}"))?;
                 if users.is_empty() {
                     println!("no users");
                     return Ok(());
@@ -582,7 +586,6 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 width,
                 height,
             } => {
-                let site_id = parse_uuid(&site_id, "site_id")?;
                 let asset = db_ref
                     .transaction::<_, _, String>(|txn| {
                         Box::pin(async move {
@@ -612,7 +615,8 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                     "storage_basename": &asset.storage_basename
                                 })),
                             )
-                            .await?;
+                            .await
+                            .map_err(|err| format!("Failed to create audit event: {}", err))?;
                             Ok(asset)
                         })
                     })
@@ -622,7 +626,6 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 Ok(())
             }
             AssetCommands::List { site_id } => {
-                let site_id = parse_uuid(&site_id, "site_id")?;
                 let assets = list_assets(db_ref, site_id).await?;
                 if assets.is_empty() {
                     println!("no assets");
@@ -647,7 +650,6 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 width,
                 height,
             } => {
-                let asset_id = parse_uuid(&asset_id, "asset_id")?;
                 let variant = db_ref
                     .transaction::<_, _, String>(|txn| {
                         Box::pin(async move {
@@ -676,7 +678,8 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                     "filename": &variant.filename
                                 })),
                             )
-                            .await?;
+                            .await
+                            .map_err(|err| format!("Failed to create audit event: {}", err))?;
                             Ok(variant)
                         })
                     })
@@ -686,7 +689,6 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 Ok(())
             }
             AssetCommands::VariantList { asset_id } => {
-                let asset_id = parse_uuid(&asset_id, "asset_id")?;
                 let variants = list_asset_variants(db_ref, asset_id).await?;
                 if variants.is_empty() {
                     println!("no variants");
@@ -712,11 +714,7 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
         },
         Commands::Audit { command } => match command {
             AuditCommands::List { site_id } => {
-                let site_filter = site_id
-                    .as_deref()
-                    .map(|value| parse_uuid(value, "site_id"))
-                    .transpose()?;
-                let events = list_audit_events(db_ref, site_filter).await?;
+                let events = list_audit_events(db_ref, site_id).await?;
                 if events.is_empty() {
                     println!("no audit events");
                     return Ok(());
@@ -760,7 +758,6 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 draft,
                 published_at,
             } => {
-                let site_id = parse_uuid(&site_id, "site_id")?;
                 let page_type = PageType::from_str(&page_type)?;
                 let published_at = parse_optional_datetime(published_at, "published_at")?;
                 let content = db_ref
@@ -779,7 +776,8 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                     published_at,
                                 },
                             )
-                            .await?;
+                            .await
+                            .map_err(|err| err.to_string())?;
                             log_audit_event(
                                 txn,
                                 &content.creator_sub,
@@ -794,7 +792,8 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                     "draft": content.draft
                                 })),
                             )
-                            .await?;
+                            .await
+                            .map_err(|err| format!("Failed to create audit event: {}", err))?;
                             Ok(content)
                         })
                     })
@@ -804,7 +803,6 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 Ok(())
             }
             ContentCommands::List { site_id, page_type } => {
-                let site_id = parse_uuid(&site_id, "site_id")?;
                 let page_filter = page_type.as_deref().map(PageType::from_str).transpose()?;
                 let content = list_content(db_ref, site_id, page_filter).await?;
                 if content.is_empty() {
@@ -840,8 +838,6 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 alias_path,
                 kind,
             } => {
-                let content_id = parse_uuid(&content_id, "content_id")?;
-                let site_id = parse_uuid(&site_id, "site_id")?;
                 let alias = db_ref
                     .transaction::<_, _, String>(|txn| {
                         Box::pin(async move {
@@ -854,7 +850,8 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                     kind,
                                 },
                             )
-                            .await?;
+                            .await
+                            .map_err(|err| format!("Failed to create alias: {}", err))?;
                             log_audit_event(
                                 txn,
                                 "system",
@@ -868,7 +865,8 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                     "kind": &alias.kind
                                 })),
                             )
-                            .await?;
+                            .await
+                            .map_err(|err| format!("Failed to create audit event: {}", err))?;
                             Ok(alias)
                         })
                     })
@@ -881,12 +879,9 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 site_id,
                 content_id,
             } => {
-                let site_id = parse_uuid(&site_id, "site_id")?;
-                let content_filter = content_id
-                    .as_deref()
-                    .map(|value| parse_uuid(value, "content_id"))
-                    .transpose()?;
-                let aliases = list_aliases(db_ref, site_id, content_filter).await?;
+                let aliases = list_aliases(db_ref, site_id, content_id)
+                    .await
+                    .map_err(|err| format!("Failed to get aliases: {}", err))?;
                 if aliases.is_empty() {
                     println!("no aliases");
                     return Ok(());
@@ -902,7 +897,6 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 Ok(())
             }
             ContentCommands::Revisions { content_id } => {
-                let content_id = parse_uuid(&content_id, "content_id")?;
                 let revisions = list_revisions(db_ref, content_id).await?;
                 if revisions.is_empty() {
                     println!("no revisions");
@@ -919,7 +913,6 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 Ok(())
             }
             ContentCommands::RevisionAliases { revision_id } => {
-                let revision_id = parse_uuid(&revision_id, "revision_id")?;
                 let aliases = list_revision_aliases(db_ref, revision_id).await?;
                 if aliases.is_empty() {
                     println!("no revision aliases");
@@ -933,7 +926,6 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 Ok(())
             }
             ContentCommands::RevisionTags { revision_id } => {
-                let revision_id = parse_uuid(&revision_id, "revision_id")?;
                 let tags = list_revision_tags(db_ref, revision_id).await?;
                 if tags.is_empty() {
                     println!("no revision tags");
@@ -947,13 +939,14 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 Ok(())
             }
             ContentCommands::Inspect { content_id } => {
-                let content_id = parse_uuid(&content_id, "content_id")?;
                 let content = entities::content_item::Entity::find_by_id(content_id)
                     .one(&*db)
                     .await
                     .map_err(|err| format!("failed to load content {content_id}: {err}"))?
                     .ok_or(format!("content not found: {content_id}"))?;
-                let aliases = list_aliases(db_ref, content.site_id, Some(content_id)).await?;
+                let aliases = list_aliases(db_ref, content.site_id, Some(content_id))
+                    .await
+                    .map_err(|err| format!("Failed to list aliases: {}", err.to_string()))?;
                 let tags = list_content_tags(db_ref, content_id).await?;
                 let revisions = list_revisions(db_ref, content_id).await?;
 
@@ -1015,7 +1008,6 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 published_at,
                 editor_sub,
             } => {
-                let content_id = parse_uuid(&content_id, "content_id")?;
                 let page_type = page_type.as_deref().map(PageType::from_str).transpose()?;
                 let published_at = parse_optional_datetime(published_at, "published_at")?;
                 let content = db_ref
@@ -1049,7 +1041,8 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                     "title": &content.title
                                 })),
                             )
-                            .await?;
+                            .await
+                            .map_err(|err| format!("Failed to create audit event: {}", err))?;
                             Ok(content)
                         })
                     })
@@ -1063,8 +1056,6 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 site_id,
                 tag_name,
             } => {
-                let content_id = parse_uuid(&content_id, "content_id")?;
-                let site_id = parse_uuid(&site_id, "site_id")?;
                 let content_tag = db_ref
                     .transaction::<_, _, String>(|txn| {
                         Box::pin(async move {
@@ -1089,7 +1080,8 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                     "tag_id": content_tag.tag_id.to_string()
                                 })),
                             )
-                            .await?;
+                            .await
+                            .map_err(|err| format!("Failed to create audit event: {}", err))?;
                             Ok(content_tag)
                         })
                     })
@@ -1102,7 +1094,6 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 Ok(())
             }
             ContentCommands::TagList { content_id } => {
-                let content_id = parse_uuid(&content_id, "content_id")?;
                 let tags = list_content_tags(db_ref, content_id).await?;
                 if tags.is_empty() {
                     println!("no tags");
@@ -1120,12 +1111,12 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 file_path,
                 creator_sub,
             } => {
-                let site_id = parse_uuid(&site_id, "site_id")?;
                 let imported = db_ref
                     .transaction::<_, _, String>(|txn| {
                         Box::pin(async move {
-                            let imported =
-                                import_wordpress(txn, site_id, &file_path, &creator_sub).await?;
+                            let imported = import_wordpress(txn, site_id, &file_path, &creator_sub)
+                                .await
+                                .map_err(|err| err.to_string())?;
                             log_audit_event(
                                 txn,
                                 &creator_sub,
@@ -1135,7 +1126,8 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                 Some(site_id),
                                 Some(json!({"imported": imported})),
                             )
-                            .await?;
+                            .await
+                            .map_err(|err| format!("Failed to create audit event: {}", err))?;
                             Ok(imported)
                         })
                     })
@@ -1146,10 +1138,6 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
             }
         },
     }
-}
-
-fn parse_uuid(value: &str, label: &str) -> Result<Uuid, String> {
-    Uuid::parse_str(value.trim()).map_err(|error| format!("Invalid {label} UUID: {error}"))
 }
 
 fn parse_optional_datetime(

@@ -33,7 +33,7 @@ pub fn init_writer<T: for<'writer> fmt::MakeWriter<'writer> + 'static + Send + S
 }
 
 pub fn test() {
-    let env_filter = EnvFilter::new("debug");
+    let env_filter = EnvFilter::new("debug,sqlx::query=warn");
 
     let _ = fmt()
         .with_env_filter(env_filter)

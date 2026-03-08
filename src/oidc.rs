@@ -1,4 +1,3 @@
-use std::sync::LazyLock;
 
 use axum::{
     extract::{Query, State},
@@ -36,25 +35,20 @@ pub(crate) static OIDC_SESSION_OIDC_PKCE_KEY: &str = "oidc_pkce";
 pub(crate) static OIDC_SESSION_OIDC_STATE_KEY: &str = "oidc_state";
 pub(crate) static OIDC_SESSION_OIDC_NONCE_KEY: &str = "oidc_nonce";
 
-pub(crate) const OIDC_HTTP_CLIENT: LazyLock<reqwest::Client> =
-    LazyLock::new(|| build_http_client().expect("failed to create OIDC client, this is a bug!"));
-
 /// Builds a HTTP client for use with OIDC operations, configured to allow a limited number of redirects
-pub(crate) fn build_http_client() -> Result<reqwest::Client, String> {
+pub(crate) fn build_http_client() -> Result<reqwest::Client, reqwest::Error> {
     reqwest::ClientBuilder::new()
         .redirect(Policy::limited(5))
         .build()
-        .map_err(|error| error.to_string())
 }
 
 pub(crate) async fn build_oidc_client(
     state: &AdminState,
-    http_client: &reqwest::Client,
 ) -> Result<OidcClient, SiteError> {
     let frontend_url = state.oidc_frontend_url.clone();
-
+    let oidc_client = state.oidc_client.clone();
     let provider_metadata =
-        CoreProviderMetadata::discover_async(state.oidc_discovery_url.clone(), http_client)
+        CoreProviderMetadata::discover_async(state.oidc_discovery_url.clone(), &*oidc_client)
             .await
             .map_err(|error| {
                 SiteError::internal(format!("failed to discover provider metadata: {error}"))
@@ -118,7 +112,7 @@ pub(crate) async fn admin_login_callback(
         .unwrap_or(None)
         .unwrap_or_default();
 
-    let client = match build_oidc_client(&state, &OIDC_HTTP_CLIENT).await {
+    let client = match build_oidc_client(&state).await {
         Ok(client) => client,
         Err(error) => {
             return Err(SiteError::internal(format!(
@@ -137,7 +131,7 @@ pub(crate) async fn admin_login_callback(
     };
     let token_response = match token_request
         .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier))
-        .request_async(&*OIDC_HTTP_CLIENT)
+        .request_async(&*state.oidc_client.clone())
         .await
     {
         Ok(response) => response,

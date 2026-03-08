@@ -1,5 +1,7 @@
 use sea_orm::{ActiveValue::Set, ConnectionTrait, entity::prelude::*};
 
+use crate::errors::SiteError;
+
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "audit_event")]
 pub struct Model {
@@ -28,7 +30,7 @@ pub async fn log_audit_event<C: ConnectionTrait>(
     entity_id: &str,
     site_id: Option<Uuid>,
     payload_json: Option<serde_json::Value>,
-) -> Result<Model, String> {
+) -> Result<Model, SiteError> {
     let model = ActiveModel {
         id: Set(Uuid::now_v7()),
         site_id: Set(site_id),
@@ -40,7 +42,5 @@ pub async fn log_audit_event<C: ConnectionTrait>(
         payload_json: Set(payload_json),
     };
 
-    let model = model.insert(db).await.map_err(|error| error.to_string())?;
-
-    Ok(model)
+    model.insert(db).await.map_err(SiteError::from)
 }

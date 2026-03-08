@@ -76,6 +76,13 @@ impl PageType {
     pub fn is_page(&self) -> bool {
         matches!(self, PageType::Page)
     }
+
+    pub fn template(&self) -> &'static str {
+        match self {
+            PageType::Post => "post.html",
+            PageType::Page => "page.html",
+        }
+    }
 }
 
 #[test]
