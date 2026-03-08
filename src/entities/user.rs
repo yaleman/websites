@@ -63,8 +63,48 @@ pub async fn upsert_user_login<C: ConnectionTrait>(
     if let Some(existing) = existing {
         let mut active = existing.into_active_model();
         active.last_login_at = Set(Some(Utc::now()));
+        if let Some(email) = email {
+            active.email = Set(Some(email.to_string()));
+        }
         active.update(db).await.map_err(SiteError::from)
     } else {
         create_user(db, subject, email, false).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn first_login_creates_admin_with_email() {
+        let db = crate::db::db_start("sqlite::memory:")
+            .await
+            .expect("failed to start db");
+
+        let user = upsert_user_login(db.as_ref(), "first-user", Some("first@example.com"))
+            .await
+            .expect("failed to upsert first user");
+
+        assert!(user.admin);
+        assert_eq!(user.email.as_deref(), Some("first@example.com"));
+    }
+
+    #[tokio::test]
+    async fn existing_login_refreshes_email_claim() {
+        let db = crate::db::db_start("sqlite::memory:")
+            .await
+            .expect("failed to start db");
+
+        let created = create_user(db.as_ref(), "subject", None, false)
+            .await
+            .expect("failed to create user");
+        let updated = upsert_user_login(db.as_ref(), "subject", Some("subject@example.com"))
+            .await
+            .expect("failed to refresh user login");
+
+        assert_eq!(updated.id, created.id);
+        assert_eq!(updated.email.as_deref(), Some("subject@example.com"));
+        assert!(updated.last_login_at.is_some());
     }
 }
