@@ -2327,6 +2327,11 @@ async fn admin_site_render(
     Path(site_id): Path<Uuid>,
 ) -> Result<AdminRenderTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Editor).await?;
+    let site = entities::site::Entity::find_by_id(site_id)
+        .one(state.db.as_ref())
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?
+        .ok_or(SiteError::NotFound)?;
     render_site(
         state.db.as_ref(),
         site_id,
@@ -2349,7 +2354,7 @@ async fn admin_site_render(
                 ),
                 AdminLink::new(&format!("/admin/site/{site_id}/render"), "Run render again"),
             ]),
-        heading: format!("Rendered site {site_id}"),
+        heading: format!("Rendered site '{}'", site.full_title),
     })
 }
 
