@@ -1,30 +1,31 @@
 {% extends "base_template.html" %}
 {% block body %}
-<section class="content-editor__meta">
-  <div class="meta-card">
-    <span class="meta-label">Site ID</span>
-    <span class="meta-value">{{ site_id }}</span>
-  </div>
-  <div class="meta-card">
-    <span class="meta-label">Short Name</span>
-    <span class="meta-value">{{ site_short_name }}</span>
-  </div>
-</section>
 
 <form method="post" action class="editor-form">
-  <div class="form-grid">
-    <div class="form-field">
-      <label for="full_title">Full Title</label>
-      <input id="full_title" name="full_title" value="{{ full_title }}" required />
-    </div>
-    <div class="form-field">
-      <label for="template_name">Template Name</label>
-      <input id="template_name" name="template_name" value="{{ template_name }}" required />
-    </div>
+  <div class="form-field">
+    <label for="full_title">Full Title</label>
+    <input id="full_title" name="full_title" value="{{ full_title }}" required />
+  </div>
+  <div class="form-field">
+    <label for="template_name">Template Name</label>
+    <select id="template_name" name="template_name" required>
+      {% for template in templates %}
+      <option value="{{ template }}" {% if template == &template_name %}selected{% endif %}>{{ template }}</option>
+      {% endfor %}
+    </select>
   </div>
 
   <div class="form-actions">
     <button type="submit">Save settings</button>
   </div>
 </form>
+
+<section>
+  <p>
+    Site ID: {{ site_id }}
+  </p>
+  <p>
+    Short Name: {{ site_short_name }}
+  </p>
+</section>
 {% endblock %}

@@ -34,10 +34,11 @@ use openidconnect::ClientSecret;
 use openidconnect::{
     ClientId, CsrfToken, IssuerUrl, Nonce, PkceCodeChallenge, Scope, core::CoreAuthenticationFlow,
 };
+use sea_orm::prelude::StringLen;
 
 use sea_orm::{
-    ColumnTrait as _, Condition, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder, QuerySelect, TransactionTrait,
+    ColumnTrait as _, Condition, ConnectionTrait, DatabaseConnection, DeriveActiveEnum,
+    EntityTrait, EnumIter, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -111,7 +112,7 @@ struct AdminSitesNewTemplate {
 struct AdminSearchTemplate {
     template_shared: AdminTemplateData,
     heading: String,
-    rows: Vec<AdminRow>,
+    results: Vec<entities::content_item::Model>,
     query: String,
 }
 #[derive(Template, WebTemplate)]
@@ -157,16 +158,12 @@ struct AdminAssetsNewTemplate {
     template_shared: AdminTemplateData,
     heading: String,
     rows: Vec<AdminRow>,
-    pre_body: String,
 }
 #[derive(Template, WebTemplate)]
 #[template(path = "admin_render.html")]
 struct AdminRenderTemplate {
     template_shared: AdminTemplateData,
     heading: String,
-    rows: Vec<AdminRow>,
-    inline_body: String,
-    pre_body: String,
 }
 
 #[derive(Template, WebTemplate)]
@@ -184,9 +181,6 @@ struct AdminTagsTemplate {
     template_shared: AdminTemplateData,
     heading: String,
     rows: Vec<AdminRow>,
-
-    inline_body: String,
-    pre_body: String,
 }
 
 #[derive(Template, WebTemplate)]
@@ -232,6 +226,7 @@ struct AdminSiteSettingsTemplate {
     site_short_name: String,
     full_title: String,
     template_name: String,
+    templates: Vec<String>,
 }
 
 #[derive(Template, WebTemplate)]
@@ -240,8 +235,8 @@ struct AdminMembershipsTemplate {
     template_shared: AdminTemplateData,
     heading: String,
     site_id: Uuid,
-    site_short_name: String,
-    create_href: String,
+    site_full_title: String,
+
     memberships: Vec<AdminMembershipRow>,
 }
 
@@ -259,7 +254,8 @@ struct AdminTagOption {
 #[derive(Debug)]
 struct AdminMembershipRow {
     subject: String,
-    role: String,
+    email: String,
+    role: SiteRole,
     update_href: String,
     remove_href: String,
 }
@@ -313,15 +309,15 @@ struct UpdateContentForm {
     published_at: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct MembershipCreateForm {
     subject: String,
-    role: String,
+    role: SiteRole,
 }
 
 #[derive(Debug, Deserialize)]
 struct MembershipUpdateForm {
-    role: String,
+    role: SiteRole,
 }
 
 #[derive(Debug, Deserialize)]
@@ -354,8 +350,27 @@ struct AssetLibraryItem {
     has_thumbnail: bool,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-enum SiteRole {
+#[derive(
+    EnumIter,
+    DeriveActiveEnum,
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "String(StringLen::None)",
+    rename_all = "lowercase"
+)]
+#[serde(rename_all = "lowercase")]
+pub enum SiteRole {
     Viewer,
     Author,
     Editor,
@@ -363,17 +378,23 @@ enum SiteRole {
 }
 
 impl SiteRole {
-    fn from_str(value: &str) -> Option<Self> {
-        match value {
-            "viewer" => Some(Self::Viewer),
-            "author" => Some(Self::Author),
-            "editor" => Some(Self::Editor),
-            "owner" => Some(Self::Owner),
-            _ => None,
-        }
+    pub fn is_viewer(&self) -> bool {
+        *self == Self::Viewer
     }
 
-    fn label(self) -> &'static str {
+    pub fn is_owner(&self) -> bool {
+        *self == Self::Owner
+    }
+
+    pub fn is_author(&self) -> bool {
+        *self == Self::Author
+    }
+
+    pub fn is_editor(&self) -> bool {
+        *self == Self::Editor
+    }
+
+    pub fn label(self) -> &'static str {
         match self {
             Self::Viewer => "viewer",
             Self::Author => "author",
@@ -685,9 +706,10 @@ async fn admin_sites_new() -> Response {
 async fn ensure_site_owner_membership<C: ConnectionTrait>(
     db: &C,
     user_sub: &str,
+    user_email: Option<&str>,
     site_id: Uuid,
 ) -> Result<Option<crate::entities::site_membership::Model>, SiteError> {
-    let user = upsert_user_login(db, user_sub)
+    let user = upsert_user_login(db, user_sub, user_email)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load user: {error}")))?;
     let existing = crate::get_membership_for_subject(db, site_id, user_sub)
@@ -702,7 +724,7 @@ async fn ensure_site_owner_membership<C: ConnectionTrait>(
         crate::NewMembership {
             site_id,
             user_id: user.id,
-            role: "owner".to_string(),
+            role: SiteRole::Owner,
         },
     )
     .await
@@ -742,7 +764,8 @@ async fn admin_sites_create(
     .await
     .map_err(|error| SiteError::internal(format!("failed to log site audit: {error}")))?;
 
-    if let Some(membership) = ensure_site_owner_membership(&txn, &user_sub, site.id).await? {
+    // TODO make sure we get the user's email from the OIDC claims
+    if let Some(membership) = ensure_site_owner_membership(&txn, &user_sub, None, site.id).await? {
         log_audit_event(
             &txn,
             ADMIN_ACTOR_SUB,
@@ -753,7 +776,7 @@ async fn admin_sites_create(
             Some(json!({
                 "site_id": membership.site_id,
                 "user_id": membership.user_id,
-                "role": membership.role
+                "role": membership.role.label()
             })),
         )
         .await
@@ -868,17 +891,18 @@ async fn admin_site_memberships(
         .map_err(|error| SiteError::internal(format!("failed to load users: {error}")))?;
     let user_map = users
         .into_iter()
-        .map(|user| (user.id, user.subject))
+        .map(|user| (user.id, (user.subject, user.email)))
         .collect::<HashMap<_, _>>();
     let membership_rows = memberships
         .into_iter()
         .map(|membership| {
-            let subject = user_map
+            let (subject, email) = user_map
                 .get(&membership.user_id)
                 .cloned()
-                .unwrap_or_else(|| "unknown".to_string());
+                .unwrap_or_else(|| ("unknown".to_string(), None));
             AdminMembershipRow {
                 subject,
+                email: email.unwrap_or_else(|| "unknown@unknown.com".to_string()),
                 role: membership.role,
                 update_href: format!("/admin/site/{site_id}/memberships/{}/update", membership.id),
                 remove_href: format!("/admin/site/{site_id}/memberships/{}/remove", membership.id),
@@ -895,10 +919,8 @@ async fn admin_site_memberships(
             AdminLink::new(&format!("/admin/site/{site_id}/settings"), "Site settings"),
         ]),
         heading: "Memberships".to_string(),
-
         site_id: site.id,
-        site_short_name: site.short_name,
-        create_href: format!("/admin/site/{site_id}/memberships/new"),
+        site_full_title: site.full_title,
         memberships: membership_rows,
     })
 }
@@ -910,8 +932,6 @@ async fn admin_site_membership_create(
     Form(form): Form<MembershipCreateForm>,
 ) -> Result<Redirect, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Owner).await?;
-    let role = SiteRole::from_str(form.role.as_str())
-        .ok_or_else(|| SiteError::internal("invalid role".to_string()))?;
     let subject = form.subject.trim();
     if subject.is_empty() {
         return Err(SiteError::internal("missing subject".to_string()));
@@ -920,7 +940,8 @@ async fn admin_site_membership_create(
     let txn = state.db.begin().await?;
     let actor = actor.clone();
     let subject = subject.to_string();
-    let user = upsert_user_login(&txn, &subject)
+    // TODO the user should already exist here
+    let user = upsert_user_login(&txn, &subject, None)
         .await
         .map_err(|error| SiteError::internal(format!("failed to upsert user: {error}")))?;
     let membership = create_membership(
@@ -928,7 +949,7 @@ async fn admin_site_membership_create(
         crate::NewMembership {
             site_id,
             user_id: user.id,
-            role: role.label().to_string(),
+            role: form.role,
         },
     )
     .await
@@ -971,13 +992,12 @@ async fn admin_site_membership_update(
             "membership does not belong to site".to_string(),
         ));
     }
-    let role = SiteRole::from_str(form.role.as_str())
-        .ok_or_else(|| SiteError::internal("invalid role".to_string()))?;
+
     let actor = current_user_sub(&session).await?;
     let txn = state.db.begin().await?;
     let actor = actor.clone();
-    let role = role.label().to_string();
-    let updated = update_membership_role(&txn, membership.id, role)
+
+    let updated = update_membership_role(&txn, membership.id, form.role)
         .await
         .map_err(|error| SiteError::internal(format!("failed to update membership: {error}")))?;
     log_audit_event(
@@ -1053,23 +1073,14 @@ async fn admin_site_search(
 ) -> Result<AdminSearchTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
     let query_text = query.q.unwrap_or_default();
-    let mut rows = Vec::new();
+    let mut results = Vec::new();
     let mut message = "Search content by title, slug, or body text.".to_string();
 
     if !query_text.trim().is_empty() {
         match search_content(state.db.as_ref(), site_id, query_text.trim()).await {
             Ok(items) => {
                 message = format!("Found {} result(s) for \"{}\".", items.len(), query_text);
-                rows = items
-                    .into_iter()
-                    .map(|item| AdminRow {
-                        label: item.title,
-                        value: format!(
-                            "{} ({}) [detail: /admin/site/{}/content/{}]",
-                            item.id, item.page_type, item.site_id, item.id
-                        ),
-                    })
-                    .collect();
+                results = items.into_iter().collect();
             }
             Err(error) => {
                 return Err(SiteError::internal(format!(
@@ -1090,7 +1101,7 @@ async fn admin_site_search(
                 AdminLink::new(&format!("/admin/site/{site_id}/content/new"), "New content"),
             ]),
         heading: format!("Search Content {site_id}"),
-        rows,
+        results,
         query: query_text.trim().to_string(),
     })
 }
@@ -1688,8 +1699,6 @@ async fn admin_site_tags(
                 )]),
                 heading: format!("Site Tags ({site_id})"),
                 rows,
-                inline_body: String::new(),
-                pre_body: String::new(),
             })
         }
         Err(error) => Err(SiteError::internal(format!(
@@ -1848,8 +1857,6 @@ async fn admin_site_assets_new(
                 label: "site_id".to_string(),
                 value: site.id.to_string(),
             }],
-
-            pre_body: String::new(),
         }),
         Err(error) => Err(SiteError::internal(format!(
             "failed to load site {site_id}: {error}"
@@ -2082,6 +2089,23 @@ fn parse_optional_datetime(
         .transpose()
 }
 
+async fn get_template_names() -> Vec<String> {
+    let mut templates = vec!["default".to_string()];
+    if let Ok(mut entries) = fs::read_dir(crate::constants::SITE_TEMPLATES_DIR).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if let Ok(file_type) = entry.file_type().await {
+                if file_type.is_dir() && entry.file_name() != "default" {
+                    if let Some(name) = entry.file_name().to_str() {
+                        templates.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    templates
+}
+
 async fn admin_site_settings(
     State(state): State<AdminState>,
     session: Session,
@@ -2106,6 +2130,7 @@ async fn admin_site_settings(
         site_short_name: site.short_name,
         full_title: site.full_title,
         template_name: site.template_name,
+        templates: get_template_names().await,
     })
 }
 
@@ -2181,9 +2206,6 @@ async fn admin_site_render(
                 AdminLink::new(&format!("/admin/site/{site_id}/render"), "Run render again"),
             ]),
         heading: format!("Rendered site {site_id}"),
-        rows: vec![],
-        inline_body: String::new(),
-        pre_body: String::new(),
     })
 }
 
@@ -2205,16 +2227,21 @@ mod tests {
         .await
         .expect("failed to create site");
 
-        let first = match ensure_site_owner_membership(db.as_ref(), "tester", site.id).await {
+        let first = match ensure_site_owner_membership(db.as_ref(), "tester", None, site.id).await {
             Ok(value) => value,
             Err(_) => panic!("failed to create membership"),
         };
         assert!(first.is_some(), "expected membership on first call");
         if let Some(membership) = first {
-            assert_eq!(membership.role, "owner");
+            assert_eq!(
+                membership.role,
+                SiteRole::Owner,
+                "expected role to be owner"
+            );
         }
 
-        let second = match ensure_site_owner_membership(db.as_ref(), "tester", site.id).await {
+        let second = match ensure_site_owner_membership(db.as_ref(), "tester", None, site.id).await
+        {
             Ok(value) => value,
             Err(_) => panic!("failed to check membership"),
         };

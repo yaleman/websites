@@ -162,6 +162,7 @@ pub(crate) async fn admin_login_callback(
     };
 
     let subject = claims.subject().as_str().to_string();
+    let email = claims.email().map(|e| e.as_str());
     if session
         .insert(SESSION_USER_SUB, subject.clone())
         .await
@@ -170,7 +171,7 @@ pub(crate) async fn admin_login_callback(
         return Err(SiteError::internal("failed to store session".to_string()));
     }
 
-    upsert_user_login(state.db.as_ref(), &subject).await?;
+    upsert_user_login(state.db.as_ref(), &subject, email).await?;
 
     Ok(Redirect::to("/admin"))
 }

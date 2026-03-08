@@ -14,6 +14,7 @@ pub struct Model {
     pub subject: String,
     pub created_at: ChronoDateTime<Utc>,
     pub last_login_at: Option<ChronoDateTime<Utc>>,
+    pub email: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -22,12 +23,17 @@ pub enum Relation {}
 impl ActiveModelBehavior for ActiveModel {}
 
 /// Creates a user record and returns the persisted row.
-pub async fn create_user<C: ConnectionTrait>(db: &C, subject: &str) -> Result<Model, SiteError> {
+pub async fn create_user<C: ConnectionTrait>(
+    db: &C,
+    subject: &str,
+    email: Option<&str>,
+) -> Result<Model, SiteError> {
     let model = ActiveModel {
         id: Set(Uuid::now_v7()),
         subject: Set(subject.to_string()),
         created_at: Set(Utc::now()),
         last_login_at: Set(None),
+        email: Set(email.map(|e| e.to_string())),
     };
 
     model.insert(db).await.map_err(|error| error.into())
@@ -37,6 +43,7 @@ pub async fn create_user<C: ConnectionTrait>(db: &C, subject: &str) -> Result<Mo
 pub async fn upsert_user_login<C: ConnectionTrait>(
     db: &C,
     subject: &str,
+    email: Option<&str>,
 ) -> Result<Model, SiteError> {
     let existing = Entity::find()
         .filter(Column::Subject.eq(subject.to_string()))
@@ -54,6 +61,7 @@ pub async fn upsert_user_login<C: ConnectionTrait>(
             subject: Set(subject.to_string()),
             created_at: Set(Utc::now()),
             last_login_at: Set(Some(Utc::now())),
+            email: Set(email.map(|e| e.to_string())),
         }
         .insert(db)
         .await

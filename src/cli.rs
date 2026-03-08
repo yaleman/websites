@@ -158,7 +158,7 @@ pub enum SiteCommands {
         #[arg(long)]
         user_id: Uuid,
         #[arg(long, value_parser = ["owner", "editor", "author", "viewer"])]
-        role: String,
+        role: SiteRole,
     },
     /// List site memberships.
     MemberList {
@@ -194,6 +194,8 @@ pub enum UserCommands {
     Create {
         #[arg(long)]
         subject: String,
+        #[arg(long)]
+        email: Option<String>,
     },
     /// List users.
     List,
@@ -467,7 +469,11 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                     })
                     .await
                     .map_err(|error| format!("failed to create membership: {error}"))?;
-                println!("created membership: {} {}", membership.id, membership.role);
+                println!(
+                    "created membership: {} {}",
+                    membership.id,
+                    membership.role.label()
+                );
                 Ok(())
             }
             SiteCommands::MemberList { site_id } => {
@@ -479,7 +485,13 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
 
                 println!("id\tsite_id\tuser_id\trole");
                 for row in memberships {
-                    println!("{}\t{}\t{}\t{}", row.id, row.site_id, row.user_id, row.role);
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        row.id,
+                        row.site_id,
+                        row.user_id,
+                        row.role.label()
+                    );
                 }
                 Ok(())
             }
@@ -537,11 +549,11 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
             }
         },
         Commands::User { command } => match command {
-            UserCommands::Create { subject } => {
+            UserCommands::Create { subject, email } => {
                 let user = db_ref
                     .transaction::<_, _, String>(|txn| {
                         Box::pin(async move {
-                            let user = create_user(txn, &subject)
+                            let user = create_user(txn, &subject, email.as_deref())
                                 .await
                                 .map_err(|error| error.to_string())?;
                             log_audit_event(
@@ -551,7 +563,7 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                 "user",
                                 &user.id,
                                 None,
-                                Some(json!({"subject": &user.subject})),
+                                Some(json!({"subject": &user.subject, "email": &user.email})),
                             )
                             .await
                             .map_err(|err| format!("Failed to create audit event: {}", err))?;
