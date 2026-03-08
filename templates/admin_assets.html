@@ -1,18 +1,47 @@
 {% extends "base_template.html" %}
 {% block body %}
-{% if !rows.is_empty() %}
+<p class="inline-body">
+  Uploaded assets for <strong>{{ site_short_name }}</strong>. Files are served from the runtime upload root and are available under <code>/media/images/...</code>.
+</p>
+
+{% if assets.is_empty() %}
+<p class="inline-body">No assets uploaded yet.</p>
+{% else %}
 <table>
   <thead>
     <tr>
-      <th>Title</th>
-      <th>Value</th>
+      <th>Preview</th>
+      <th>Asset</th>
+      <th>Details</th>
+      <th>Uploaded</th>
     </tr>
   </thead>
   <tbody>
-    {% for row in rows %}
+    {% for asset in assets %}
     <tr>
-      <td>{{ row.label }}</td>
-      <td>{{ row.value }}</td>
+      <td>
+        <a href="{{ asset.original_url }}">
+          {% if let Some(thumbnail_url) = asset.thumbnail_url %}
+          <img src="{{ thumbnail_url }}" alt="{{ asset.original_filename }}" width="96" />
+          {% else %}
+          <img src="{{ asset.original_url }}" alt="{{ asset.original_filename }}" width="96" />
+          {% endif %}
+        </a>
+      </td>
+      <td>
+        <strong>{{ asset.original_filename }}</strong><br />
+        <code>{{ asset.storage_basename }}</code><br />
+        <code>{{ asset.id }}</code>
+      </td>
+      <td>
+        {{ asset.mime_type }}<br />
+        {{ asset.byte_length }} bytes<br />
+        {{ asset.dimensions }}
+      </td>
+      <td>
+        {{ asset.uploader_sub }}<br />
+        {{ asset.created_at }}
+      </td>
     </tr>
     {% endfor %}
   </tbody>

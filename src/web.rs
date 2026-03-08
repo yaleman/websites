@@ -187,16 +187,18 @@ struct AdminRevisionDiffTemplate {
 #[template(path = "admin_assets.html")]
 struct AdminAssetsTemplate {
     template_shared: AdminTemplateData,
-
-    rows: Vec<AdminRow>,
+    site_id: Uuid,
+    site_short_name: String,
+    assets: Vec<AdminAssetRow>,
 }
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
 #[template(path = "admin_assets_new.html")]
 struct AdminAssetsNewTemplate {
     template_shared: AdminTemplateData,
-
-    rows: Vec<AdminRow>,
+    site_id: Uuid,
+    site_short_name: String,
+    recent_assets: Vec<AdminAssetRow>,
 }
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
@@ -335,6 +337,20 @@ struct AdminUserMembershipRow {
     site_short_name: String,
     role: SiteRole,
     site_href: String,
+}
+
+#[derive(Debug)]
+struct AdminAssetRow {
+    id: Uuid,
+    original_filename: String,
+    storage_basename: String,
+    uploader_sub: String,
+    mime_type: String,
+    byte_length: i32,
+    dimensions: String,
+    created_at: String,
+    original_url: String,
+    thumbnail_url: Option<String>,
 }
 
 #[derive(Debug)]
@@ -2041,6 +2057,59 @@ fn normalize_asset_mime_filter(value: &str) -> Option<&'static str> {
     }
 }
 
+fn format_asset_dimensions(width: Option<i32>, height: Option<i32>) -> String {
+    match (width, height) {
+        (Some(width), Some(height)) if width > 0 && height > 0 => format!("{width} x {height}"),
+        (Some(width), None) if width > 0 => format!("{width}w"),
+        (None, Some(height)) if height > 0 => format!("{height}h"),
+        _ => "n/a".to_string(),
+    }
+}
+
+async fn build_admin_asset_rows<C: ConnectionTrait>(
+    db: &C,
+    assets: Vec<entities::asset::Model>,
+) -> Result<Vec<AdminAssetRow>, SiteError> {
+    if assets.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let asset_ids = assets.iter().map(|asset| asset.id).collect::<Vec<_>>();
+    let thumbnails = entities::asset_variant::Entity::find()
+        .filter(entities::asset_variant::Column::AssetId.is_in(asset_ids))
+        .filter(entities::asset_variant::Column::VariantKind.eq("thumbnail"))
+        .all(db)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load asset variants: {error}")))?;
+
+    let thumbnails_by_asset = thumbnails
+        .into_iter()
+        .map(|variant| (variant.asset_id, variant))
+        .collect::<HashMap<_, _>>();
+
+    Ok(assets
+        .into_iter()
+        .map(|asset| {
+            let thumbnail_url = thumbnails_by_asset
+                .get(&asset.id)
+                .map(|variant| format!("/media/images/{}", variant.filename));
+
+            AdminAssetRow {
+                id: asset.id,
+                original_filename: asset.original_filename,
+                storage_basename: asset.storage_basename.clone(),
+                uploader_sub: asset.uploader_sub,
+                mime_type: asset.mime_type,
+                byte_length: asset.byte_length,
+                dimensions: format_asset_dimensions(asset.width, asset.height),
+                created_at: asset.created_at.to_rfc3339(),
+                original_url: format!("/media/images/{}", asset.storage_basename),
+                thumbnail_url,
+            }
+        })
+        .collect())
+}
+
 async fn admin_site_assets_library(
     State(state): State<AdminState>,
     session: Session,
@@ -2134,16 +2203,7 @@ async fn admin_site_assets(
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?
         .ok_or(SiteError::SiteNotFound(site_id.to_string()))?;
-    let rows = assets
-        .into_iter()
-        .map(|asset| AdminRow {
-            label: asset.original_filename,
-            value: format!(
-                "{} {} [{} bytes]",
-                asset.storage_basename, asset.mime_type, asset.byte_length
-            ),
-        })
-        .collect();
+    let asset_rows = build_admin_asset_rows(state.db.as_ref(), assets).await?;
 
     Ok(AdminAssetsTemplate {
         template_shared: AdminTemplateData::new(format!("Site Assets ({})", site.short_name))
@@ -2154,7 +2214,9 @@ async fn admin_site_assets(
                     "Back to site dashboard",
                 ),
             ]),
-        rows,
+        site_id,
+        site_short_name: site.short_name,
+        assets: asset_rows,
     })
 }
 
@@ -2165,8 +2227,17 @@ async fn admin_site_assets_new(
 ) -> Result<AdminAssetsNewTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Author).await?;
     match get_by_id(state.db.as_ref(), site_id).await {
-        Ok(site) => Ok(AdminAssetsNewTemplate {
-            template_shared: AdminTemplateData::new(format!("Upload Asset {}", site.short_name))
+        Ok(site) => {
+            let mut recent_assets = list_assets(state.db.as_ref(), site_id).await?;
+            recent_assets.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+            let recent_assets = recent_assets.into_iter().take(10).collect::<Vec<_>>();
+            let recent_assets = build_admin_asset_rows(state.db.as_ref(), recent_assets).await?;
+
+            Ok(AdminAssetsNewTemplate {
+                template_shared: AdminTemplateData::new(format!(
+                    "Upload Asset {}",
+                    site.short_name
+                ))
                 .with_links(vec![
                     AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Back to assets"),
                     AdminLink::new(
@@ -2174,12 +2245,11 @@ async fn admin_site_assets_new(
                         "Back to site dashboard",
                     ),
                 ]),
-
-            rows: vec![AdminRow {
-                label: "site_id".to_string(),
-                value: site.id.to_string(),
-            }],
-        }),
+                site_id: site.id,
+                site_short_name: site.short_name,
+                recent_assets,
+            })
+        }
         Err(error) => Err(SiteError::internal(format!(
             "failed to load site {site_id}: {error}"
         ))),

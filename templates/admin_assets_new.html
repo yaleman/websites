@@ -1,31 +1,62 @@
 {% extends "base_template.html" %}
 {% block body %}
-{% if !rows.is_empty() %}
-<table>
-  <thead>
-    <tr>
-      <th>Title</th>
-      <th>Value</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for row in rows %}
-    <tr>
-      <td>{{ row.label }}</td>
-      <td>{{ row.value }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% endif %}
+<p class="inline-body">
+  Upload a new image for <strong>{{ site_short_name }}</strong>. Uploaded files can be inserted from the editor and will be published under <code>/media/images/...</code>.
+</p>
 
-<section class="inline-body">
-  <form method="post" action enctype="multipart/form-data">
-    <label for="file">Upload File</label>
-    <input id="file" name="file" type="file" required />
+<form method="post" action enctype="multipart/form-data" class="stack-form">
+  <div class="form-grid">
+    <div class="form-field">
+      <label for="file">Upload File</label>
+      <input id="file" name="file" type="file" required />
+      <p class="inline-body">Choose an image file. A thumbnail will be generated when possible.</p>
+    </div>
+  </div>
 
-    <button type="submit">Upload</button>
-  </form>
+  <div class="form-actions">
+    <button type="submit" class="save">Upload asset</button>
+  </div>
+</form>
+
+<section>
+  <h2>Recent Uploads</h2>
+  {% if recent_assets.is_empty() %}
+  <p class="inline-body">No recent uploads yet.</p>
+  {% else %}
+  <table>
+    <thead>
+      <tr>
+        <th>Preview</th>
+        <th>Asset</th>
+        <th>Uploaded</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for asset in recent_assets %}
+      <tr>
+        <td>
+          <a href="{{ asset.original_url }}">
+            {% if let Some(thumbnail_url) = asset.thumbnail_url %}
+            <img src="{{ thumbnail_url }}" alt="{{ asset.original_filename }}" width="72" />
+            {% else %}
+            <img src="{{ asset.original_url }}" alt="{{ asset.original_filename }}" width="72" />
+            {% endif %}
+          </a>
+        </td>
+        <td>
+          <strong>{{ asset.original_filename }}</strong><br />
+          <code>{{ asset.storage_basename }}</code><br />
+          {{ asset.mime_type }} / {{ asset.dimensions }}
+        </td>
+        <td>
+          {{ asset.uploader_sub }}<br />
+          {{ asset.created_at }}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
 </section>
 
 {% endblock %}
