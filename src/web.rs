@@ -2090,12 +2090,12 @@ async fn get_template_names() -> Vec<String> {
     let mut templates = vec!["default".to_string()];
     if let Ok(mut entries) = fs::read_dir(crate::constants::SITE_TEMPLATES_DIR).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
-            if let Ok(file_type) = entry.file_type().await {
-                if file_type.is_dir() && entry.file_name() != "default" {
-                    if let Some(name) = entry.file_name().to_str() {
-                        templates.push(name.to_string());
-                    }
-                }
+            if let Ok(file_type) = entry.file_type().await
+                && file_type.is_dir()
+                && entry.file_name() != "default"
+                && let Some(name) = entry.file_name().to_str()
+            {
+                templates.push(name.to_string());
             }
         }
     }
