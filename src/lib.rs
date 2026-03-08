@@ -13,7 +13,7 @@ use std::path::Path;
 use std::str::FromStr;
 use tera::{Context, Tera};
 use tokio::fs;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;
 
@@ -464,7 +464,7 @@ async fn load_site_templates(template_root: &Path) -> Result<Tera, SiteError> {
             .await
             .inspect_err(|error| error!(error=?error, "failed to load required template"))?;
         loaded_templates.insert(required_file.to_string());
-        info!("Loaded template {}", required_file);
+        debug!("Loaded required template {}", required_file);
     }
 
     let mut template_dir_glob = glob::glob(
@@ -701,7 +701,7 @@ pub async fn create_site<C: ConnectionTrait>(
     short_name: String,
     full_title: String,
     template_name: String,
-) -> Result<entities::site::Model, String> {
+) -> Result<entities::site::Model, SiteError> {
     let now = Utc::now();
     let model = entities::site::ActiveModel {
         id: Set(Uuid::now_v7()),
@@ -712,12 +712,10 @@ pub async fn create_site<C: ConnectionTrait>(
         updated_at: Set(None),
     };
 
-    let model = model.insert(db).await.map_err(|error| {
+    model.insert(db).await.map_err(|error| {
         error!("Failed to insert site into db! {error}");
-        error.to_string()
-    })?;
-
-    Ok(model)
+        SiteError::from(error)
+    })
 }
 
 /// Updates site settings and returns the updated row.
@@ -726,30 +724,24 @@ pub async fn update_site_settings<C: ConnectionTrait>(
     site_id: Uuid,
     full_title: String,
     template_name: String,
-) -> Result<entities::site::Model, String> {
-    let existing = entities::site::Entity::find_by_id(site_id)
-        .one(db)
-        .await
-        .map_err(|error| error.to_string())?;
+) -> Result<entities::site::Model, SiteError> {
+    let existing = entities::site::Entity::find_by_id(site_id).one(db).await?;
     let Some(existing) = existing else {
-        return Err(format!("site {site_id} not found"));
+        return Err(SiteError::SiteNotFound(site_id.to_string()));
     };
     let mut model = existing.into_active_model();
     model.full_title = Set(full_title);
     model.template_name = Set(template_name);
     model.updated_at = Set(Some(Utc::now()));
-    let updated = model.update(db).await.map_err(|error| error.to_string())?;
-    Ok(updated)
+    model.update(db).await.map_err(SiteError::from)
 }
 
 /// Returns all sites ordered by short name.
-pub async fn list_sites(db: &DatabaseConnection) -> Result<Vec<entities::site::Model>, String> {
-    let sites = entities::site::Entity::find()
+pub async fn list_sites(db: &DatabaseConnection) -> Result<Vec<entities::site::Model>, SiteError> {
+    entities::site::Entity::find()
         .all(db)
         .await
-        .map_err(|error| error.to_string())?;
-
-    Ok(sites)
+        .map_err(SiteError::from)
 }
 
 /// Creates one content record and one revision snapshot in the same operation.
@@ -793,7 +785,7 @@ pub async fn create_content<C: ConnectionTrait>(
     .insert(db)
     .await?;
 
-    let revision = entities::content_revision::ActiveModel {
+    entities::content_revision::ActiveModel {
         id: Set(revision_id),
         content_id: Set(content.id),
         site_id: Set(site_id),
@@ -808,8 +800,6 @@ pub async fn create_content<C: ConnectionTrait>(
     }
     .insert(db)
     .await?;
-
-    drop(revision);
 
     Ok(content)
 }

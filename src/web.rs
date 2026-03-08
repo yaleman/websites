@@ -1,4 +1,5 @@
 use crate::constants::*;
+use crate::constants::{SESSION_OIDC_NONCE_KEY, SESSION_OIDC_PKCE_KEY, SESSION_OIDC_STATE_KEY};
 use crate::entities::audit_event::log_audit_event;
 use crate::entities::site::get_by_id;
 use crate::entities::user::upsert_user_login;
@@ -6,10 +7,7 @@ use crate::entities::{self, PageType};
 use crate::errors::SiteError;
 use crate::images::{generate_thumbnail, mime_from_extension};
 use crate::middleware::log_requests;
-use crate::oidc::{
-    OIDC_SESSION_OIDC_NONCE_KEY, OIDC_SESSION_OIDC_PKCE_KEY, OIDC_SESSION_OIDC_STATE_KEY,
-    admin_login_callback, build_http_client, build_oidc_client,
-};
+use crate::oidc::{admin_login_callback, build_http_client, build_oidc_client};
 use crate::tls::build_tls_config;
 use crate::{
     NewAsset, NewAssetVariant, NewContent, cli::OidcConfig, content_primary_route, create_asset,
@@ -55,6 +53,7 @@ use tokio::io::AsyncWriteExt;
 use tower_http::services::ServeDir;
 use tower_sessions::{Expiry, Session, SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
+use tracing::error;
 use url::Url;
 use uuid::Uuid;
 
@@ -94,20 +93,14 @@ pub(crate) struct AdminState {
 struct AdminIndexTemplate {
     template_shared: AdminTemplateData,
     heading: String,
-    rows: Vec<AdminRow>,
     links: Vec<AdminLink>,
-    inline_body: String,
-    pre_body: String,
 }
 #[derive(Template, WebTemplate)]
 #[template(path = "admin_sites_new.html")]
 struct AdminSitesNewTemplate {
     template_shared: AdminTemplateData,
     heading: String,
-    rows: Vec<AdminRow>,
     links: Vec<AdminLink>,
-    inline_body: String,
-    pre_body: String,
 }
 #[derive(Template, WebTemplate)]
 #[template(path = "admin_content_search.html")]
@@ -116,8 +109,8 @@ struct AdminSearchTemplate {
     heading: String,
     rows: Vec<AdminRow>,
     links: Vec<AdminLink>,
-    inline_body: String,
     pre_body: String,
+    query: String,
 }
 #[derive(Template, WebTemplate)]
 #[template(path = "admin_content_detail.html")]
@@ -166,8 +159,6 @@ struct AdminAssetsTemplate {
     heading: String,
     rows: Vec<AdminRow>,
     links: Vec<AdminLink>,
-    inline_body: String,
-    pre_body: String,
 }
 #[derive(Template, WebTemplate)]
 #[template(path = "admin_assets_new.html")]
@@ -176,7 +167,6 @@ struct AdminAssetsNewTemplate {
     heading: String,
     rows: Vec<AdminRow>,
     links: Vec<AdminLink>,
-    inline_body: String,
     pre_body: String,
 }
 #[derive(Template, WebTemplate)]
@@ -413,12 +403,13 @@ impl SiteRole {
 
 async fn current_user_sub(session: &Session) -> Result<String, SiteError> {
     session
-        .get::<String>("user_sub")
+        .get::<String>(SESSION_USER_SUB)
         .await
         .map_err(|_| SiteError::internal("failed to read session".to_string()))?
         .ok_or_else(|| SiteError::UnAuthorized("missing user session".to_string()))
 }
 
+// TODO turn this into a middleware
 async fn require_site_role(
     _state: &AdminState,
     session: &Session,
@@ -567,6 +558,7 @@ pub async fn run_admin_server(
     axum_server::bind_rustls(bind_addr, tls_config)
         .serve(app.into_make_service())
         .await
+        .inspect_err(|err| error!("admin server error: {err}"))
         .context("axum rustls server exited unexpectedly")
 }
 
@@ -667,7 +659,7 @@ async fn admin_root() -> Redirect {
 
 async fn require_admin_session(session: Session, request: Request, next: Next) -> Response {
     let is_authenticated = session
-        .get::<String>("user_sub")
+        .get::<String>(SESSION_USER_SUB)
         .await
         .unwrap_or(None)
         .is_some();
@@ -682,10 +674,7 @@ async fn admin_index(State(_state): State<AdminState>) -> AdminIndexTemplate {
     AdminIndexTemplate {
         template_shared: AdminTemplateData::new("Admin Dashboard"),
         heading: "Administration".to_string(),
-        rows: vec![],
         links: vec![],
-        inline_body: String::new(),
-        pre_body: String::new(),
     }
 }
 
@@ -713,10 +702,7 @@ async fn admin_sites_new() -> Response {
             page_message: None,
         },
         heading: "Create Site".to_string(),
-        rows: vec![],
         links: vec![AdminLink::new("/admin/sites", "Back to sites")],
-        inline_body: admin_sites_new_form_html().to_string(),
-        pre_body: String::new(),
     }
     .into_response()
 }
@@ -774,7 +760,7 @@ async fn admin_sites_create(
         ADMIN_ACTOR_SUB,
         "create_site",
         "site",
-        &site.id.to_string(),
+        &site.id,
         Some(site.id),
         Some(json!({ "short_name": &site.short_name, "full_title": &site.full_title })),
     )
@@ -787,11 +773,11 @@ async fn admin_sites_create(
             ADMIN_ACTOR_SUB,
             "create_membership",
             "site_membership",
-            &membership.id.to_string(),
+            &membership.id,
             Some(membership.site_id),
             Some(json!({
-                "site_id": membership.site_id.to_string(),
-                "user_id": membership.user_id.to_string(),
+                "site_id": membership.site_id,
+                "user_id": membership.user_id,
                 "role": membership.role
             })),
         )
@@ -800,23 +786,6 @@ async fn admin_sites_create(
     }
     txn.commit().await?;
     Ok(Redirect::to("/admin/sites"))
-}
-
-fn admin_sites_new_form_html() -> &'static str {
-    r#"
-      <form method="post" action="/admin/sites/new">
-        <label for="short_name">Short Name</label>
-        <input id="short_name" name="short_name" required />
-
-        <label for="full_title">Full Title</label>
-        <input id="full_title" name="full_title" required />
-
-        <label for="template_name">Template Name</label>
-        <input id="template_name" name="template_name" value="default" />
-
-        <button type="submit">Create site</button>
-      </form>
-    "#
 }
 
 async fn admin_login(
@@ -846,18 +815,15 @@ async fn admin_login(
         .url();
 
     if session
-        .insert(OIDC_SESSION_OIDC_STATE_KEY, csrf_state.secret().to_string())
+        .insert(SESSION_OIDC_STATE_KEY, csrf_state.secret().to_string())
         .await
         .is_err()
         || session
-            .insert(
-                OIDC_SESSION_OIDC_PKCE_KEY,
-                pkce_verifier.secret().to_string(),
-            )
+            .insert(SESSION_OIDC_PKCE_KEY, pkce_verifier.secret().to_string())
             .await
             .is_err()
         || session
-            .insert(OIDC_SESSION_OIDC_NONCE_KEY, nonce.secret().to_string())
+            .insert(SESSION_OIDC_NONCE_KEY, nonce.secret().to_string())
             .await
             .is_err()
     {
@@ -958,7 +924,10 @@ async fn admin_site_memberships(
         },
         heading: "Memberships".to_string(),
         links: vec![
-            AdminLink::new(&format!("/admin/site/{site_id}/content"), "Back to content"),
+            AdminLink::new(
+                &format!("/admin/site/{site_id}/content"),
+                "Back to site dashboard",
+            ),
             AdminLink::new(&format!("/admin/site/{site_id}/settings"), "Site settings"),
         ],
         site_id: site.id,
@@ -1003,10 +972,10 @@ async fn admin_site_membership_create(
         &actor,
         "create_membership",
         "site_membership",
-        &membership.id.to_string(),
+        &membership.id,
         Some(membership.site_id),
         Some(json!({
-            "user_id": membership.user_id.to_string(),
+            "user_id": membership.user_id,
             "role": membership.role
         })),
     )
@@ -1050,11 +1019,11 @@ async fn admin_site_membership_update(
         &actor,
         "update_membership",
         "site_membership",
-        &updated.id.to_string(),
+        &updated.id,
         Some(updated.site_id),
         Some(json!({
-            "site_id": updated.site_id.to_string(),
-            "user_id": updated.user_id.to_string(),
+            "site_id": updated.site_id,
+            "user_id": updated.user_id,
             "role": updated.role
         })),
     )
@@ -1093,11 +1062,11 @@ async fn admin_site_membership_remove(
         &actor,
         "delete_membership",
         "site_membership",
-        &membership.id.to_string(),
+        &membership.id,
         Some(membership.site_id),
         Some(json!({
-            "site_id": membership.site_id.to_string(),
-            "user_id": membership.user_id.to_string(),
+            "site_id": membership.site_id,
+            "user_id": membership.user_id,
             "role": membership.role
         })),
     )
@@ -1149,26 +1118,15 @@ async fn admin_site_search(
         heading: format!("Search Content {site_id}"),
         rows,
         links: vec![
-            AdminLink::new(&format!("/admin/site/{site_id}/content"), "Back to content"),
+            AdminLink::new(
+                &format!("/admin/site/{site_id}/content"),
+                "Back to site dashboard",
+            ),
             AdminLink::new(&format!("/admin/site/{site_id}/content/new"), "New content"),
         ],
-        inline_body: admin_site_search_form_html(&query_text),
+        query: query_text.trim().to_string(),
         pre_body: String::new(),
     })
-}
-
-fn admin_site_search_form_html(query: &str) -> String {
-    let query = escape_html(query);
-    format!(
-        r#"
-      <form method="get" action="">
-        <label for="q">Search Query</label>
-        <input id="q" name="q" value="{query}" />
-
-        <button type="submit">Search</button>
-      </form>
-    "#
-    )
 }
 
 async fn admin_site_content_new(
@@ -1258,10 +1216,10 @@ async fn admin_site_content_create(
         ADMIN_ACTOR_SUB,
         "create_content",
         "content_item",
-        &content.id.to_string(),
+        &content.id,
         Some(content.site_id),
         Some(json!({
-            "page_type": content.page_type.to_string(),
+            "page_type": content.page_type,
             "slug": &content.slug,
             "title": &content.title,
             "draft": content.draft
@@ -1364,7 +1322,7 @@ async fn admin_site_content_detail(
             ),
             AdminLink::new(
                 &format!("/admin/site/{}/content", content.site_id),
-                "Back to content",
+                "Back to site dashboard",
             ),
         ],
         inline_body: String::new(),
@@ -1404,7 +1362,7 @@ async fn admin_site_content_source(
         heading,
         links: vec![
             AdminLink::new(&preview_href, "Preview"),
-            AdminLink::new(&back_href, "Back to content"),
+            AdminLink::new(&back_href, "Back to site dashboard"),
         ],
         title,
         slug,
@@ -1606,7 +1564,7 @@ async fn admin_site_content_advanced(
         ],
         links: vec![AdminLink::new(
             &format!("/admin/site/{}/content/{}", content.site_id, content.id),
-            "Back to content",
+            "Back to site dashboard",
         )],
         inline_body: String::new(),
         pre_body: String::new(),
@@ -1659,7 +1617,7 @@ async fn admin_site_content_revisions(
         rows,
         links: vec![AdminLink::new(
             &format!("/admin/site/{site_id}/content/{content_id}"),
-            "Back to content",
+            "Back to site dashboard",
         )],
         inline_body: if diff_links.is_empty() {
             "<p>No diffs available for the first revision.</p>".to_string()
@@ -1751,7 +1709,7 @@ async fn admin_site_revision_diff(
             ),
             AdminLink::new(
                 &format!("/admin/site/{}/content/{}", site_id, content_id),
-                "Back to content",
+                "Back to site dashboard",
             ),
         ],
         inline_body: String::new(),
@@ -1784,7 +1742,7 @@ async fn admin_site_tags(
                 rows,
                 links: vec![AdminLink::new(
                     &format!("/admin/site/{site_id}/content"),
-                    "Back to content",
+                    "Back to site dashboard",
                 )],
                 inline_body: String::new(),
                 pre_body: String::new(),
@@ -1917,10 +1875,11 @@ async fn admin_site_assets(
                 rows,
                 links: vec![
                     AdminLink::new(&format!("/admin/site/{site_id}/assets/new"), "Upload asset"),
-                    AdminLink::new(&format!("/admin/site/{site_id}/content"), "Back to content"),
+                    AdminLink::new(
+                        &format!("/admin/site/{site_id}/content"),
+                        "Back to site dashboard",
+                    ),
                 ],
-                inline_body: String::new(),
-                pre_body: String::new(),
             })
         }
         Err(error) => Err(SiteError::internal(format!(
@@ -1948,9 +1907,12 @@ async fn admin_site_assets_new(
             }],
             links: vec![
                 AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Back to assets"),
-                AdminLink::new(&format!("/admin/site/{site_id}/content"), "Back to content"),
+                AdminLink::new(
+                    &format!("/admin/site/{site_id}/content"),
+                    "Back to site dashboard",
+                ),
             ],
-            inline_body: admin_site_assets_new_form_html().to_string(),
+
             pre_body: String::new(),
         }),
         Err(error) => Err(SiteError::internal(format!(
@@ -2160,17 +2122,6 @@ async fn admin_site_assets_create(
     Ok(Redirect::to(&format!("/admin/site/{site_id}/assets")))
 }
 
-fn admin_site_assets_new_form_html() -> &'static str {
-    r#"
-      <form method="post" action="" enctype="multipart/form-data">
-        <label for="file">Upload File</label>
-        <input id="file" name="file" type="file" required />
-
-        <button type="submit">Upload</button>
-      </form>
-    "#
-}
-
 fn normalize_optional(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let trimmed = value.trim().to_string();
@@ -2180,15 +2131,6 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
             Some(trimmed)
         }
     })
-}
-
-fn escape_html(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#x27;")
 }
 
 fn parse_optional_datetime(
@@ -2221,7 +2163,10 @@ async fn admin_site_settings(
         },
         heading: "Site settings".to_string(),
         links: vec![
-            AdminLink::new(&format!("/admin/site/{site_id}/content"), "Back to content"),
+            AdminLink::new(
+                &format!("/admin/site/{site_id}/content"),
+                "Back to site dashboard",
+            ),
             AdminLink::new(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
         ],
         site_id: site.id,
@@ -2299,10 +2244,13 @@ async fn admin_site_render(
         },
         heading: format!("Rendered site {site_id}"),
         rows: vec![],
-        links: vec![AdminLink::new(
-            &format!("/admin/site/{site_id}/content"),
-            "Back to content",
-        )],
+        links: vec![
+            AdminLink::new(
+                &format!("/admin/site/{site_id}/content"),
+                "Back to site dashboard",
+            ),
+            AdminLink::new(&format!("/admin/site/{site_id}/render"), "Run render again"),
+        ],
         inline_body: String::new(),
         pre_body: String::new(),
     })

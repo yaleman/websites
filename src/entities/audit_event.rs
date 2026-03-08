@@ -24,10 +24,10 @@ impl ActiveModelBehavior for ActiveModel {}
 /// Records an audit event for administrative actions.
 pub async fn log_audit_event<C: ConnectionTrait>(
     db: &C,
-    actor_sub: &str,
-    event_type: &str,
-    entity_type: &str,
-    entity_id: &str,
+    actor_sub: impl ToString,
+    event_type: impl ToString,
+    entity_type: impl ToString,
+    entity_id: impl ToString,
     site_id: Option<Uuid>,
     payload_json: Option<serde_json::Value>,
 ) -> Result<Model, SiteError> {

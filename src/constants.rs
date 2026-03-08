@@ -13,3 +13,9 @@ pub static REQUIRED_TEMPLATES: &[&str] = &[
     "rss.xml",
     "atom.xml",
 ];
+
+pub static SESSION_USER_SUB: &str = "user_sub";
+
+pub(crate) static SESSION_OIDC_PKCE_KEY: &str = "oidc_pkce";
+pub(crate) static SESSION_OIDC_STATE_KEY: &str = "oidc_state";
+pub(crate) static SESSION_OIDC_NONCE_KEY: &str = "oidc_nonce";
