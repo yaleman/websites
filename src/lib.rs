@@ -8,6 +8,7 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, DbErr,
     EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
 };
+use serde::Serialize;
 use std::collections::HashSet;
 use std::env;
 use std::io::ErrorKind;
@@ -101,6 +102,12 @@ pub struct UpdateContent {
     pub draft: Option<bool>,
     pub published_at: Option<DateTime<Utc>>,
     pub editor_sub: String,
+}
+
+#[derive(Clone, Serialize)]
+struct SiteListItem {
+    title: String,
+    url: String,
 }
 
 pub fn resolve_upload_root() -> PathBuf {
@@ -207,10 +214,10 @@ async fn write_index(
     tmp_root: &Path,
     tera: &Tera,
     site: &entities::site::Model,
-    index_rows: &str,
+    items: &[SiteListItem],
 ) -> Result<(), SiteError> {
     let mut index_context = default_context(site, &site.full_title);
-    index_context.insert("items", &index_rows);
+    index_context.insert("items", items);
     let rendered_index = tera.render("index.html", &index_context)?;
     fs::create_dir_all(&tmp_root).await?;
     fs::write(tmp_root.join("index.html"), rendered_index).await?;
@@ -273,7 +280,7 @@ async fn render_site_with_overrides(
     fs::create_dir_all(&rendered_root).await?;
 
     let mut files_written = 0usize;
-    let mut index_rows = String::new();
+    let mut index_items = Vec::new();
 
     for item in &content_items {
         let mut routes = HashSet::new();
@@ -321,15 +328,13 @@ async fn render_site_with_overrides(
         }
 
         let primary_route = content_primary_route(item);
-        // TODO this is a terrible way to render the index
-        index_rows.push_str(&format!(
-            "<li><a href=\"/{}/\">{}</a></li>",
-            primary_route.trim_matches('/'),
-            item.title
-        ));
+        index_items.push(SiteListItem {
+            title: item.title.clone(),
+            url: format!("/{}", primary_route.trim_matches('/')),
+        });
     }
 
-    write_index(tmp_root.path(), &tera, &site, &index_rows).await?;
+    write_index(tmp_root.path(), &tera, &site, &index_items).await?;
     files_written = files_written.saturating_add(1);
 
     let post_items = content_items
@@ -350,7 +355,7 @@ async fn render_site_with_overrides(
         .await?;
 
     for tag in tags {
-        let mut tag_rows = String::new();
+        let mut tag_items = Vec::new();
         let links = entities::content_tag::Entity::find()
             .filter(entities::content_tag::Column::TagId.eq(tag.id))
             .all(db)
@@ -361,18 +366,19 @@ async fn render_site_with_overrides(
                 .filter(entities::content_item::Column::Draft.eq(false))
                 .one(db)
                 .await?
+                .filter(|content| content_is_publishable_at(content, now))
             {
-                tag_rows.push_str(&format!(
-                    "<li><a href=\"/{}/\">{}</a></li>",
-                    content_primary_route(&content).trim_matches('/'),
-                    content.title
-                ));
+                let route = content_primary_route(&content);
+                tag_items.push(SiteListItem {
+                    title: content.title,
+                    url: format!("/{}", route.trim_matches('/')),
+                });
             }
         }
 
-        let mut tag_context = Context::new();
+        let mut tag_context = default_context(&site, &format!("Tag: {}", tag.name));
         tag_context.insert("tag", &tag.name);
-        tag_context.insert("items", &tag_rows);
+        tag_context.insert("items", &tag_items);
         let tag_output = tera.render("tag.html", &tag_context)?;
         let tag_slug = sanitize_tag_slug(&tag.name);
         let tag_path = tmp_root.path().join("tags").join(tag_slug);
@@ -2721,7 +2727,7 @@ mod tests {
         .expect("failed to write post template");
         fs::write(
             template_root.join("index.html"),
-            r#"{% extends "base_template.html" %}{% block content %}<section class="index-template">{{items}}</section>{% endblock %}"#,
+            r#"{% extends "base_template.html" %}{% block content %}<section class="index-template">{% for item in items %}<a href="{{ item.url }}">{{ item.title }}</a>{% endfor %}</section>{% endblock %}"#,
         )
         .await
         .expect("failed to write index template");
@@ -2750,7 +2756,92 @@ mod tests {
         assert!(page_output.contains("post-template"));
         assert!(page_output.contains("shell"));
         assert!(index_output.contains("index-template"));
+        assert!(index_output.contains("hello"));
         assert!(index_output.contains("shell"));
+    }
+
+    #[tokio::test]
+    async fn render_site_tag_pages_skip_future_scheduled_content() {
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+        let templates_dir = TempDir::new().expect("failed to create templates dir");
+        let rendered_dir = TempDir::new().expect("failed to create rendered dir");
+        let upload_root = TempDir::new().expect("failed to create upload dir");
+        let now = Utc::now();
+
+        let current = create_content(
+            &db,
+            NewContent {
+                site_id: site.id,
+                page_type: PageType::Post,
+                title: "Current Post".to_string(),
+                slug: "current-post".to_string(),
+                page_content: "Body".to_string(),
+                draft: false,
+                creator_sub: "creator".to_string(),
+                published_at: Some(now - chrono::Duration::days(1)),
+            },
+        )
+        .await
+        .expect("failed to create current content");
+        let future = create_content(
+            &db,
+            NewContent {
+                site_id: site.id,
+                page_type: PageType::Post,
+                title: "Future Post".to_string(),
+                slug: "future-post".to_string(),
+                page_content: "Body".to_string(),
+                draft: false,
+                creator_sub: "creator".to_string(),
+                published_at: Some(now + chrono::Duration::days(7)),
+            },
+        )
+        .await
+        .expect("failed to create future content");
+        add_content_tag(
+            &db,
+            NewContentTag {
+                content_id: current.id,
+                site_id: site.id,
+                tag_name: "Schedule".to_string(),
+            },
+        )
+        .await
+        .expect("failed to tag current content");
+        add_content_tag(
+            &db,
+            NewContentTag {
+                content_id: future.id,
+                site_id: site.id,
+                tag_name: "Schedule".to_string(),
+            },
+        )
+        .await
+        .expect("failed to tag future content");
+
+        render_site(
+            &db,
+            site.id,
+            templates_dir.path(),
+            rendered_dir.path(),
+            upload_root.path(),
+        )
+        .await
+        .expect("failed to render site");
+
+        let rendered_root = rendered_dir.path().join(site.short_name);
+        let tag_output = fs::read_to_string(
+            rendered_root
+                .join("tags")
+                .join("schedule")
+                .join("index.html"),
+        )
+        .await
+        .expect("failed to read tag output");
+
+        assert!(tag_output.contains("Current Post"));
+        assert!(!tag_output.contains("Future Post"));
     }
 
     #[tokio::test]
