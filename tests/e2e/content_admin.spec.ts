@@ -39,7 +39,7 @@ test.describe("content admin", () => {
 
       const { api } = await createAuthenticatedApiContext(harness, subject);
       const updateResponse = await api.post(
-        `/admin/site/${harness.siteId}/content/${contentId}/source`,
+        `/admin/site/${harness.siteId}/content/${contentId}/edit`,
         {
           form: {
             page_type: "page",

@@ -15,15 +15,15 @@ Reviewed against the current implementation on 2026-03-08.
 ## Remaining work
 
 - [x] first user to log into a system gets created as an admin user
-- [ ] Clarify or implement real editing modes. The current `/source` screen is a rich editor, and the "advanced" screen is metadata-only, so there is not yet a true source-vs-visual mode split.
+- [x] Clarify or implement real editing modes. The rich editor now lives at `/edit`, and markdown editing is an explicit in-editor mode instead of a separate misleading route.
 - [x] Extend tag management beyond create-time assignment. Existing content can now update tags from the editor, and the tags admin page supports create/delete workflows.
-- [ ] Replace placeholder admin views with real workflows where needed, especially the advanced content view and the assets listing screens.
-- [ ] Implement template customization UI in admin; current site settings only select an existing template.
-- [ ] add an option to provide an image URL for import instead of just uploading
+- [x] Replace placeholder admin views with real workflows where needed, especially the advanced content view and the assets listing screens.
+- [x] Implement template customization UI in admin; site settings now support per-site template overrides.
+- [x] add an option to provide an image URL for import instead of just uploading
 
 ## Follow-up testing
 
 - [x] Replace the current end-to-end expectation that non-members can access admin pages with authorization coverage for viewer/author/editor/owner role boundaries.
-- [ ] Add broader authorization coverage for viewer/author/editor/owner boundaries across edit, membership, asset, preview, and render routes.
-- [ ] Add tests that verify audit events and revision history record the actual acting user for web requests.
+- [x] Add broader authorization coverage for viewer/author/editor/owner boundaries across edit, membership, asset, preview, and render routes.
+- [x] Add tests that verify audit events and revision history record the actual acting user for web requests.
 - [x] Add coverage for published output including uploaded media when a custom upload root is configured.

@@ -703,7 +703,7 @@ pub async fn run_admin_server(
             get(admin_site_content_detail),
         )
         .route(
-            "/admin/site/{site_id}/content/{content_id}/source",
+            "/admin/site/{site_id}/content/{content_id}/edit",
             get(admin_site_content_source).post(admin_site_content_source_update),
         )
         .route(
@@ -1537,7 +1537,7 @@ async fn admin_site_content_detail(
             .with_links(vec![
                 AdminLink::new(
                     &format!(
-                        "/admin/site/{}/content/{}/source",
+                        "/admin/site/{}/content/{}/edit",
                         content.site_id, content.id
                     ),
                     "Return to editor",
@@ -1709,7 +1709,7 @@ async fn admin_site_content_source_update(
     .map_err(|error| SiteError::internal(format!("failed to log update audit: {error}")))?;
     txn.commit().await?;
     Ok(Redirect::to(&format!(
-        "/admin/site/{}/content/{}/source?saved=1",
+        "/admin/site/{}/content/{}/edit?saved=1",
         content.site_id, content.id
     )))
 }
