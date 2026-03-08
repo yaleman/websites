@@ -946,7 +946,7 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                     .ok_or(format!("content not found: {content_id}"))?;
                 let aliases = list_aliases(db_ref, content.site_id, Some(content_id))
                     .await
-                    .map_err(|err| format!("Failed to list aliases: {}", err.to_string()))?;
+                    .map_err(|err| format!("Failed to list aliases: {err}"))?;
                 let tags = list_content_tags(db_ref, content_id).await?;
                 let revisions = list_revisions(db_ref, content_id).await?;
 
