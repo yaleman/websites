@@ -145,7 +145,7 @@ async fn write_atom(
     atom_context.insert("link", "/");
     atom_context.insert("updated", &updated);
     atom_context.insert("entries", &atom_entries);
-    let rendered_atom = render_template(tera, "atom.xml", &atom_context)?;
+    let rendered_atom = tera.render("atom.xml", &atom_context)?;
     fs::write(tmp_root.join("atom.xml"), rendered_atom.as_bytes()).await?;
     Ok(())
 }
@@ -161,7 +161,7 @@ async fn write_rss(
     rss_context.insert("link", "/");
     rss_context.insert("updated", &Utc::now().to_rfc2822());
     rss_context.insert("items", &rss_items);
-    let rendered_rss = render_template(tera, "rss.xml", &rss_context)?;
+    let rendered_rss = tera.render("rss.xml", &rss_context)?;
     fs::write(tmp_root.join("rss.xml"), rendered_rss.as_bytes()).await?;
     Ok(())
 }
@@ -174,7 +174,7 @@ async fn write_index(
 ) -> Result<(), SiteError> {
     let mut index_context = default_context(site, &site.full_title);
     index_context.insert("items", &index_rows);
-    let rendered_index = render_template(tera, "index.html", &index_context)?;
+    let rendered_index = tera.render("index.html", &index_context)?;
     fs::create_dir_all(&tmp_root).await?;
     fs::write(tmp_root.join("index.html"), rendered_index).await?;
     Ok(())
@@ -246,7 +246,7 @@ pub async fn render_site(
         );
         context.insert("tags", &tags);
         context.insert("tag_links", &tag_links);
-        let rendered = render_template(&tera, item.page_type.template(), &context)?;
+        let rendered = tera.render(item.page_type.template(), &context)?;
 
         for route in routes {
             let route = route.trim_end_matches('/').trim_start_matches('/');
@@ -314,7 +314,7 @@ pub async fn render_site(
         let mut tag_context = Context::new();
         tag_context.insert("tag", &tag.name);
         tag_context.insert("items", &tag_rows);
-        let tag_output = render_template(&tera, "tag.html", &tag_context)?;
+        let tag_output = tera.render("tag.html", &tag_context)?;
         let tag_slug = sanitize_tag_slug(&tag.name);
         let tag_path = tmp_root.path().join("tags").join(tag_slug);
 
@@ -378,6 +378,7 @@ pub async fn render_content_preview(
     context.insert("content", &html);
     context.insert("slug", &content.slug);
     context.insert("site_title", &site.full_title);
+    context.insert("page_title", &content.title);
     context.insert("page_type", &content.page_type);
     context.insert("created_at", &content.created_at);
     context.insert("published_at", &content.published_at);
@@ -389,7 +390,8 @@ pub async fn render_content_preview(
     context.insert("tags", &tags);
     context.insert("tag_links", &tag_links);
 
-    render_template(&tera, content.page_type.template(), &context)
+    tera.render(content.page_type.template(), &context)
+        .map_err(SiteError::from)
 }
 
 async fn load_template(template_root: &Path, filename: &str) -> Result<String, SiteError> {
@@ -584,10 +586,6 @@ async fn copy_file_if_exists(source: &Path, destination: &Path) -> Result<bool, 
         }
         _ => Ok(false),
     }
-}
-
-fn render_template(tera: &Tera, name: &str, context: &Context) -> Result<String, SiteError> {
-    tera.render(name, context).map_err(SiteError::from)
 }
 
 fn sanitize_tag_slug(tag_name: &str) -> String {

@@ -106,6 +106,7 @@ struct AdminIndexTemplate {
 struct AdminSitesNewTemplate {
     template_shared: AdminTemplateData,
     heading: String,
+    templates: Vec<String>,
 }
 #[derive(Template, WebTemplate)]
 #[template(path = "admin_content_search.html")]
@@ -699,6 +700,7 @@ async fn admin_sites_new() -> Response {
         template_shared: AdminTemplateData::new("Create Site")
             .with_links(vec![AdminLink::new("/admin/sites", "Back to sites")]),
         heading: "Create Site".to_string(),
+        templates: get_template_names().await,
     }
     .into_response()
 }
@@ -1415,12 +1417,7 @@ async fn admin_site_content_preview(
         content_id,
         crate::SITE_TEMPLATES_DIR,
     )
-    .await
-    .map_err(|error| {
-        SiteError::internal(format!(
-            "failed to render preview for content {content_id}: {error}"
-        ))
-    })?;
+    .await?;
     Ok(Html(rewrite_preview_asset_urls(&rendered, site_id)))
 }
 

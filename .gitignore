@@ -14,3 +14,5 @@ uploads/media-storage/
 !uploads/media-storage/.gitkeeper
 rendered/*
 !rendered/.gitkeeper
+site_templates/
+!site_templates/default/
