@@ -15,7 +15,7 @@ impl MigrationTrait for Migration {
             .alter_table(
                 Table::alter()
                     .table(User::Table)
-                    .add_column(ColumnDef::new(User::Email).string().not_null().default(""))
+                    .add_column(ColumnDef::new(User::Email).string().default(""))
                     .to_owned(),
             )
             .await
