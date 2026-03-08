@@ -1,5 +1,7 @@
 use sea_orm::entity::prelude::*;
 
+use crate::web::SiteRole;
+
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "site_membership")]
 pub struct Model {
@@ -7,7 +9,7 @@ pub struct Model {
     pub id: Uuid,
     pub site_id: Uuid,
     pub user_id: Uuid,
-    pub role: String,
+    pub role: SiteRole,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

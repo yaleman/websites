@@ -1,4 +1,5 @@
 use crate::constants::{REQUIRED_TEMPLATES, SITE_TEMPLATES_DIR};
+use crate::web::SiteRole;
 use crate::{entities::PageType, errors::SiteError};
 use chrono::{DateTime, Datelike, Utc};
 use quick_xml::Reader;
@@ -66,7 +67,7 @@ pub struct NewUser {
 pub struct NewMembership {
     pub site_id: Uuid,
     pub user_id: Uuid,
-    pub role: String,
+    pub role: SiteRole,
 }
 
 pub struct NewAsset {
@@ -1532,7 +1533,7 @@ pub async fn list_sites_for_subject(
 pub async fn update_membership_role<C: ConnectionTrait>(
     db: &C,
     membership_id: Uuid,
-    role: String,
+    role: SiteRole,
 ) -> Result<entities::site_membership::Model, String> {
     let Some(membership) = get_membership_by_id(db, membership_id).await? else {
         return Err("membership not found".to_string());
@@ -2016,17 +2017,17 @@ mod tests {
         let db = test_db_start().await;
         let site = create_site_fixture(&db).await;
 
-        let user = entities::user::create_user(&db, "alice")
+        let user = entities::user::create_user(&db, "alice", None)
             .await
             .expect("failed to create user");
 
-        let updated = upsert_user_login(&db, "alice")
+        let updated = upsert_user_login(&db, "alice", Some("alice@example.com"))
             .await
             .expect("failed to upsert user login");
         assert_eq!(updated.id, user.id);
         assert!(updated.last_login_at.is_some());
 
-        let _ = upsert_user_login(&db, "bob")
+        let _ = upsert_user_login(&db, "bob", None)
             .await
             .expect("failed to insert user login");
 
@@ -2038,7 +2039,7 @@ mod tests {
             NewMembership {
                 site_id: site.id,
                 user_id: user.id,
-                role: "owner".to_string(),
+                role: SiteRole::Owner,
             },
         )
         .await

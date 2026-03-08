@@ -3,10 +3,11 @@
 	--medium-border-radius: 0.5rem;
 	--large-border-radius: 0.75rem;
 
+	--light-purple: rgba(100, 0, 215, 0.25);
 	--dark-purple: rgb(100, 0, 215);
 	--dark-green: rgb(0, 101, 2);
 	--text-white: rgb(255, 255, 255);
-	--text-darK: #000;
+	--text-dark: #000;
 	--border-light: #aaa;
 }
 
@@ -43,4 +44,33 @@ select {
 
 h1.page-title {
 	margin: 0;
+}
+
+h2 {
+	margin: 0.5rem 0;
+}
+
+form {
+	margin: 0.5rem 0;
+}
+
+main {
+	width: 99%;
+	margin: 0.5rem 0.25rem;
+}
+
+nav {
+	border: 1px solid var(--border-light);
+	border-radius: var(--small-border-radius);
+	padding: var(--small-border-radius);
+	margin: 0.5rem 0;
+	width: 100%;
+	background-color: var(--light-purple);
+}
+
+nav a {
+	text-decoration: none;
+	margin-right: 1rem;
+	color: var(--text-dark);
+	font-weight: 600;
 }

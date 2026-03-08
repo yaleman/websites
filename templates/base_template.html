@@ -16,8 +16,7 @@
       <nav>
         <a href="/admin">Dashboard</a>
         <a href="/admin/sites">Sites</a>
-        <a href="/admin/login">Login</a>
-        <a href="/admin/logout">Logout</a>
+        {% block nav_links %}{% endblock %}
       </nav>
 
       {% if let Some(message) = template_shared.page_message %}

@@ -1,16 +1,7 @@
 {% extends "base_template.html" %}
-{% block body %}
-<section class="content-editor__meta">
-  <div class="meta-card">
-    <span class="meta-label">Site ID</span>
-    <span class="meta-value">{{ site_id }}</span>
-  </div>
-  <div class="meta-card">
-    <span class="meta-label">Short Name</span>
-    <span class="meta-value">{{ site_short_name }}</span>
-  </div>
-</section>
+{% block title %}Memberships - {{ site_full_title }}{% endblock %}
 
+{% block body %}
 <section>
   <h2>Existing memberships</h2>
   {% if memberships.is_empty() %}
@@ -27,20 +18,20 @@
     <tbody>
       {% for membership in memberships %}
       <tr>
-        <td>{{ membership.subject }}</td>
+        <td><span aria-label="{{membership.subject }}">{{ membership.email }}</span></td>
         <td>
           <form method="post" action="{{ membership.update_href }}">
             <select name="role">
-              <option value="viewer" {% if membership.role == "viewer" %}selected{% endif %}>
+              <option value="viewer" {% if membership.role.is_viewer() %}selected{% endif %}>
                 Viewer
               </option>
-              <option value="author" {% if membership.role == "author" %}selected{% endif %}>
+              <option value="author" {% if membership.role.is_author() %}selected{% endif %}>
                 Author
               </option>
-              <option value="editor" {% if membership.role == "editor" %}selected{% endif %}>
+              <option value="editor" {% if membership.role.is_editor() %}selected{% endif %}>
                 Editor
               </option>
-              <option value="owner" {% if membership.role == "owner" %}selected{% endif %}>
+              <option value="owner" {% if membership.role.is_owner() %}selected{% endif %}>
                 Owner
               </option>
             </select>
@@ -61,8 +52,8 @@
 
 <section>
   <h2>Add membership</h2>
-  <form method="post" action="{{ create_href }}">
-    <label for="subject">User subject</label>
+  <form method="post" action="/admin/site/{{ site_id }}/memberships/new">
+    <label for="subject">User</label>
     <input id="subject" name="subject" required />
 
     <label for="role">Role</label>
