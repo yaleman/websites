@@ -362,7 +362,11 @@ const createAssetModal = (editor: Editor) => {
 	return { open };
 };
 
-const bindToolbar = (editor: Editor, openAssetModal: () => void) => {
+const bindToolbar = (
+	editor: Editor,
+	textarea: HTMLTextAreaElement,
+	openAssetModal: () => void,
+) => {
 	const toolbar = document.querySelector<HTMLElement>("[data-editor-toolbar]");
 	const previewContainer = document.querySelector<HTMLElement>(
 		"[data-editor-preview]",
@@ -370,8 +374,14 @@ const bindToolbar = (editor: Editor, openAssetModal: () => void) => {
 	const previewBody = document.querySelector<HTMLElement>(
 		"[data-editor-preview-body]",
 	);
+	const sourcePanel = document.querySelector<HTMLElement>(
+		"[data-editor-source-panel]",
+	);
 	const previewButton = toolbar?.querySelector<HTMLButtonElement>(
 		'button[data-command="preview"]',
+	);
+	const sourceButton = toolbar?.querySelector<HTMLButtonElement>(
+		'button[data-command="source"]',
 	);
 
 	const updatePreview = () => {
@@ -396,6 +406,22 @@ const bindToolbar = (editor: Editor, openAssetModal: () => void) => {
 		}
 	};
 
+	const setSourceVisible = (visible: boolean) => {
+		if (!sourcePanel) {
+			return;
+		}
+		if (visible) {
+			sourcePanel.removeAttribute("hidden");
+			textarea.focus();
+		} else {
+			sourcePanel.setAttribute("hidden", "");
+		}
+		if (sourceButton) {
+			sourceButton.classList.toggle("is-active", visible);
+			sourceButton.setAttribute("aria-pressed", visible ? "true" : "false");
+		}
+	};
+
 	const togglePreview = () => {
 		if (!previewContainer) {
 			return;
@@ -407,8 +433,16 @@ const bindToolbar = (editor: Editor, openAssetModal: () => void) => {
 		}
 	};
 
+	const toggleSource = () => {
+		if (!sourcePanel) {
+			return;
+		}
+		const willShow = sourcePanel.hasAttribute("hidden");
+		setSourceVisible(willShow);
+	};
+
 	if (!toolbar) {
-		return { updatePreview };
+		return { updatePreview, setSourceVisible };
 	}
 
 	const handleCommand = (commandName: string) => {
@@ -453,6 +487,9 @@ const bindToolbar = (editor: Editor, openAssetModal: () => void) => {
 			case "preview":
 				togglePreview();
 				return;
+			case "source":
+				toggleSource();
+				return;
 			default:
 				return;
 		}
@@ -478,7 +515,35 @@ const bindToolbar = (editor: Editor, openAssetModal: () => void) => {
 		handleCommand(commandName);
 	});
 
-	return { updatePreview };
+	return { updatePreview, setSourceVisible };
+};
+
+const initTransientMessages = () => {
+	const messages = document.querySelectorAll<HTMLElement>("[data-auto-dismiss-ms]");
+
+	for (const message of messages) {
+		const dismissMs = Number.parseInt(
+			message.dataset.autoDismissMs ?? "",
+			10,
+		);
+		if (!Number.isFinite(dismissMs) || dismissMs <= 0) {
+			continue;
+		}
+
+		const queryParam = message.dataset.clearQueryParam;
+		if (queryParam) {
+			const url = new URL(window.location.href);
+			if (url.searchParams.has(queryParam)) {
+				url.searchParams.delete(queryParam);
+				const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+				window.history.replaceState({}, "", nextUrl);
+			}
+		}
+
+		window.setTimeout(() => {
+			message.setAttribute("hidden", "");
+		}, dismissMs);
+	}
 };
 
 const initEditor = () => {
@@ -491,9 +556,11 @@ const initEditor = () => {
 		return;
 	}
 
-	textarea.style.display = "none";
-
-	let previewControls = { updatePreview: () => {} };
+	let syncingFromSource = false;
+	let previewControls = {
+		updatePreview: () => {},
+		setSourceVisible: (_visible: boolean) => {},
+	};
 
 	try {
 		const editor = new Editor({
@@ -507,23 +574,46 @@ const initEditor = () => {
 				Markdown,
 			],
 			onUpdate: ({ editor }) => {
+				if (syncingFromSource) {
+					return;
+				}
 				textarea.value = editor.getMarkdown();
 				previewControls.updatePreview();
 			},
 		});
 
 		const assetModal = createAssetModal(editor);
-		previewControls = bindToolbar(editor, assetModal.open);
+		previewControls = bindToolbar(editor, textarea, assetModal.open);
 		previewControls.updatePreview();
+		previewControls.setSourceVisible(false);
+		textarea.addEventListener("input", () => {
+			syncingFromSource = true;
+			try {
+				editor.commands.setContent(textarea.value, {
+					contentType: "markdown",
+					emitUpdate: false,
+				});
+				previewControls.updatePreview();
+			} finally {
+				syncingFromSource = false;
+			}
+		});
 		document.body?.classList.add("editor-ready");
 	} catch {
-		textarea.style.display = "";
+		const sourcePanel = document.querySelector<HTMLElement>(
+			"[data-editor-source-panel]",
+		);
+		sourcePanel?.removeAttribute("hidden");
 		document.body?.classList.add("editor-error");
 	}
 };
 
 if (document.readyState === "loading") {
-	document.addEventListener("DOMContentLoaded", initEditor);
+	document.addEventListener("DOMContentLoaded", () => {
+		initTransientMessages();
+		initEditor();
+	});
 } else {
+	initTransientMessages();
 	initEditor();
 }
