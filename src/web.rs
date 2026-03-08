@@ -2129,6 +2129,88 @@ fn latest_revision_summary(revisions: &[entities::content_revision::Model]) -> S
         .unwrap_or_else(|| "No revisions recorded.".to_string())
 }
 
+fn normalize_remote_asset_url(value: String) -> Result<Option<Url>, SiteError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let parsed = Url::parse(trimmed)
+        .map_err(|error| SiteError::internal(format!("invalid asset import url: {error}")))?;
+    match parsed.scheme() {
+        "http" | "https" => Ok(Some(parsed)),
+        scheme => Err(SiteError::internal(format!(
+            "unsupported asset import url scheme: {scheme}"
+        ))),
+    }
+}
+
+fn extension_from_mime_type(mime_type: &str) -> &'static str {
+    match mime_type {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/svg+xml" => "svg",
+        "image/webp" => "webp",
+        _ => "bin",
+    }
+}
+
+async fn fetch_remote_asset(
+    client: &reqwest::Client,
+    source_url: Url,
+) -> Result<(Vec<u8>, String, Option<String>), SiteError> {
+    let response = client
+        .get(source_url.clone())
+        .send()
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to fetch asset url: {error}")))?;
+    if !response.status().is_success() {
+        return Err(SiteError::internal(format!(
+            "asset import request failed with status {}",
+            response.status()
+        )));
+    }
+
+    let mime_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.split(';').next().unwrap_or(value).trim().to_string());
+    if let Some(mime_type) = mime_type.as_deref()
+        && !mime_type.starts_with("image/")
+    {
+        return Err(SiteError::internal(format!(
+            "asset import url did not return an image: {mime_type}"
+        )));
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to read imported asset: {error}")))?;
+    if bytes.is_empty() {
+        return Err(SiteError::internal(
+            "asset import returned an empty response body".to_string(),
+        ));
+    }
+
+    let path_filename = source_url
+        .path_segments()
+        .and_then(|mut segments| segments.rfind(|segment| !segment.is_empty()))
+        .map(|segment| segment.to_string())
+        .filter(|segment| !segment.is_empty());
+    let original_filename = match path_filename {
+        Some(filename) => filename,
+        None => format!(
+            "remote-image.{}",
+            extension_from_mime_type(mime_type.as_deref().unwrap_or("application/octet-stream"))
+        ),
+    };
+
+    Ok((bytes.to_vec(), original_filename, mime_type))
+}
+
 fn format_asset_dimensions(width: Option<i32>, height: Option<i32>) -> String {
     match (width, height) {
         (Some(width), Some(height)) if width > 0 && height > 0 => format!("{width} x {height}"),
@@ -2348,6 +2430,7 @@ async fn admin_site_assets_create(
     let mut upload_bytes: Option<Vec<u8>> = None;
     let mut original_filename: Option<String> = None;
     let mut mime_type: Option<String> = None;
+    let mut source_url: Option<Url> = None;
 
     loop {
         let field = match multipart.next_field().await {
@@ -2360,28 +2443,52 @@ async fn admin_site_assets_create(
         };
 
         let Some(field) = field else { break };
-        if field.name() != Some("file") {
-            continue;
-        }
+        match field.name() {
+            Some("file") => {
+                let field_filename = field.file_name().map(|value| value.to_string());
+                let field_mime_type = field.content_type().map(|value| value.to_string());
+                let bytes = match field.bytes().await {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        return Err(SiteError::internal(format!(
+                            "failed to read upload: {error}"
+                        )));
+                    }
+                };
+                if bytes.is_empty() {
+                    continue;
+                }
 
-        original_filename = field.file_name().map(|value| value.to_string());
-        mime_type = field.content_type().map(|value| value.to_string());
-        let bytes = match field.bytes().await {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                return Err(SiteError::internal(format!(
-                    "failed to read upload: {error}"
-                )));
+                original_filename = field_filename;
+                mime_type = field_mime_type;
+                upload_bytes = Some(bytes.to_vec());
             }
-        };
-        upload_bytes = Some(bytes.to_vec());
+            Some("source_url") => {
+                let value = match field.text().await {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return Err(SiteError::internal(format!(
+                            "failed to read asset import url: {error}"
+                        )));
+                    }
+                };
+                source_url = normalize_remote_asset_url(value)?;
+            }
+            _ => continue,
+        }
     }
 
-    let Some(bytes) = upload_bytes else {
-        return Err(SiteError::internal("missing file upload".to_string()));
-    };
-    let Some(original_filename) = original_filename else {
-        return Err(SiteError::internal("missing original filename".to_string()));
+    let (bytes, original_filename, mime_type) = if let Some(bytes) = upload_bytes {
+        let Some(original_filename) = original_filename else {
+            return Err(SiteError::internal("missing original filename".to_string()));
+        };
+        (bytes, original_filename, mime_type)
+    } else if let Some(source_url) = source_url {
+        fetch_remote_asset(state.oidc_client.as_ref(), source_url).await?
+    } else {
+        return Err(SiteError::internal(
+            "provide a file upload or an image url".to_string(),
+        ));
     };
 
     let extension = StdPath::new(&original_filename)

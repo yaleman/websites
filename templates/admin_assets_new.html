@@ -8,8 +8,13 @@
   <div class="form-grid">
     <div class="form-field">
       <label for="file">Upload File</label>
-      <input id="file" name="file" type="file" required />
+      <input id="file" name="file" type="file" />
       <p class="inline-body">Choose an image file. A thumbnail will be generated when possible.</p>
+    </div>
+    <div class="form-field">
+      <label for="source_url">Import From URL</label>
+      <input id="source_url" name="source_url" type="url" placeholder="https://example.com/image.png" />
+      <p class="inline-body">Use this when the image already exists elsewhere and you want to copy it into the site asset library.</p>
     </div>
   </div>
 
