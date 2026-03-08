@@ -626,6 +626,46 @@ export async function createContent(
   return parseCreatedId(result.stdout, "content");
 }
 
+export async function createAlias(
+  harness: TestHarness,
+  {
+    contentId,
+    aliasPath,
+    kind = "alias",
+  }: {
+    contentId: string;
+    aliasPath: string;
+    kind?: "primary" | "alias";
+  },
+): Promise<string> {
+  const result = await runCommand(
+    "cargo",
+    cargoRunArgs([
+      "--database-url",
+      harness.dbPath,
+      "--tls-cert-path",
+      harness.tlsCertPath,
+      "--tls-key-path",
+      harness.tlsKeyPath,
+      "--frontend-url",
+      "https://127.0.0.1",
+      ...oidcTestArgs,
+      "content",
+      "alias-create",
+      "--content-id",
+      contentId,
+      "--site-id",
+      harness.siteId,
+      "--alias-path",
+      aliasPath,
+      "--kind",
+      kind,
+    ]),
+    { cwd: harness.tempRoot, env: harness.env },
+  );
+  return parseCreatedId(result.stdout, "alias");
+}
+
 export async function updateContent(
   harness: TestHarness,
   {

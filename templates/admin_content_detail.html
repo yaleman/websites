@@ -1,22 +1,83 @@
 {% extends "base_template.html" %}
 {% block body %}
-{% if !rows.is_empty() %}
-<table>
-  <thead>
-    <tr>
-      <th>Title</th>
-      <th>Value</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for row in rows %}
-    <tr>
-      <td>{{ row.label }}</td>
-      <td>{{ row.value }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% endif %}
+<p class="inline-body">
+  <strong>{{ title }}</strong> publishes at <code>{{ primary_route }}</code> and is currently <strong>{{ status }}</strong>.
+</p>
 
+<section class="content-editor__meta">
+  <div class="form-grid">
+    <div class="meta-card">
+      <span class="meta-label">Page Type</span>
+      <span class="meta-value">{{ page_type }}</span>
+    </div>
+    <div class="meta-card">
+      <span class="meta-label">Primary Route</span>
+      <span class="meta-value">{{ primary_route }}</span>
+    </div>
+    <div class="meta-card">
+      <span class="meta-label">Revision History</span>
+      <span class="meta-value">{{ revisions_summary }}</span>
+    </div>
+    <div class="meta-card">
+      <span class="meta-label">Creator</span>
+      <span class="meta-value">{{ creator_sub }}</span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Current Content</h2>
+  <pre>{{ page_content }}</pre>
+</section>
+
+<section>
+  <h2>Tags</h2>
+  {% if tags.is_empty() %}
+  <p class="inline-body">No tags assigned yet.</p>
+  {% else %}
+  <ul>
+    {% for tag in tags %}
+    <li><code>{{ tag }}</code></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Content Metadata</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Field</th>
+        <th>Value</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>content_id</td>
+        <td><code>{{ content_id }}</code></td>
+      </tr>
+      <tr>
+        <td>site_id</td>
+        <td><code>{{ site_id }}</code></td>
+      </tr>
+      <tr>
+        <td>slug</td>
+        <td><code>{{ slug }}</code></td>
+      </tr>
+      <tr>
+        <td>created_at</td>
+        <td>{{ created_at }}</td>
+      </tr>
+      <tr>
+        <td>updated_at</td>
+        <td>{{ updated_at }}</td>
+      </tr>
+      <tr>
+        <td>published_at</td>
+        <td>{{ published_at }}</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
 {% endblock %}

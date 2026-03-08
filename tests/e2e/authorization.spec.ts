@@ -154,7 +154,7 @@ const routeCases: RouteCase[] = [
     prepare: async (harness, fixtures) => ({
       path: `/admin/site/${harness.siteId}/content/${fixtures.contentId}`,
       assertSuccess: async (response) => {
-        expect(await response.text()).toContain("Authorization Page Updated");
+        expect(await response.text()).toContain("Current Content");
       },
     }),
   },
@@ -166,7 +166,7 @@ const routeCases: RouteCase[] = [
     prepare: async (harness, fixtures) => ({
       path: `/admin/site/${harness.siteId}/content/${fixtures.contentId}/advanced`,
       assertSuccess: async (response) => {
-        expect(await response.text()).toContain("alias_count");
+        expect(await response.text()).toContain("Routes");
       },
     }),
   },

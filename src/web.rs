@@ -153,16 +153,37 @@ struct AdminSearchTemplate {
 #[template(path = "admin_content_detail.html")]
 struct AdminContentDetailTemplate {
     template_shared: AdminTemplateData,
-
-    rows: Vec<AdminRow>,
+    title: String,
+    page_type: String,
+    status: String,
+    primary_route: String,
+    revisions_summary: String,
+    tags: Vec<String>,
+    creator_sub: String,
+    content_id: Uuid,
+    site_id: Uuid,
+    slug: String,
+    created_at: String,
+    updated_at: String,
+    published_at: String,
+    page_content: String,
 }
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
 #[template(path = "admin_content_advanced.html")]
 struct AdminContentAdvancedTemplate {
     template_shared: AdminTemplateData,
-
-    rows: Vec<AdminRow>,
+    title: String,
+    primary_route: String,
+    creator_sub: String,
+    content_id: Uuid,
+    site_id: Uuid,
+    created_at: String,
+    updated_at: String,
+    published_at: String,
+    aliases: Vec<AdminContentAliasRow>,
+    tags: Vec<String>,
+    revisions_summary: String,
 }
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
@@ -306,6 +327,12 @@ struct AdminUserProfileTemplate {
 struct AdminRow {
     label: String,
     value: String,
+}
+
+#[derive(Debug)]
+struct AdminContentAliasRow {
+    kind: String,
+    path: String,
 }
 
 #[derive(Debug)]
@@ -1451,44 +1478,23 @@ async fn admin_site_content_detail(
         .await
         .map_err(|err| SiteError::internal(format!("failed to load content {content_id}: {err}")))?
         .ok_or(SiteError::NotFound)?;
-    let content_id = content.id.to_string();
-
-    let published_at = content
-        .published_at
-        .map(|value| value.to_rfc3339())
-        .unwrap_or_else(|| "n/a".to_string());
-    let slug = content.slug.clone();
-    let title = content.title.clone();
-    let rows = vec![
-        AdminRow {
-            label: "id".to_string(),
-            value: content_id,
-        },
-        AdminRow {
-            label: "site_id".to_string(),
-            value: content.site_id.to_string(),
-        },
-        AdminRow {
-            label: "title".to_string(),
-            value: title,
-        },
-        AdminRow {
-            label: "slug".to_string(),
-            value: slug,
-        },
-        AdminRow {
-            label: "page_type".to_string(),
-            value: content.page_type.to_string(),
-        },
-        AdminRow {
-            label: "draft".to_string(),
-            value: content.draft.to_string(),
-        },
-        AdminRow {
-            label: "published_at".to_string(),
-            value: published_at,
-        },
-    ];
+    let tags = list_content_tags(state.db.as_ref(), content.id)
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!(
+                "failed to load tags for content {content_id}: {error}"
+            ))
+        })?
+        .into_iter()
+        .map(|tag| tag.name)
+        .collect::<Vec<_>>();
+    let revisions = list_revisions(state.db.as_ref(), content.id)
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!(
+                "failed to load revisions for content {content_id}: {error}"
+            ))
+        })?;
 
     let route = content_primary_route(&content);
     Ok(AdminContentDetailTemplate {
@@ -1508,7 +1514,7 @@ async fn admin_site_content_detail(
                         "/admin/site/{}/content/{}/advanced",
                         content.site_id, content.id
                     ),
-                    "Advanced",
+                    "Metadata & routing",
                 ),
                 AdminLink::new(
                     &format!(
@@ -1522,8 +1528,20 @@ async fn admin_site_content_detail(
                     "Back to site dashboard",
                 ),
             ]),
-
-        rows,
+        title: content.title,
+        page_type: content.page_type.to_string(),
+        status: content_status_label(content.draft),
+        primary_route: display_route_path(&route),
+        revisions_summary: latest_revision_summary(&revisions),
+        tags,
+        creator_sub: content.creator_sub,
+        content_id: content.id,
+        site_id: content.site_id,
+        slug: content.slug,
+        created_at: content.created_at.to_rfc3339(),
+        updated_at: format_optional_datetime(content.last_updated),
+        published_at: format_optional_datetime(content.published_at),
+        page_content: content.page_content,
     })
 }
 
@@ -1763,36 +1781,57 @@ async fn admin_site_content_advanced(
                 "failed to load tags for content {content_id}: {error}"
             ))
         })?;
+    let revisions = list_revisions(state.db.as_ref(), content.id)
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!(
+                "failed to load revisions for content {content_id}: {error}"
+            ))
+        })?;
+    let aliases = aliases
+        .into_iter()
+        .map(|alias| AdminContentAliasRow {
+            kind: alias.kind,
+            path: alias.alias_path,
+        })
+        .collect::<Vec<_>>();
+    let tags = tags.into_iter().map(|tag| tag.name).collect::<Vec<_>>();
+    let primary_route = display_route_path(&content_primary_route(&content));
 
     Ok(AdminContentAdvancedTemplate {
-        template_shared: AdminTemplateData::new("Content Advanced View").with_links(vec![
-            AdminLink::new(
-                &format!("/admin/site/{}/content/{}", content.site_id, content.id),
-                "Back to site dashboard",
-            ),
-        ]),
-
-        rows: vec![
-            AdminRow {
-                label: "alias_count".to_string(),
-                value: aliases.len().to_string(),
-            },
-            AdminRow {
-                label: "tag_count".to_string(),
-                value: tags.len().to_string(),
-            },
-            AdminRow {
-                label: "created_at".to_string(),
-                value: content.created_at.to_rfc3339(),
-            },
-            AdminRow {
-                label: "updated_at".to_string(),
-                value: content
-                    .last_updated
-                    .map(|value| value.to_rfc3339())
-                    .unwrap_or_else(|| "n/a".to_string()),
-            },
-        ],
+        template_shared: AdminTemplateData::new(format!("Metadata & Routing: {}", content.title))
+            .with_site_id(content.site_id)
+            .with_links(vec![
+                AdminLink::new(
+                    &format!("/admin/site/{}/content/{}", content.site_id, content.id),
+                    "Content overview",
+                ),
+                AdminLink::new(
+                    &format!(
+                        "/admin/site/{}/content/{}/source",
+                        content.site_id, content.id
+                    ),
+                    "Edit content",
+                ),
+                AdminLink::new(
+                    &format!(
+                        "/admin/site/{}/content/{}/revisions",
+                        content.site_id, content.id
+                    ),
+                    "Revision history",
+                ),
+            ]),
+        title: content.title,
+        primary_route,
+        creator_sub: content.creator_sub,
+        content_id: content.id,
+        site_id: content.site_id,
+        created_at: content.created_at.to_rfc3339(),
+        updated_at: format_optional_datetime(content.last_updated),
+        published_at: format_optional_datetime(content.published_at),
+        aliases,
+        tags,
+        revisions_summary: latest_revision_summary(&revisions),
     })
 }
 
@@ -2055,6 +2094,39 @@ fn normalize_asset_mime_filter(value: &str) -> Option<&'static str> {
         "all" => None,
         _ => None,
     }
+}
+
+fn format_optional_datetime(value: Option<DateTime<Utc>>) -> String {
+    value
+        .map(|timestamp| timestamp.to_rfc3339())
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn display_route_path(route: &str) -> String {
+    format!("/{}", route.trim_matches('/'))
+}
+
+fn content_status_label(draft: bool) -> String {
+    if draft {
+        "Draft".to_string()
+    } else {
+        "Published".to_string()
+    }
+}
+
+fn latest_revision_summary(revisions: &[entities::content_revision::Model]) -> String {
+    revisions
+        .first()
+        .map(|revision| {
+            format!(
+                "{} revisions, latest is revision {} by {} on {}",
+                revisions.len(),
+                revision.revision_number,
+                revision.editor_sub,
+                revision.created_at.to_rfc3339()
+            )
+        })
+        .unwrap_or_else(|| "No revisions recorded.".to_string())
 }
 
 fn format_asset_dimensions(width: Option<i32>, height: Option<i32>) -> String {
