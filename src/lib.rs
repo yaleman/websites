@@ -124,6 +124,7 @@ const DEFAULT_INDEX_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\
 const DEFAULT_RSS_TEMPLATE: &str = "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel><title>{{site}}</title>{{items}}</channel></rss>";
 const DEFAULT_ATOM_TEMPLATE: &str = "<?xml version=\"1.0\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><title>{{site}}</title><updated>{{updated}}</updated>{{entries}}</feed>";
 const DEFAULT_TAG_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{tag}}</title></head><body><h1>{{tag}}</h1><ul>{{items}}</ul></body></html>";
+pub const SITE_TEMPLATES_DIR: &str = "site_templates";
 
 /// Renders all published content for a site into ./rendered/<site_short_name>.
 pub async fn render_site(
@@ -152,28 +153,18 @@ pub async fn render_site(
         .collect::<Vec<_>>();
 
     let template_root = Path::new(templates_dir).join(site.template_name.clone());
-    let post_template = load_template(&template_root, "post.html", DEFAULT_POST_TEMPLATE).await?;
-    let page_template = load_template(&template_root, "page.html", DEFAULT_PAGE_TEMPLATE).await?;
-    let index_template =
-        load_template(&template_root, "index.html", DEFAULT_INDEX_TEMPLATE).await?;
-    let rss_template = load_template(&template_root, "rss.xml", DEFAULT_RSS_TEMPLATE).await?;
-    let atom_template = load_template(&template_root, "atom.xml", DEFAULT_ATOM_TEMPLATE).await?;
-    let tag_template = load_template(&template_root, "tag.html", DEFAULT_TAG_TEMPLATE).await?;
-
-    let mut tera = Tera::default();
-    tera.autoescape_on(vec![]);
-    tera.add_raw_template("post.html", &post_template)
-        .map_err(|error| error.to_string())?;
-    tera.add_raw_template("page.html", &page_template)
-        .map_err(|error| error.to_string())?;
-    tera.add_raw_template("index.html", &index_template)
-        .map_err(|error| error.to_string())?;
-    tera.add_raw_template("rss.xml", &rss_template)
-        .map_err(|error| error.to_string())?;
-    tera.add_raw_template("atom.xml", &atom_template)
-        .map_err(|error| error.to_string())?;
-    tera.add_raw_template("tag.html", &tag_template)
-        .map_err(|error| error.to_string())?;
+    let tera = load_site_templates(
+        &template_root,
+        &[
+            ("post.html", DEFAULT_POST_TEMPLATE),
+            ("page.html", DEFAULT_PAGE_TEMPLATE),
+            ("index.html", DEFAULT_INDEX_TEMPLATE),
+            ("rss.xml", DEFAULT_RSS_TEMPLATE),
+            ("atom.xml", DEFAULT_ATOM_TEMPLATE),
+            ("tag.html", DEFAULT_TAG_TEMPLATE),
+        ],
+    )
+    .await?;
 
     let rendered_root = Path::new(rendered_dir).join(site.short_name.clone());
     let tmp_root = Path::new(rendered_dir).join(format!("{}.tmp", site.short_name));
@@ -405,15 +396,14 @@ pub async fn render_content_preview(
         .ok_or_else(|| "content not found".to_string())?;
 
     let template_root = Path::new(templates_dir).join(site.template_name.clone());
-    let post_template = load_template(&template_root, "post.html", DEFAULT_POST_TEMPLATE).await?;
-    let page_template = load_template(&template_root, "page.html", DEFAULT_PAGE_TEMPLATE).await?;
-
-    let mut tera = Tera::default();
-    tera.autoescape_on(vec![]);
-    tera.add_raw_template("post.html", &post_template)
-        .map_err(|error| error.to_string())?;
-    tera.add_raw_template("page.html", &page_template)
-        .map_err(|error| error.to_string())?;
+    let tera = load_site_templates(
+        &template_root,
+        &[
+            ("post.html", DEFAULT_POST_TEMPLATE),
+            ("page.html", DEFAULT_PAGE_TEMPLATE),
+        ],
+    )
+    .await?;
 
     let html = markdown::to_html(&content.page_content);
     let template = if content.page_type == PageType::Post {
@@ -452,6 +442,53 @@ async fn load_template(
         Ok(template) => Ok(template),
         Err(_) => Ok(fallback.to_string()),
     }
+}
+
+async fn load_site_templates(
+    template_root: &Path,
+    required_templates: &[(&str, &str)],
+) -> StdResult<Tera, String> {
+    let mut tera = Tera::default();
+    tera.autoescape_on(vec![]);
+    let mut loaded_templates = HashSet::new();
+
+    match fs::read_dir(template_root).await {
+        Ok(mut entries) => {
+            while let Some(entry) = entries
+                .next_entry()
+                .await
+                .map_err(|error| error.to_string())?
+            {
+                let entry_type = entry.file_type().await.map_err(|error| error.to_string())?;
+                if !entry_type.is_file() {
+                    continue;
+                }
+
+                let name = entry.file_name().to_string_lossy().to_string();
+                let content = fs::read_to_string(entry.path())
+                    .await
+                    .map_err(|error| error.to_string())?;
+                tera.add_raw_template(&name, &content)
+                    .map_err(|error| error.to_string())?;
+                loaded_templates.insert(name);
+            }
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
+
+    for (name, fallback) in required_templates {
+        if loaded_templates.contains(*name) {
+            continue;
+        }
+
+        let template = load_template(template_root, name, fallback).await?;
+        tera.add_raw_template(name, &template)
+            .map_err(|error| error.to_string())?;
+        loaded_templates.insert((*name).to_string());
+    }
+
+    Ok(tera)
 }
 
 async fn copy_directory_recursive(
@@ -1770,6 +1807,21 @@ mod tests {
         .expect("failed to create site")
     }
 
+    async fn create_site_with_template_fixture(
+        db: &DatabaseConnection,
+        short_name: &str,
+        template_name: &str,
+    ) -> entities::site::Model {
+        create_site(
+            db,
+            short_name.to_string(),
+            format!("{short_name} site"),
+            template_name.to_string(),
+        )
+        .await
+        .expect("failed to create site")
+    }
+
     async fn create_content_fixture(
         db: &DatabaseConnection,
         site_id: Uuid,
@@ -2256,5 +2308,102 @@ mod tests {
             .await
             .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn render_content_preview_uses_site_template_files() {
+        let db = setup_db().await;
+        let site = create_site_with_template_fixture(&db, "preview-site", "custom-preview").await;
+        let templates_dir = TempDir::new().expect("failed to create templates dir");
+        let template_root = templates_dir.path().join("custom-preview");
+        fs::create_dir_all(&template_root)
+            .await
+            .expect("failed to create template root");
+        fs::write(
+            template_root.join("base_template.html"),
+            r#"<!doctype html><html><body><div class="site-shell">{% block content %}{% endblock %}</div></body></html>"#,
+        )
+        .await
+        .expect("failed to write base template");
+        fs::write(
+            template_root.join("page.html"),
+            r#"{% extends "base_template.html" %}{% block content %}<article data-template="custom-preview">{{title}}::{{content}}</article>{% endblock %}"#,
+        )
+        .await
+        .expect("failed to write page template");
+
+        let content =
+            create_content_fixture(&db, site.id, PageType::Page, "preview-page", true).await;
+        let rendered = render_content_preview(
+            &db,
+            site.id,
+            content.id,
+            templates_dir
+                .path()
+                .to_str()
+                .expect("invalid templates path"),
+        )
+        .await
+        .expect("failed to render preview");
+
+        assert!(rendered.contains("data-template=\"custom-preview\""));
+        assert!(rendered.contains("site-shell"));
+    }
+
+    #[tokio::test]
+    async fn render_site_supports_template_inheritance() {
+        let db = setup_db().await;
+        let site = create_site_with_template_fixture(&db, "render-site", "custom-render").await;
+        let templates_dir = TempDir::new().expect("failed to create templates dir");
+        let rendered_dir = TempDir::new().expect("failed to create rendered dir");
+        let template_root = templates_dir.path().join("custom-render");
+        fs::create_dir_all(&template_root)
+            .await
+            .expect("failed to create template root");
+        fs::write(
+            template_root.join("base_template.html"),
+            r#"<!doctype html><html><body><div class="shell">{% block content %}{% endblock %}</div></body></html>"#,
+        )
+        .await
+        .expect("failed to write base template");
+        fs::write(
+            template_root.join("post.html"),
+            r#"{% extends "base_template.html" %}{% block content %}<article class="post-template">{{title}}</article>{% endblock %}"#,
+        )
+        .await
+        .expect("failed to write post template");
+        fs::write(
+            template_root.join("index.html"),
+            r#"{% extends "base_template.html" %}{% block content %}<section class="index-template">{{items}}</section>{% endblock %}"#,
+        )
+        .await
+        .expect("failed to write index template");
+
+        let _content = create_content_fixture(&db, site.id, PageType::Post, "hello", false).await;
+
+        render_site(
+            &db,
+            site.id,
+            templates_dir
+                .path()
+                .to_str()
+                .expect("invalid templates path"),
+            rendered_dir.path().to_str().expect("invalid rendered path"),
+        )
+        .await
+        .expect("failed to render site");
+
+        let rendered_root = rendered_dir.path().join(site.short_name);
+        let page_output = fs::read_to_string(rendered_root.join("hello").join("index.html"))
+            .await
+            .expect("failed to read page output");
+        let index_output = fs::read_to_string(rendered_root.join("index.html"))
+            .await
+            .expect("failed to read index output");
+
+        assert!(page_output.contains("post-template"));
+        assert!(page_output.contains("shell"));
+        assert!(index_output.contains("index-template"));
+        assert!(index_output.contains("shell"));
     }
 }

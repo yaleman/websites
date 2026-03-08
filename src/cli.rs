@@ -172,7 +172,7 @@ pub enum SiteCommands {
     Render {
         #[arg(long)]
         site_id: String,
-        #[arg(long, default_value = "templates")]
+        #[arg(long, default_value = crate::SITE_TEMPLATES_DIR)]
         templates_dir: String,
         #[arg(long, default_value = "./rendered")]
         rendered_dir: String,
