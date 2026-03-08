@@ -7,7 +7,7 @@
     <input id="full_title" name="full_title" value="{{ full_title }}" required />
   </div>
   <div class="form-field">
-    <label for="template_name">Template Name</label>
+    <label for="template_name">Template</label>
     <select id="template_name" name="template_name" required>
       {% for template in templates %}
       <option value="{{ template }}" {% if template == &template_name %}selected{% endif %}>{{ template }}</option>
