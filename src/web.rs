@@ -1,6 +1,6 @@
 use crate::constants::{
-    DEFAULT_TEMPLATE_NAME, SESSION_OIDC_NONCE_KEY, SESSION_OIDC_PKCE_KEY, SESSION_OIDC_STATE_KEY,
-    SESSION_USER,
+    CUSTOMIZABLE_TEMPLATE_FILES, DEFAULT_TEMPLATE_NAME, SESSION_OIDC_NONCE_KEY,
+    SESSION_OIDC_PKCE_KEY, SESSION_OIDC_STATE_KEY, SESSION_USER,
 };
 use crate::entities::audit_event::log_audit_event;
 use crate::entities::site::get_by_id;
@@ -18,8 +18,8 @@ use crate::{
     get_revision_by_number, get_user_by_id, list_aliases, list_assets, list_content,
     list_content_tags, list_memberships, list_memberships_for_user_id, list_revisions, list_sites,
     list_sites_for_subject, list_tags, list_users_by_ids, render_content_preview, render_site,
-    resolve_upload_root, search_content, sync_tags_to_content, update_content,
-    update_membership_role, update_site_settings,
+    resolve_site_template_override_root, resolve_upload_root, search_content, sync_tags_to_content,
+    update_content, update_membership_role, update_site_settings,
 };
 use anyhow::Context;
 use askama::Template;
@@ -278,6 +278,21 @@ struct AdminSiteSettingsTemplate {
     full_title: String,
     template_name: String,
     templates: Vec<String>,
+    template_files: Vec<AdminSiteTemplateFileRow>,
+}
+
+#[allow(dead_code)]
+#[derive(Template, WebTemplate)]
+#[template(path = "site_template_editor.html")]
+struct AdminSiteTemplateEditorTemplate {
+    template_shared: AdminTemplateData,
+    site_id: Uuid,
+    site_short_name: String,
+    template_name: String,
+    file_name: String,
+    source: String,
+    source_origin: String,
+    override_exists: bool,
 }
 
 #[allow(dead_code)]
@@ -365,6 +380,15 @@ struct AdminAssetRow {
 }
 
 #[derive(Debug)]
+struct AdminSiteTemplateFileRow {
+    file_name: String,
+    source_origin: String,
+    edit_href: String,
+    reset_href: String,
+    override_exists: bool,
+}
+
+#[derive(Debug)]
 struct AdminLink {
     href: String,
     label: String,
@@ -390,6 +414,11 @@ struct CreateSiteForm {
 struct UpdateSiteSettingsForm {
     full_title: String,
     template_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateSiteTemplateOverrideForm {
+    source: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -624,6 +653,8 @@ pub async fn run_admin_server(
     let pool = db.get_sqlite_connection_pool();
     let session_store = SqliteStore::new((*pool).clone());
 
+    let assets_dir = resolve_admin_assets_dir();
+    let upload_root = resolve_upload_root();
     session_store
         .migrate()
         .await
@@ -717,16 +748,23 @@ pub async fn run_admin_server(
             "/admin/site/{site_id}/settings",
             get(admin_site_settings).post(admin_site_settings_update),
         )
+        .route(
+            "/admin/site/{site_id}/settings/templates/{file_name}",
+            get(admin_site_template_editor).post(admin_site_template_override_update),
+        )
+        .route(
+            "/admin/site/{site_id}/settings/templates/{file_name}/reset",
+            axum::routing::post(admin_site_template_override_reset),
+        )
         .route("/admin/site/{site_id}/render", get(admin_site_render))
+        .nest_service("/admin/assets", ServeDir::new(&assets_dir))
+        .nest_service("/media/images", ServeDir::new(&upload_root))
         .layer(from_fn(require_session));
 
     info!(
         "admin server listening on http://{listen} / {}",
         state.oidc_frontend_url
     );
-
-    let assets_dir = resolve_admin_assets_dir();
-    let upload_root = resolve_upload_root();
     info!("admin assets dir: {}", assets_dir.display());
     info!("upload root dir: {}", upload_root.display());
     if !assets_dir.join("editor.js").exists() {
@@ -740,8 +778,6 @@ pub async fn run_admin_server(
         .route("/admin/login", get(admin_login))
         .route("/oauth2/callback", get(admin_login_callback))
         .route("/admin/logout", get(admin_logout))
-        .nest_service("/admin/assets", ServeDir::new(assets_dir))
-        .nest_service("/media/images", ServeDir::new(upload_root))
         .merge(protected_routes)
         .layer(session_layer)
         .layer(from_fn(log_requests))
@@ -1573,14 +1609,14 @@ async fn admin_site_content_source(
             name: tag.name,
         })
         .collect();
-    let page_type = content.page_type.to_string();
+
     let draft = content.draft;
     let published_at = content.content_publish_timestamp();
     let title = content.title;
     let slug = content.slug;
     let page_content = content.page_content;
 
-    let template_shared = AdminTemplateData::new(format!("Source: {}", title))
+    let template_shared = AdminTemplateData::new(format!("Editing: {}", title))
         .with_links(vec![
             AdminLink::new(&preview_href, "Preview"),
             AdminLink::new(&back_href, "Back to site dashboard"),
@@ -1597,7 +1633,7 @@ async fn admin_site_content_source(
         tags,
         title,
         slug,
-        page_type,
+        page_type: content.page_type.to_string(),
         draft,
         published_at,
         page_content,
@@ -2599,6 +2635,100 @@ async fn get_template_names() -> Vec<String> {
     templates
 }
 
+#[derive(Debug, Deserialize)]
+struct SiteTemplateEditorQuery {
+    saved: Option<String>,
+    reset: Option<String>,
+}
+
+fn validate_customizable_template_file(file_name: &str) -> Result<&'static str, SiteError> {
+    CUSTOMIZABLE_TEMPLATE_FILES
+        .iter()
+        .copied()
+        .find(|candidate| *candidate == file_name)
+        .ok_or_else(|| SiteError::BadRequest(format!("unsupported template file: {file_name}")))
+}
+
+fn site_template_edit_href(site_id: Uuid, file_name: &str) -> String {
+    format!("/admin/site/{site_id}/settings/templates/{file_name}")
+}
+
+fn site_template_reset_href(site_id: Uuid, file_name: &str) -> String {
+    format!("/admin/site/{site_id}/settings/templates/{file_name}/reset")
+}
+
+async fn describe_template_source_origin(
+    site_id: Uuid,
+    template_name: &str,
+    file_name: &str,
+) -> Result<(String, bool), SiteError> {
+    let override_path = resolve_site_template_override_root(site_id).join(file_name);
+    if fs::metadata(&override_path).await.is_ok() {
+        return Ok(("site override".to_string(), true));
+    }
+
+    let shared_path = StdPath::new(crate::constants::SITE_TEMPLATES_DIR)
+        .join(template_name)
+        .join(file_name);
+    if fs::metadata(&shared_path).await.is_ok() {
+        return Ok((format!("shared template ({template_name})"), false));
+    }
+
+    Ok((format!("default template ({DEFAULT_TEMPLATE_NAME})"), false))
+}
+
+async fn load_editable_template_source(
+    site_id: Uuid,
+    template_name: &str,
+    file_name: &str,
+) -> Result<(String, String, bool), SiteError> {
+    let override_path = resolve_site_template_override_root(site_id).join(file_name);
+    if let Ok(source) = fs::read_to_string(&override_path).await {
+        return Ok((source, "site override".to_string(), true));
+    }
+
+    let shared_path = StdPath::new(crate::constants::SITE_TEMPLATES_DIR)
+        .join(template_name)
+        .join(file_name);
+    if let Ok(source) = fs::read_to_string(&shared_path).await {
+        return Ok((source, format!("shared template ({template_name})"), false));
+    }
+
+    let default_path = StdPath::new(crate::constants::SITE_TEMPLATES_DIR)
+        .join(DEFAULT_TEMPLATE_NAME)
+        .join(file_name);
+    let source = fs::read_to_string(&default_path).await.map_err(|error| {
+        SiteError::internal(format!(
+            "failed to load default template {file_name}: {error}"
+        ))
+    })?;
+    Ok((
+        source,
+        format!("default template ({DEFAULT_TEMPLATE_NAME})"),
+        false,
+    ))
+}
+
+async fn build_site_template_file_rows(
+    site_id: Uuid,
+    template_name: &str,
+) -> Result<Vec<AdminSiteTemplateFileRow>, SiteError> {
+    let mut rows = Vec::with_capacity(CUSTOMIZABLE_TEMPLATE_FILES.len());
+    for file_name in CUSTOMIZABLE_TEMPLATE_FILES {
+        let (source_origin, override_exists) =
+            describe_template_source_origin(site_id, template_name, file_name).await?;
+        rows.push(AdminSiteTemplateFileRow {
+            file_name: file_name.to_string(),
+            source_origin,
+            edit_href: site_template_edit_href(site_id, file_name),
+            reset_href: site_template_reset_href(site_id, file_name),
+            override_exists,
+        });
+    }
+
+    Ok(rows)
+}
+
 async fn admin_site_settings(
     State(state): State<AdminState>,
     session: Session,
@@ -2608,6 +2738,7 @@ async fn admin_site_settings(
     let site = get_by_id(state.db.as_ref(), site_id)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
+    let template_files = build_site_template_file_rows(site.id, &site.template_name).await?;
 
     Ok(AdminSiteSettingsTemplate {
         template_shared: AdminTemplateData::new("Site Settings").with_links(vec![
@@ -2623,6 +2754,7 @@ async fn admin_site_settings(
         full_title: site.full_title,
         template_name: site.template_name,
         templates: get_template_names().await,
+        template_files,
     })
 }
 
@@ -2668,6 +2800,134 @@ async fn admin_site_settings_update(
     txn.commit().await?;
 
     Ok(Redirect::to(&format!("/admin/site/{site_id}/settings")))
+}
+
+async fn admin_site_template_editor(
+    State(state): State<AdminState>,
+    session: Session,
+    Path((site_id, file_name)): Path<(Uuid, String)>,
+    Query(query): Query<SiteTemplateEditorQuery>,
+) -> Result<AdminSiteTemplateEditorTemplate, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Owner).await?;
+    let file_name = validate_customizable_template_file(&file_name)?;
+    let site = get_by_id(state.db.as_ref(), site_id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
+    let (source, source_origin, override_exists) =
+        load_editable_template_source(site.id, &site.template_name, file_name).await?;
+
+    let template_shared = AdminTemplateData::new(format!("Template Override: {file_name}"))
+        .with_site_id(site.id)
+        .with_links(vec![
+            AdminLink::new(
+                &format!("/admin/site/{site_id}/settings"),
+                "Back to settings",
+            ),
+            AdminLink::new(&format!("/admin/site/{site_id}/render"), "Render site"),
+        ]);
+    let template_shared = if query.saved.is_some() {
+        template_shared.with_toast_message("Template override saved.", "saved")
+    } else if query.reset.is_some() {
+        template_shared.with_toast_message("Template override reset.", "reset")
+    } else {
+        template_shared
+    };
+
+    Ok(AdminSiteTemplateEditorTemplate {
+        template_shared,
+        site_id: site.id,
+        site_short_name: site.short_name,
+        template_name: site.template_name,
+        file_name: file_name.to_string(),
+        source,
+        source_origin,
+        override_exists,
+    })
+}
+
+async fn admin_site_template_override_update(
+    State(state): State<AdminState>,
+    session: Session,
+    Path((site_id, file_name)): Path<(Uuid, String)>,
+    Form(form): Form<UpdateSiteTemplateOverrideForm>,
+) -> Result<Redirect, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Owner).await?;
+    let file_name = validate_customizable_template_file(&file_name)?;
+    if form.source.trim().is_empty() {
+        return Err(SiteError::BadRequest("missing template source".to_string()));
+    }
+
+    let actor = current_user(&session).await?.subject;
+    let override_root = resolve_site_template_override_root(site_id);
+    fs::create_dir_all(&override_root).await.map_err(|error| {
+        SiteError::internal(format!(
+            "failed to create template override directory: {error}"
+        ))
+    })?;
+    let override_path = override_root.join(file_name);
+    fs::write(&override_path, form.source.as_bytes())
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!(
+                "failed to write template override {file_name}: {error}"
+            ))
+        })?;
+
+    let txn = state.db.begin().await?;
+    log_audit_event(
+        &txn,
+        &actor,
+        "update_template_override",
+        "site_template_override",
+        file_name,
+        Some(site_id),
+        Some(json!({ "file_name": file_name })),
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to log template audit: {error}")))?;
+    txn.commit().await?;
+
+    Ok(Redirect::to(&format!(
+        "/admin/site/{site_id}/settings/templates/{file_name}?saved=1"
+    )))
+}
+
+async fn admin_site_template_override_reset(
+    State(state): State<AdminState>,
+    session: Session,
+    Path((site_id, file_name)): Path<(Uuid, String)>,
+) -> Result<Redirect, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Owner).await?;
+    let file_name = validate_customizable_template_file(&file_name)?;
+    let actor = current_user(&session).await?.subject;
+    let override_path = resolve_site_template_override_root(site_id).join(file_name);
+    match fs::remove_file(&override_path).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(SiteError::internal(format!(
+                "failed to remove template override {file_name}: {error}"
+            )));
+        }
+    }
+
+    let txn = state.db.begin().await?;
+    log_audit_event(
+        &txn,
+        &actor,
+        "reset_template_override",
+        "site_template_override",
+        file_name,
+        Some(site_id),
+        Some(json!({ "file_name": file_name })),
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to log template reset audit: {error}")))?;
+    txn.commit().await?;
+
+    Ok(Redirect::to(&format!(
+        "/admin/site/{site_id}/settings/templates/{file_name}?reset=1"
+    )))
 }
 
 async fn admin_site_render(

@@ -28,4 +28,38 @@
     Short Name: {{ site_short_name }}
   </p>
 </section>
+
+<section>
+  <h2>Template Overrides</h2>
+  <p class="inline-body">
+    Overrides are stored per site and layered on top of the selected shared template. Leave a file without an override to keep inheriting the shared version.
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th>File</th>
+        <th>Current Source</th>
+        <th>Override</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for file in template_files %}
+      <tr>
+        <td><code>{{ file.file_name }}</code></td>
+        <td>{{ file.source_origin }}</td>
+        <td>{% if file.override_exists %}Custom{% else %}Inherited{% endif %}</td>
+        <td>
+          <a href="{{ file.edit_href }}">Edit</a>
+          {% if file.override_exists %}
+          <form method="post" action="{{ file.reset_href }}">
+            <button type="submit">Reset</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
 {% endblock %}
