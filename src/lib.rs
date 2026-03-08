@@ -1412,7 +1412,7 @@ pub async fn get_revision_by_number<C: ConnectionTrait>(
 /// Gets the primary path for this content item (based on page type, slug, and publish date).
 pub fn content_primary_route(content: &entities::content_item::Model) -> String {
     let slug = content.slug.trim_matches('/').to_string();
-    if content.page_type.is_post() {
+    if content.page_type.is_page() {
         return slug;
     }
 
@@ -1723,14 +1723,12 @@ pub async fn create_asset<C: ConnectionTrait>(
 pub async fn list_assets(
     db: &DatabaseConnection,
     site_id: Uuid,
-) -> Result<Vec<entities::asset::Model>, String> {
-    let assets = entities::asset::Entity::find()
+) -> Result<Vec<entities::asset::Model>, SiteError> {
+    entities::asset::Entity::find()
         .filter(entities::asset::Column::SiteId.eq(site_id))
         .all(db)
         .await
-        .map_err(|error| error.to_string())?;
-
-    Ok(assets)
+        .map_err(SiteError::from)
 }
 
 /// Creates an asset variant entry.
@@ -1775,6 +1773,7 @@ mod tests {
     use crate::entities::audit_event::log_audit_event;
     use crate::entities::site::get_by_id;
     use crate::entities::user::upsert_user_login;
+    use chrono::TimeZone;
     use sea_orm::{DatabaseConnection, TransactionTrait};
     use tempfile::TempDir;
     use tokio::fs;
@@ -2038,6 +2037,48 @@ mod tests {
         assert_eq!(revision_tags.len(), 1);
     }
 
+    #[test]
+    fn content_primary_route_uses_slug_for_pages_and_date_prefix_for_posts() {
+        let published_at = Utc
+            .with_ymd_and_hms(2026, 3, 8, 12, 0, 0)
+            .single()
+            .expect("invalid published date");
+        let created_at = Utc
+            .with_ymd_and_hms(2026, 3, 7, 9, 30, 0)
+            .single()
+            .expect("invalid created date");
+
+        let page = entities::content_item::Model {
+            id: Uuid::now_v7(),
+            site_id: Uuid::now_v7(),
+            page_type: PageType::Page,
+            title: "Page".to_string(),
+            slug: "collegia-notes".to_string(),
+            page_content: "Body".to_string(),
+            draft: false,
+            creator_sub: "creator".to_string(),
+            created_at,
+            last_updated: None,
+            published_at: Some(published_at),
+        };
+        let post = entities::content_item::Model {
+            id: Uuid::now_v7(),
+            site_id: Uuid::now_v7(),
+            page_type: PageType::Post,
+            title: "Post".to_string(),
+            slug: "collegia-notes".to_string(),
+            page_content: "Body".to_string(),
+            draft: false,
+            creator_sub: "creator".to_string(),
+            created_at,
+            last_updated: None,
+            published_at: Some(published_at),
+        };
+
+        assert_eq!(content_primary_route(&page), "collegia-notes");
+        assert_eq!(content_primary_route(&post), "2026/03/08/collegia-notes");
+    }
+
     #[tokio::test]
     async fn create_and_list_tags() {
         let db = test_db_start().await;
@@ -2283,6 +2324,8 @@ mod tests {
         .await
         .expect("failed to tag content");
 
+        let content_route = content_primary_route(&content);
+
         let files_written = render_site(
             &db,
             site.id,
@@ -2299,7 +2342,7 @@ mod tests {
         assert!(fs::metadata(rendered_root.join("rss.xml")).await.is_ok());
         assert!(fs::metadata(rendered_root.join("atom.xml")).await.is_ok());
         assert!(
-            fs::metadata(rendered_root.join("hello").join("index.html"))
+            fs::metadata(rendered_root.join(content_route).join("index.html"))
                 .await
                 .is_ok()
         );
@@ -2385,7 +2428,8 @@ mod tests {
         .await
         .expect("failed to write index template");
 
-        let _content = create_content_fixture(&db, site.id, PageType::Post, "hello", false).await;
+        let content = create_content_fixture(&db, site.id, PageType::Post, "hello", false).await;
+        let content_route = content_primary_route(&content);
 
         render_site(
             &db,
@@ -2398,7 +2442,7 @@ mod tests {
         .expect("failed to render site");
 
         let rendered_root = rendered_dir.path().join(site.short_name);
-        let page_output = fs::read_to_string(rendered_root.join("hello").join("index.html"))
+        let page_output = fs::read_to_string(rendered_root.join(content_route).join("index.html"))
             .await
             .expect("failed to read page output");
         let index_output = fs::read_to_string(rendered_root.join("index.html"))
