@@ -1540,13 +1540,18 @@ async fn admin_site_content_preview(
     Path((site_id, content_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Html<String>, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
-    let rendered = render_content_preview(state.db.as_ref(), site_id, content_id, "templates")
-        .await
-        .map_err(|error| {
-            SiteError::internal(format!(
-                "failed to render preview for content {content_id}: {error}"
-            ))
-        })?;
+    let rendered = render_content_preview(
+        state.db.as_ref(),
+        site_id,
+        content_id,
+        crate::SITE_TEMPLATES_DIR,
+    )
+    .await
+    .map_err(|error| {
+        SiteError::internal(format!(
+            "failed to render preview for content {content_id}: {error}"
+        ))
+    })?;
     Ok(Html(rendered))
 }
 
@@ -2357,26 +2362,31 @@ async fn admin_site_render(
     Path(site_id): Path<Uuid>,
 ) -> Result<AdminRenderTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Editor).await?;
-    render_site(state.db.as_ref(), site_id, "templates", "./rendered")
-        .await
-        .map_err(|error| SiteError::internal(format!("failed to render site {site_id}: {error}")))
-        .map(|files_written| AdminRenderTemplate {
-            template_shared: AdminTemplateData {
-                page_title: "Render Site".to_string(),
-                page_message: Some(format!(
-                    "Site rendered with {} file(s) written.",
-                    files_written
-                )),
-            },
-            heading: format!("Rendered site {site_id}"),
-            rows: vec![],
-            links: vec![AdminLink::new(
-                &format!("/admin/site/{site_id}/content"),
-                "Back to content",
-            )],
-            inline_body: String::new(),
-            pre_body: String::new(),
-        })
+    render_site(
+        state.db.as_ref(),
+        site_id,
+        crate::SITE_TEMPLATES_DIR,
+        "./rendered",
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to render site {site_id}: {error}")))
+    .map(|files_written| AdminRenderTemplate {
+        template_shared: AdminTemplateData {
+            page_title: "Render Site".to_string(),
+            page_message: Some(format!(
+                "Site rendered with {} file(s) written.",
+                files_written
+            )),
+        },
+        heading: format!("Rendered site {site_id}"),
+        rows: vec![],
+        links: vec![AdminLink::new(
+            &format!("/admin/site/{site_id}/content"),
+            "Back to content",
+        )],
+        inline_body: String::new(),
+        pre_body: String::new(),
+    })
 }
 
 #[cfg(test)]
