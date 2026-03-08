@@ -13,12 +13,13 @@ use crate::oidc::{admin_login_callback, build_http_client, build_oidc_client};
 use crate::tls::build_tls_config;
 use crate::{
     NewAsset, NewAssetVariant, NewContent, cli::OidcConfig, content_primary_route, create_asset,
-    create_asset_variant, create_content, create_membership, create_site, delete_membership,
-    get_membership_by_id, get_membership_for_subject, get_revision, get_revision_by_number,
-    get_user_by_id, list_aliases, list_assets, list_content, list_content_tags, list_memberships,
-    list_memberships_for_user_id, list_revisions, list_sites, list_sites_for_subject, list_tags,
-    list_users_by_ids, render_content_preview, render_site, resolve_upload_root, search_content,
-    update_content, update_membership_role, update_site_settings,
+    create_asset_variant, create_content, create_membership, create_site, create_tag,
+    delete_membership, delete_tag, get_membership_by_id, get_membership_for_subject, get_revision,
+    get_revision_by_number, get_user_by_id, list_aliases, list_assets, list_content,
+    list_content_tags, list_memberships, list_memberships_for_user_id, list_revisions, list_sites,
+    list_sites_for_subject, list_tags, list_users_by_ids, render_content_preview, render_site,
+    resolve_upload_root, search_content, sync_tags_to_content, update_content,
+    update_membership_role, update_site_settings,
 };
 use anyhow::Context;
 use askama::Template;
@@ -219,8 +220,8 @@ struct AdminContentListTemplate {
 #[template(path = "admin_tags.html")]
 struct AdminTagsTemplate {
     template_shared: AdminTemplateData,
-
-    rows: Vec<AdminRow>,
+    site_id: Uuid,
+    tags: Vec<AdminSiteTagRow>,
 }
 
 #[allow(dead_code)]
@@ -248,7 +249,7 @@ struct AdminContentNewTemplate {
 #[template(path = "admin_content_source.html")]
 struct AdminContentSourceTemplate {
     template_shared: AdminTemplateData,
-
+    tags: Vec<AdminTagOption>,
     title: String,
     slug: String,
     page_type: String,
@@ -308,6 +309,14 @@ struct AdminRow {
 #[derive(Debug)]
 struct AdminTagOption {
     name: String,
+    selected: bool,
+}
+
+#[derive(Debug)]
+struct AdminSiteTagRow {
+    id: Uuid,
+    name: String,
+    delete_href: String,
 }
 
 #[derive(Debug)]
@@ -363,8 +372,7 @@ struct CreateContentForm {
     slug: String,
     page_content: String,
     draft: Option<bool>,
-    #[serde(default)]
-    tags: Vec<String>,
+    tag_list: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -375,6 +383,12 @@ struct UpdateContentForm {
     page_content: String,
     draft: String,
     published_at: Option<String>,
+    tag_list: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateTagForm {
+    name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -396,6 +410,15 @@ struct SearchQuery {
 #[derive(Debug, Deserialize)]
 struct SourceEditorQuery {
     saved: Option<String>,
+}
+
+fn parse_tag_list(raw: Option<String>) -> Vec<String> {
+    raw.unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]
@@ -646,6 +669,14 @@ pub async fn run_admin_server(
             get(admin_site_revision_diff),
         )
         .route("/admin/site/{site_id}/tags", get(admin_site_tags))
+        .route(
+            "/admin/site/{site_id}/tags/new",
+            axum::routing::post(admin_site_tag_create),
+        )
+        .route(
+            "/admin/site/{site_id}/tags/{tag_id}/delete",
+            axum::routing::post(admin_site_tag_delete),
+        )
         .route("/admin/site/{site_id}/assets", get(admin_site_assets))
         .route(
             "/admin/site/{site_id}/assets/library",
@@ -1293,7 +1324,10 @@ async fn admin_site_content_new(
         .map_err(|error| SiteError::internal(format!("failed to load tags: {error}")))?;
     let tags = tags
         .into_iter()
-        .map(|tag| AdminTagOption { name: tag.name })
+        .map(|tag| AdminTagOption {
+            name: tag.name,
+            selected: false,
+        })
         .collect();
 
     let site = get_by_id(state.db.as_ref(), site_id).await?;
@@ -1316,7 +1350,7 @@ async fn admin_site_content_create(
         .map_err(|error| SiteError::internal(error.to_string()))?;
     require_site_role(&state, &session, site_id, SiteRole::Author).await?;
     let actor = current_user(&session).await?;
-    let tag_names = form.tags.clone();
+    let tag_names = parse_tag_list(form.tag_list);
     let title = form.title;
     let slug = form.slug;
     let page_content = form.page_content;
@@ -1497,6 +1531,23 @@ async fn admin_site_content_source(
         content.site_id, content.id
     );
     let back_href = format!("/admin/site/{}/content/{}", content.site_id, content.id);
+    let site_tags = list_tags(state.db.as_ref(), content.site_id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load site tags: {error}")))?;
+    let selected_tags = list_content_tags(state.db.as_ref(), content.id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load content tags: {error}")))?;
+    let selected_tag_names = selected_tags
+        .into_iter()
+        .map(|tag| tag.name)
+        .collect::<std::collections::HashSet<_>>();
+    let tags = site_tags
+        .into_iter()
+        .map(|tag| AdminTagOption {
+            selected: selected_tag_names.contains(&tag.name),
+            name: tag.name,
+        })
+        .collect();
     let page_type = content.page_type.to_string();
     let draft = content.draft;
     let published_at = content.content_publish_timestamp();
@@ -1518,7 +1569,7 @@ async fn admin_site_content_source(
 
     Ok(AdminContentSourceTemplate {
         template_shared,
-
+        tags,
         title,
         slug,
         page_type,
@@ -1546,6 +1597,7 @@ async fn admin_site_content_source_update(
     let title = form.title;
     let slug = form.slug;
     let page_content = form.page_content;
+    let tag_names = parse_tag_list(form.tag_list);
 
     let txn = state.db.begin().await?;
 
@@ -1566,6 +1618,16 @@ async fn admin_site_content_source_update(
     .map_err(|error| {
         SiteError::internal(format!("failed to update content {content_id}: {error}"))
     })?;
+    let revision = entities::content_revision::Entity::find()
+        .filter(entities::content_revision::Column::ContentId.eq(content.id))
+        .order_by_desc(entities::content_revision::Column::RevisionNumber)
+        .one(&txn)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load latest revision: {error}")))?
+        .ok_or_else(|| SiteError::internal("missing revision for updated content".to_string()))?;
+    sync_tags_to_content(&txn, content.site_id, content.id, revision.id, tag_names)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to sync tags: {error}")))?;
 
     log_audit_event(
         &txn,
@@ -1868,11 +1930,12 @@ async fn admin_site_tags(
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
     match list_tags(state.db.as_ref(), site_id).await {
         Ok(tags) => {
-            let rows = tags
+            let tags = tags
                 .into_iter()
-                .map(|tag| AdminRow {
-                    label: tag.name,
-                    value: tag.id.to_string(),
+                .map(|tag| AdminSiteTagRow {
+                    id: tag.id,
+                    name: tag.name,
+                    delete_href: format!("/admin/site/{site_id}/tags/{}/delete", tag.id),
                 })
                 .collect();
 
@@ -1883,13 +1946,87 @@ async fn admin_site_tags(
                         "Back to site dashboard",
                     )]),
 
-                rows,
+                site_id,
+                tags,
             })
         }
         Err(error) => Err(SiteError::internal(format!(
             "failed to load tags for site {site_id}: {error}"
         ))),
     }
+}
+
+async fn admin_site_tag_create(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    Form(form): Form<CreateTagForm>,
+) -> Result<Redirect, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Editor).await?;
+    let actor = current_user(&session).await?;
+    let name = form.name.trim();
+    if name.is_empty() {
+        return Err(SiteError::BadRequest("missing tag name".to_string()));
+    }
+
+    let txn = state.db.begin().await?;
+    let tag = create_tag(
+        &txn,
+        crate::NewTag {
+            site_id,
+            name: name.to_string(),
+        },
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to create tag: {error}")))?;
+    log_audit_event(
+        &txn,
+        &actor.subject,
+        "create_tag",
+        "tag",
+        &tag.id,
+        Some(site_id),
+        Some(json!({
+            "name": tag.name,
+        })),
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to log tag audit: {error}")))?;
+    txn.commit()
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to commit tag creation: {error}")))?;
+
+    Ok(Redirect::to(&format!("/admin/site/{site_id}/tags")))
+}
+
+async fn admin_site_tag_delete(
+    State(state): State<AdminState>,
+    session: Session,
+    Path((site_id, tag_id)): Path<(Uuid, Uuid)>,
+) -> Result<Redirect, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Editor).await?;
+    let actor = current_user(&session).await?;
+
+    let txn = state.db.begin().await?;
+    delete_tag(&txn, site_id, tag_id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to delete tag: {error}")))?;
+    log_audit_event(
+        &txn,
+        &actor.subject,
+        "delete_tag",
+        "tag",
+        &tag_id,
+        Some(site_id),
+        None,
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to log tag audit: {error}")))?;
+    txn.commit()
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to commit tag delete: {error}")))?;
+
+    Ok(Redirect::to(&format!("/admin/site/{site_id}/tags")))
 }
 
 fn normalize_asset_mime_filter(value: &str) -> Option<&'static str> {

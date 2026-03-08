@@ -559,8 +559,10 @@ test.describe("content new editor", () => {
       await page.locator(".ProseMirror").first().waitFor({ state: "visible" });
       await expect(page.locator("#page_content")).toBeHidden();
       await expect(page.locator("#tags")).toBeVisible();
-      await expect(page.locator("#tags option", { hasText: "news" })).toBeVisible();
-      await page.locator("#tags").selectOption("news");
+      await expect(page.locator('#tag-suggestions option[value="news"]')).toBeAttached();
+      await page.locator("#tags").fill("news");
+      await page.locator("#tags").press("Enter");
+      await expect(page.locator('[data-tag-chip="news"]')).toBeVisible();
       await page.getByRole("button", { name: "Image" }).click();
       const modal = page.getByRole("dialog", { name: "Insert image" });
       await expect(modal).toBeVisible();
@@ -721,6 +723,123 @@ test.describe("content new editor", () => {
         "Updated body from source mode",
       );
       await expect(toast).toBeHidden({ timeout: 4000 });
+    } finally {
+      await cleanupHarness(harness);
+    }
+  });
+
+  test("updates tags from the source editor", async ({ browser }) => {
+    const harness = await setupHarness();
+
+    try {
+      const userId = await createUser(harness, "tag-editor");
+      await addMembership(harness, userId, "owner");
+      await createTag(harness, "docs");
+      await createTag(harness, "news");
+      const contentId = await createContent(harness, {
+        pageType: "page",
+        title: "Tagged page",
+        slug: "tagged-page",
+        pageContent: "Initial body",
+        creatorSub: "tag-editor",
+      });
+      const sessionId = await seedSession(harness, "tag-editor");
+
+      const context = await browser.newContext({ ignoreHTTPSErrors: true });
+      await context.addCookies([
+        {
+          name: "id",
+          value: sessionId,
+          url: `https://127.0.0.1:${harness.port}`,
+        },
+      ]);
+
+      const page = await context.newPage();
+      await page.goto(
+        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/source`,
+        { waitUntil: "domcontentloaded" },
+      );
+
+      await page.locator("#tags").fill("docs");
+      await page.locator("#tags").press("Enter");
+      await page.locator("#tags").fill("news");
+      await page.locator("#tags").press("Enter");
+      await Promise.all([
+        page.waitForResponse(
+          (response) =>
+            response.request().method() === "POST" &&
+            response.url() ===
+              `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/source`,
+        ),
+        page.getByRole("button", { name: "Save content" }).click(),
+      ]);
+      await page.waitForLoadState("domcontentloaded");
+      await page.goto(
+        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/source`,
+        { waitUntil: "domcontentloaded" },
+      );
+
+      await expect(page.locator('[data-tag-chip="docs"]')).toBeVisible();
+      await expect(page.locator('[data-tag-chip="news"]')).toBeVisible();
+
+      await page.locator("#tags").fill("guides");
+      await page.locator("#tags").press("Enter");
+      await page.locator('[data-tag-chip="docs"]').click();
+      await page.locator('[data-tag-chip="news"]').click();
+      await Promise.all([
+        page.waitForResponse(
+          (response) =>
+            response.request().method() === "POST" &&
+            response.url() ===
+              `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/source`,
+        ),
+        page.getByRole("button", { name: "Save content" }).click(),
+      ]);
+      await page.waitForLoadState("domcontentloaded");
+      await page.goto(
+        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/source`,
+        { waitUntil: "domcontentloaded" },
+      );
+      await expect(page.locator('[data-tag-chip="guides"]')).toBeVisible();
+      await expect(page.locator('[data-tag-chip="docs"]')).toHaveCount(0);
+      await expect(page.locator('[data-tag-chip="news"]')).toHaveCount(0);
+    } finally {
+      await cleanupHarness(harness);
+    }
+  });
+
+  test("creates and deletes tags from the tags admin page", async ({ browser }) => {
+    const harness = await setupHarness();
+
+    try {
+      const userId = await createUser(harness, "tag-admin");
+      await addMembership(harness, userId, "owner");
+      const sessionId = await seedSession(harness, "tag-admin");
+
+      const context = await browser.newContext({ ignoreHTTPSErrors: true });
+      await context.addCookies([
+        {
+          name: "id",
+          value: sessionId,
+          url: `https://127.0.0.1:${harness.port}`,
+        },
+      ]);
+
+      const page = await context.newPage();
+      await page.goto(
+        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/tags`,
+        { waitUntil: "domcontentloaded" },
+      );
+
+      await page.getByLabel("New tag").fill("release-notes");
+      await page.getByRole("button", { name: "Create tag" }).click();
+      await expect(page.getByRole("cell", { name: "release-notes" })).toBeVisible();
+
+      await page
+        .locator("tr", { has: page.getByRole("cell", { name: "release-notes" }) })
+        .getByRole("button", { name: "Delete" })
+        .click();
+      await expect(page.getByRole("cell", { name: "release-notes" })).toHaveCount(0);
     } finally {
       await cleanupHarness(harness);
     }

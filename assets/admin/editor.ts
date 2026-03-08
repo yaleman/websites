@@ -546,6 +546,118 @@ const initTransientMessages = () => {
 	}
 };
 
+const initTagEditor = () => {
+	const form = document.querySelector<HTMLFormElement>("form.editor-form");
+	const input = document.querySelector<HTMLInputElement>("[data-tag-input]");
+	const hiddenInput = document.querySelector<HTMLInputElement>("[data-tag-list]");
+	const chipContainer = document.querySelector<HTMLElement>("[data-tag-chips]");
+	const datalist = document.getElementById("tag-suggestions");
+
+	if (!form || !input || !hiddenInput || !chipContainer) {
+		return;
+	}
+
+	const existingTagMap = new Map<string, string>();
+	for (const option of datalist?.querySelectorAll("option") ?? []) {
+		const value = option.getAttribute("value")?.trim();
+		if (!value) {
+			continue;
+		}
+		existingTagMap.set(value.toLowerCase(), value);
+	}
+
+	const selectedTags = Array.from(chipContainer.querySelectorAll<HTMLElement>("[data-tag-chip]"))
+		.map((chip) => chip.dataset.tagChip?.trim() ?? "")
+		.filter((tag) => tag.length > 0);
+
+	const normalizeTag = (value: string) => {
+		const trimmed = value.trim().replace(/\s+/g, " ");
+		if (!trimmed) {
+			return "";
+		}
+		return existingTagMap.get(trimmed.toLowerCase()) ?? trimmed;
+	};
+
+	const syncSelectedTags = () => {
+		hiddenInput.value = selectedTags.join("\n");
+	};
+
+	const renderTags = () => {
+		chipContainer.innerHTML = "";
+		for (const tag of selectedTags) {
+			const chip = document.createElement("button");
+			chip.type = "button";
+			chip.className = "tag-chip";
+			chip.dataset.tagChip = tag;
+
+			const label = document.createElement("span");
+			label.textContent = tag;
+			chip.appendChild(label);
+
+			const remove = document.createElement("span");
+			remove.className = "tag-chip__remove";
+			remove.setAttribute("aria-hidden", "true");
+			remove.textContent = "x";
+			chip.appendChild(remove);
+
+			chip.addEventListener("click", () => {
+				const index = selectedTags.indexOf(tag);
+				if (index >= 0) {
+					selectedTags.splice(index, 1);
+					syncSelectedTags();
+					renderTags();
+				}
+			});
+
+			chipContainer.appendChild(chip);
+		}
+	};
+
+	const addTag = (raw: string) => {
+		const tag = normalizeTag(raw);
+		if (!tag) {
+			return;
+		}
+		if (selectedTags.some((existing) => existing.toLowerCase() === tag.toLowerCase())) {
+			input.value = "";
+			return;
+		}
+		selectedTags.push(tag);
+		syncSelectedTags();
+		renderTags();
+		input.value = "";
+	};
+
+	input.addEventListener("keydown", (event) => {
+		if (event.key === "Enter" || event.key === ",") {
+			event.preventDefault();
+			addTag(input.value.replace(/,+$/, ""));
+			return;
+		}
+		if (event.key === "Backspace" && !input.value && selectedTags.length > 0) {
+			selectedTags.pop();
+			syncSelectedTags();
+			renderTags();
+		}
+	});
+
+	input.addEventListener("blur", () => {
+		if (input.value.trim()) {
+			addTag(input.value);
+		}
+	});
+
+	form.addEventListener("submit", () => {
+		if (input.value.trim()) {
+			addTag(input.value);
+		}
+		syncSelectedTags();
+	});
+
+	syncSelectedTags();
+	renderTags();
+};
+
 const initEditor = () => {
 	const root = document.getElementById("editor");
 	const textarea = document.getElementById(
@@ -611,9 +723,11 @@ const initEditor = () => {
 if (document.readyState === "loading") {
 	document.addEventListener("DOMContentLoaded", () => {
 		initTransientMessages();
+		initTagEditor();
 		initEditor();
 	});
 } else {
 	initTransientMessages();
+	initTagEditor();
 	initEditor();
 }
