@@ -159,6 +159,7 @@ struct AdminContentDetailTemplate {
     primary_route: String,
     revisions_summary: String,
     tags: Vec<String>,
+    aliases: Vec<AdminContentAliasRow>,
     creator_sub: String,
     content_id: Uuid,
     site_id: Uuid,
@@ -167,23 +168,6 @@ struct AdminContentDetailTemplate {
     updated_at: String,
     published_at: String,
     page_content: String,
-}
-#[allow(dead_code)]
-#[derive(Template, WebTemplate)]
-#[template(path = "admin_content_advanced.html")]
-struct AdminContentAdvancedTemplate {
-    template_shared: AdminTemplateData,
-    title: String,
-    primary_route: String,
-    creator_sub: String,
-    content_id: Uuid,
-    site_id: Uuid,
-    created_at: String,
-    updated_at: String,
-    published_at: String,
-    aliases: Vec<AdminContentAliasRow>,
-    tags: Vec<String>,
-    revisions_summary: String,
 }
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
@@ -1488,6 +1472,19 @@ async fn admin_site_content_detail(
         .into_iter()
         .map(|tag| tag.name)
         .collect::<Vec<_>>();
+    let aliases = list_aliases(state.db.as_ref(), content.site_id, Some(content.id))
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!(
+                "failed to load aliases for content {content_id}: {error}"
+            ))
+        })?
+        .into_iter()
+        .map(|alias| AdminContentAliasRow {
+            kind: alias.kind,
+            path: alias.alias_path,
+        })
+        .collect::<Vec<_>>();
     let revisions = list_revisions(state.db.as_ref(), content.id)
         .await
         .map_err(|error| {
@@ -1511,13 +1508,6 @@ async fn admin_site_content_detail(
                 ),
                 AdminLink::new(
                     &format!(
-                        "/admin/site/{}/content/{}/advanced",
-                        content.site_id, content.id
-                    ),
-                    "Metadata & routing",
-                ),
-                AdminLink::new(
-                    &format!(
                         "/admin/site/{}/content/{}/revisions",
                         content.site_id, content.id
                     ),
@@ -1534,6 +1524,7 @@ async fn admin_site_content_detail(
         primary_route: display_route_path(&route),
         revisions_summary: latest_revision_summary(&revisions),
         tags,
+        aliases,
         creator_sub: content.creator_sub,
         content_id: content.id,
         site_id: content.site_id,
@@ -1758,81 +1749,11 @@ async fn admin_site_content_advanced(
     State(state): State<AdminState>,
     session: Session,
     Path((site_id, content_id)): Path<(Uuid, Uuid)>,
-) -> Result<AdminContentAdvancedTemplate, SiteError> {
+) -> Result<Redirect, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
-    let content = entities::content_item::Entity::find_by_id(content_id)
-        .filter(entities::content_item::Column::SiteId.eq(site_id))
-        .one(state.db.as_ref())
-        .await
-        .map_err(|err| SiteError::internal(format!("failed to load content {content_id}: {err}")))?
-        .ok_or(SiteError::NotFound)?;
-
-    let aliases = list_aliases(state.db.as_ref(), content.site_id, Some(content.id))
-        .await
-        .map_err(|error| {
-            SiteError::internal(format!(
-                "failed to load aliases for content {content_id}: {error}"
-            ))
-        })?;
-    let tags = list_content_tags(state.db.as_ref(), content.id)
-        .await
-        .map_err(|error| {
-            SiteError::internal(format!(
-                "failed to load tags for content {content_id}: {error}"
-            ))
-        })?;
-    let revisions = list_revisions(state.db.as_ref(), content.id)
-        .await
-        .map_err(|error| {
-            SiteError::internal(format!(
-                "failed to load revisions for content {content_id}: {error}"
-            ))
-        })?;
-    let aliases = aliases
-        .into_iter()
-        .map(|alias| AdminContentAliasRow {
-            kind: alias.kind,
-            path: alias.alias_path,
-        })
-        .collect::<Vec<_>>();
-    let tags = tags.into_iter().map(|tag| tag.name).collect::<Vec<_>>();
-    let primary_route = display_route_path(&content_primary_route(&content));
-
-    Ok(AdminContentAdvancedTemplate {
-        template_shared: AdminTemplateData::new(format!("Metadata & Routing: {}", content.title))
-            .with_site_id(content.site_id)
-            .with_links(vec![
-                AdminLink::new(
-                    &format!("/admin/site/{}/content/{}", content.site_id, content.id),
-                    "Content overview",
-                ),
-                AdminLink::new(
-                    &format!(
-                        "/admin/site/{}/content/{}/source",
-                        content.site_id, content.id
-                    ),
-                    "Edit content",
-                ),
-                AdminLink::new(
-                    &format!(
-                        "/admin/site/{}/content/{}/revisions",
-                        content.site_id, content.id
-                    ),
-                    "Revision history",
-                ),
-            ]),
-        title: content.title,
-        primary_route,
-        creator_sub: content.creator_sub,
-        content_id: content.id,
-        site_id: content.site_id,
-        created_at: content.created_at.to_rfc3339(),
-        updated_at: format_optional_datetime(content.last_updated),
-        published_at: format_optional_datetime(content.published_at),
-        aliases,
-        tags,
-        revisions_summary: latest_revision_summary(&revisions),
-    })
+    Ok(Redirect::to(&format!(
+        "/admin/site/{site_id}/content/{content_id}"
+    )))
 }
 
 async fn admin_site_content_revisions(

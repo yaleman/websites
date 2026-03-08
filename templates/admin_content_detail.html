@@ -44,6 +44,30 @@
 </section>
 
 <section>
+  <h2>Routes</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Kind</th>
+        <th>Path</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>primary</td>
+        <td><code>{{ primary_route }}</code></td>
+      </tr>
+      {% for alias in aliases %}
+      <tr>
+        <td>{{ alias.kind }}</td>
+        <td><code>{{ alias.path }}</code></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section>
   <h2>Content Metadata</h2>
   <table>
     <thead>
