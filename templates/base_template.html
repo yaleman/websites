@@ -26,10 +26,10 @@
 
       {% block body %}{% endblock %}
 
-      {% if !links.is_empty() %}
+      {% if !template_shared.links.is_empty() %}
       <h2>Actions</h2>
       <ul>
-        {% for link in links %}
+        {% for link in template_shared.links %}
         <li><a href="{{ link.href }}">{{ link.label }}</a></li>
         {% endfor %}
       </ul>
