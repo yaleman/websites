@@ -4,7 +4,7 @@ This is a web-based system for managing content of websites.
 
 ## System Overview
 
-The system manages site metadata, content, tags, assets, and memberships in a SQLite database through SeaORM. Content is stored as Markdown and can be rendered into static output using templates and media assets, enabling a publish step that generates static files. The admin interface is primarily server-rendered with Askama templates from the `templates/` directory, with JavaScript used for the rich-text editor and other progressive enhancements. Site publishing and content previews use Tera templates loaded from the `site_templates/` directory, keeping site-facing rendering separate from admin UI rendering. Authentication is handled via session storage with optional OIDC integration for login, and operational workflows are available through a CLI for initialization, imports, and admin tasks.
+The system manages site metadata, content, tags, assets, and memberships in a SQLite database through SeaORM. Content is stored as Markdown and can be rendered into static output using templates and media assets, enabling a publish step that generates static files. The admin interface is primarily server-rendered with Askama templates from the `templates/` directory, with JavaScript used for the rich-text editor and other progressive enhancements. Site publishing and content previews use Tera templates loaded from the `site_templates/` directory, keeping site-facing rendering separate from admin UI rendering. Preview responses must rewrite root-relative site template asset paths like `/assets/...` to the authenticated admin preview asset route, which serves files from `site_templates/<template>/assets/` without exposing them through the global admin asset directory. Authentication is handled via session storage with optional OIDC integration for login, and operational workflows are available through a CLI for initialization, imports, and admin tasks.
 
 ## Required Process
 
@@ -30,3 +30,4 @@ The system manages site metadata, content, tags, assets, and memberships in a SQ
 
 - 2026-03-07: Replaced raw SQL schema bootstrapping with SeaORM migrations (`sea-orm-migration`) and set SQLite foreign keys via the connection URL.
 - 2026-03-08: Documented the rendering split: admin UI templates use Askama from `templates/`, while site previews and published site output use Tera from `site_templates/`.
+- 2026-03-08: Site previews now rewrite `/assets/...` references to an authenticated preview asset route that serves files from `site_templates/<template>/assets/`.

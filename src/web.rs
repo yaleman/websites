@@ -18,7 +18,9 @@ use askama_web::WebTemplate;
 use axum::middleware::{Next, from_fn};
 use axum::{
     Json, Router,
+    body::Body,
     extract::{Form, Multipart, Path, Query, Request, State},
+    http::{StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
     routing::get,
 };
@@ -41,7 +43,7 @@ use std::collections::HashMap;
 use std::env;
 use std::io::Cursor;
 use std::net::SocketAddr;
-use std::path::{Path as StdPath, PathBuf};
+use std::path::{Component, Path as StdPath, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::fs;
@@ -440,6 +442,10 @@ pub async fn run_admin_server(
             get(admin_site_content_preview),
         )
         .route(
+            "/admin/site/{site_id}/preview-assets/{*asset_path}",
+            get(admin_site_preview_asset),
+        )
+        .route(
             "/admin/site/{site_id}/content/{content_id}/advanced",
             get(admin_site_content_advanced),
         )
@@ -561,6 +567,39 @@ fn resolve_upload_root() -> PathBuf {
     }
 
     cwd.join("uploads/media-storage")
+}
+
+fn preview_asset_prefix(site_id: Uuid) -> String {
+    format!("/admin/site/{site_id}/preview-assets")
+}
+
+fn rewrite_preview_asset_urls(content: &str, site_id: Uuid) -> String {
+    content.replace("/assets/", &format!("{}/", preview_asset_prefix(site_id)))
+}
+
+fn should_rewrite_preview_asset_body(mime: &str) -> bool {
+    mime.starts_with("text/")
+        || mime == "application/javascript"
+        || mime == "application/json"
+        || mime == "image/svg+xml"
+        || mime.ends_with("+xml")
+}
+
+fn sanitize_preview_asset_path(asset_path: &str) -> Result<PathBuf, SiteError> {
+    let mut sanitized = PathBuf::new();
+
+    for component in StdPath::new(asset_path).components() {
+        match component {
+            Component::Normal(value) => sanitized.push(value),
+            _ => return Err(SiteError::NotFound),
+        }
+    }
+
+    if sanitized.as_os_str().is_empty() {
+        return Err(SiteError::NotFound);
+    }
+
+    Ok(sanitized)
 }
 
 async fn admin_root() -> Redirect {
@@ -1552,7 +1591,58 @@ async fn admin_site_content_preview(
             "failed to render preview for content {content_id}: {error}"
         ))
     })?;
-    Ok(Html(rendered))
+    Ok(Html(rewrite_preview_asset_urls(&rendered, site_id)))
+}
+
+async fn admin_site_preview_asset(
+    State(state): State<AdminState>,
+    session: Session,
+    Path((site_id, asset_path)): Path<(Uuid, String)>,
+) -> Result<Response, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
+    let site = get_by_id(state.db.as_ref(), site_id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
+    let safe_asset_path = sanitize_preview_asset_path(&asset_path)?;
+    let file_path = StdPath::new(crate::SITE_TEMPLATES_DIR)
+        .join(site.template_name)
+        .join("assets")
+        .join(safe_asset_path);
+    let metadata = fs::metadata(&file_path).await.map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            SiteError::NotFound
+        } else {
+            SiteError::internal(format!(
+                "failed to inspect preview asset {}: {error}",
+                file_path.display()
+            ))
+        }
+    })?;
+    if !metadata.is_file() {
+        return Err(SiteError::NotFound);
+    }
+
+    let mime = mime_guess::from_path(&file_path).first_or_octet_stream();
+    let mut body = fs::read(&file_path).await.map_err(|error| {
+        SiteError::internal(format!(
+            "failed to read preview asset {}: {error}",
+            file_path.display()
+        ))
+    })?;
+
+    if should_rewrite_preview_asset_body(mime.essence_str())
+        && let Ok(text) = String::from_utf8(body.clone())
+    {
+        body = rewrite_preview_asset_urls(&text, site_id).into_bytes();
+    }
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, mime.as_ref())
+        .body(Body::from(body))
+        .map_err(|error| {
+            SiteError::internal(format!("failed to build preview asset response: {error}"))
+        })
 }
 
 async fn admin_site_content_advanced(
@@ -2421,5 +2511,38 @@ mod tests {
             Err(_) => panic!("failed to check membership"),
         };
         assert!(second.is_none(), "expected no membership on second call");
+    }
+
+    #[test]
+    fn rewrite_preview_asset_urls_rewrites_root_asset_paths() {
+        let site_id = Uuid::nil();
+        let rendered = rewrite_preview_asset_urls(
+            r#"<link href="/assets/style.css"><style>body{background:url('/assets/bg.png')}</style>"#,
+            site_id,
+        );
+
+        assert!(
+            rendered.contains(
+                "/admin/site/00000000-0000-0000-0000-000000000000/preview-assets/style.css"
+            )
+        );
+        assert!(
+            rendered
+                .contains("/admin/site/00000000-0000-0000-0000-000000000000/preview-assets/bg.png")
+        );
+    }
+
+    #[test]
+    fn sanitize_preview_asset_path_rejects_parent_components() {
+        assert!(sanitize_preview_asset_path("../secret.txt").is_err());
+        assert!(sanitize_preview_asset_path("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn sanitize_preview_asset_path_allows_nested_relative_paths() {
+        let path = sanitize_preview_asset_path("css/site/style.css")
+            .expect("expected nested preview asset path to be accepted");
+
+        assert_eq!(path, PathBuf::from("css/site/style.css"));
     }
 }
