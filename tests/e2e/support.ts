@@ -28,6 +28,17 @@ type RevisionRow = {
   createdAt: string;
 };
 
+export type AuditEventRow = {
+  id: string;
+  siteId: string | null;
+  actorSub: string;
+  eventType: string;
+  entityType: string;
+  entityId: string;
+  createdAt: string;
+  payloadJson: unknown;
+};
+
 type CreateContentInput = {
   pageType: string;
   title: string;
@@ -251,6 +262,40 @@ function parseRevisions(stdout: string): RevisionRow[] {
       title,
       draft: draft === "true",
       createdAt,
+    };
+  });
+}
+
+function parseAuditEvents(stdout: string): AuditEventRow[] {
+  const lines = stdout
+    .trim()
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length <= 1) {
+    return [];
+  }
+
+  return lines.slice(1).map((line) => {
+    const [
+      id,
+      siteId,
+      actorSub,
+      eventType,
+      entityType,
+      entityId,
+      createdAt,
+      payloadJson,
+    ] = line.split("\t");
+    return {
+      id,
+      siteId: siteId === "-" ? null : siteId,
+      actorSub,
+      eventType,
+      entityType,
+      entityId,
+      createdAt,
+      payloadJson: payloadJson === "null" ? null : JSON.parse(payloadJson),
     };
   });
 }
@@ -647,6 +692,31 @@ export async function listContentRevisions(
     { cwd: harness.tempRoot, env: harness.env },
   );
   return parseRevisions(result.stdout);
+}
+
+export async function listAuditEvents(
+  harness: TestHarness,
+  siteId?: string,
+): Promise<AuditEventRow[]> {
+  const result = await runCommand(
+    "cargo",
+    cargoRunArgs([
+      "--database-url",
+      harness.dbPath,
+      "--tls-cert-path",
+      harness.tlsCertPath,
+      "--tls-key-path",
+      harness.tlsKeyPath,
+      "--frontend-url",
+      "https://127.0.0.1",
+      ...oidcTestArgs,
+      "audit",
+      "list",
+      ...(siteId ? ["--site-id", siteId] : []),
+    ]),
+    { cwd: harness.tempRoot, env: harness.env },
+  );
+  return parseAuditEvents(result.stdout);
 }
 
 export async function seedSession(
