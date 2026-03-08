@@ -428,6 +428,63 @@ async function createAssetWithThumbnail(
   );
 }
 
+async function createContent(
+  harness: TestHarness,
+  {
+    pageType,
+    title,
+    slug,
+    pageContent,
+    creatorSub,
+    draft = true,
+  }: {
+    pageType: string;
+    title: string;
+    slug: string;
+    pageContent: string;
+    creatorSub: string;
+    draft?: boolean;
+  },
+): Promise<string> {
+  const result = await runCommand(
+    "cargo",
+    [
+      "run",
+      "--",
+      "--database-url",
+      harness.dbPath,
+      "--tls-cert-path",
+      harness.tlsCertPath,
+      "--tls-key-path",
+      harness.tlsKeyPath,
+      "--frontend-url",
+      "https://127.0.0.1",
+      ...oidcTestArgs,
+      "content",
+      "create",
+      "--site-id",
+      harness.siteId,
+      "--page-type",
+      pageType,
+      "--title",
+      title,
+      "--slug",
+      slug,
+      "--page-content",
+      pageContent,
+      "--creator-sub",
+      creatorSub,
+      ...(draft ? ["--draft"] : []),
+    ],
+    { env: harness.env },
+  );
+  const match = result.stdout.match(/created content: ([^ ]+)/);
+  if (!match) {
+    throw new Error(`failed to parse content id: ${result.stdout}`);
+  }
+  return match[1];
+}
+
 async function seedSession(
   harness: TestHarness,
   subject: string,
@@ -532,6 +589,19 @@ test.describe("content new editor", () => {
       await expect(
         page.locator("[data-editor-preview-body]"),
       ).toContainText("Preview check");
+      await expect(page.locator("[data-editor-source-panel]")).toBeHidden();
+      await page.getByRole("button", { name: "Source" }).click();
+      await expect(page.locator("[data-editor-source-panel]")).toBeVisible();
+      await expect(page.locator("#page_content")).toBeVisible();
+      await page.locator("#page_content").fill("## Raw heading\n\nraw body");
+      await expect(page.locator("[data-editor-preview-body]")).toContainText(
+        "Raw heading",
+      );
+      await expect(page.locator("[data-editor-preview-body]")).toContainText(
+        "raw body",
+      );
+      await expect(page.locator(".ProseMirror")).toContainText("Raw heading");
+      await expect(page.locator(".ProseMirror")).toContainText("raw body");
 
       await page.goto(
         `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/memberships`,
@@ -540,7 +610,7 @@ test.describe("content new editor", () => {
       await expect(
         page.getByRole("heading", { name: "Memberships", exact: true }),
       ).toBeVisible();
-      await expect(page.locator('span[aria-label="test-user"]')).toBeVisible();
+      await expect(page.locator('[aria-label="test-user"]')).toBeVisible();
     } finally {
       await cleanupHarness(harness);
     }
@@ -602,6 +672,55 @@ test.describe("content new editor", () => {
       expect(response).not.toBeNull();
       expect(response?.status()).toBe(200);
       await expect(page.locator("#editor")).toBeVisible();
+    } finally {
+      await cleanupHarness(harness);
+    }
+  });
+
+  test("saves back to the source editor and shows a toast", async ({ browser }) => {
+    const harness = await setupHarness();
+
+    try {
+      const userId = await createUser(harness, "editor-user");
+      await addMembership(harness, userId, "owner");
+      const contentId = await createContent(harness, {
+        pageType: "page",
+        title: "Existing page",
+        slug: "existing-page",
+        pageContent: "Initial body",
+        creatorSub: "editor-user",
+      });
+      const sessionId = await seedSession(harness, "editor-user");
+
+      const context = await browser.newContext({ ignoreHTTPSErrors: true });
+      await context.addCookies([
+        {
+          name: "id",
+          value: sessionId,
+          url: `https://127.0.0.1:${harness.port}`,
+        },
+      ]);
+
+      const page = await context.newPage();
+      await page.goto(
+        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/source`,
+        { waitUntil: "domcontentloaded" },
+      );
+
+      await page.getByRole("button", { name: "Source" }).click();
+      await page.locator("#page_content").fill("Updated body from source mode");
+      await page.getByRole("button", { name: "Save content" }).click();
+
+      await expect(page).toHaveURL(
+        new RegExp(`/admin/site/${harness.siteId}/content/${contentId}/source`),
+      );
+      const toast = page.locator(".message--toast");
+      await expect(toast).toBeVisible();
+      await expect(toast).toContainText("Content saved.");
+      await expect(page.locator("#page_content")).toHaveValue(
+        "Updated body from source mode",
+      );
+      await expect(toast).toBeHidden({ timeout: 4000 });
     } finally {
       await cleanupHarness(harness);
     }

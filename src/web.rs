@@ -65,6 +65,8 @@ use uuid::Uuid;
 struct AdminTemplateData {
     page_title: String,
     page_message: Option<String>,
+    page_message_is_toast: bool,
+    clear_query_param: Option<String>,
     site_id: Option<Uuid>,
     links: Vec<AdminLink>,
 }
@@ -74,6 +76,8 @@ impl AdminTemplateData {
         Self {
             page_title: title.to_string(),
             page_message: None,
+            page_message_is_toast: false,
+            clear_query_param: None,
             site_id: None,
             links: vec![],
         }
@@ -82,6 +86,20 @@ impl AdminTemplateData {
     pub fn with_message(self, message: impl ToString) -> Self {
         Self {
             page_message: Some(message.to_string()),
+            page_message_is_toast: false,
+            ..self
+        }
+    }
+
+    pub fn with_toast_message(
+        self,
+        message: impl ToString,
+        clear_query_param: impl ToString,
+    ) -> Self {
+        Self {
+            page_message: Some(message.to_string()),
+            page_message_is_toast: true,
+            clear_query_param: Some(clear_query_param.to_string()),
             ..self
         }
     }
@@ -373,6 +391,11 @@ struct MembershipUpdateForm {
 #[derive(Debug, Deserialize)]
 struct SearchQuery {
     q: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SourceEditorQuery {
+    saved: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1428,7 +1451,7 @@ async fn admin_site_content_detail(
                         "/admin/site/{}/content/{}/source",
                         content.site_id, content.id
                     ),
-                    "Source",
+                    "Return to editor",
                 ),
                 AdminLink::new(
                     &format!(
@@ -1459,6 +1482,7 @@ async fn admin_site_content_source(
     State(state): State<AdminState>,
     session: Session,
     Path((site_id, content_id)): Path<(Uuid, Uuid)>,
+    Query(query): Query<SourceEditorQuery>,
 ) -> Result<AdminContentSourceTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Author).await?;
 
@@ -1480,13 +1504,20 @@ async fn admin_site_content_source(
     let slug = content.slug;
     let page_content = content.page_content;
 
+    let template_shared = AdminTemplateData::new(format!("Source: {}", title))
+        .with_links(vec![
+            AdminLink::new(&preview_href, "Preview"),
+            AdminLink::new(&back_href, "Back to site dashboard"),
+        ])
+        .with_site_id(content.site_id);
+    let template_shared = if query.saved.is_some() {
+        template_shared.with_toast_message("Content saved.", "saved")
+    } else {
+        template_shared
+    };
+
     Ok(AdminContentSourceTemplate {
-        template_shared: AdminTemplateData::new(format!("Source: {}", title))
-            .with_links(vec![
-                AdminLink::new(&preview_href, "Preview"),
-                AdminLink::new(&back_href, "Back to site dashboard"),
-            ])
-            .with_site_id(content.site_id),
+        template_shared,
 
         title,
         slug,
@@ -1555,7 +1586,7 @@ async fn admin_site_content_source_update(
     .map_err(|error| SiteError::internal(format!("failed to log update audit: {error}")))?;
     txn.commit().await?;
     Ok(Redirect::to(&format!(
-        "/admin/site/{}/content/{}",
+        "/admin/site/{}/content/{}/source?saved=1",
         content.site_id, content.id
     )))
 }

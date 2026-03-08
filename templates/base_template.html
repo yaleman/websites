@@ -25,7 +25,11 @@
       </nav>
 
       {% if let Some(message) = template_shared.page_message %}
-      <p class="message">{{ message }}</p>
+      <p
+        class="message{% if template_shared.page_message_is_toast %} message--toast{% endif %}"
+        {% if template_shared.page_message_is_toast %}data-auto-dismiss-ms="2000"{% endif %}
+        {% if let Some(clear_query_param) = template_shared.clear_query_param %}data-clear-query-param="{{ clear_query_param }}"{% endif %}
+      >{{ message }}</p>
       {% endif %}
 
       {% block body %}{% endblock %}

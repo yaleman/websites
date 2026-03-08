@@ -51,10 +51,18 @@
       <button type="button" class="editor-button" data-command="preview" aria-pressed="false">
         Preview
       </button>
+      <button type="button" class="editor-button" data-command="source" aria-pressed="false">
+        Source
+      </button>
     </div>
   </div>
   <div id="editor" class="editor-shell"></div>
-  <textarea id="page_content" name="page_content" rows="14" class="editor-source">{{ page_content }}</textarea>
+  <section class="editor-source-panel" data-editor-source-panel hidden>
+    <div class="editor-source-panel__header">
+      <h2>Markdown source</h2>
+    </div>
+    <textarea id="page_content" name="page_content" rows="14" class="editor-source">{{ page_content }}</textarea>
+  </section>
   <section class="editor-preview" data-editor-preview hidden>
     <div class="editor-preview__header">
       <h2>Preview</h2>
