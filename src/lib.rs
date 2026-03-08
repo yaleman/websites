@@ -1,4 +1,5 @@
-use crate::entities::PageType;
+use crate::constants::{REQUIRED_TEMPLATES, SITE_TEMPLATES_DIR};
+use crate::{entities::PageType, errors::SiteError};
 use chrono::{DateTime, Datelike, Utc};
 use quick_xml::Reader;
 use quick_xml::events::Event;
@@ -12,7 +13,7 @@ use std::path::Path;
 use std::str::FromStr;
 use tera::{Context, Tera};
 use tokio::fs;
-use tracing::{error, warn};
+use tracing::{debug, error, info};
 use url::Url;
 use uuid::Uuid;
 
@@ -120,14 +121,6 @@ pub async fn list_audit_events(
     Ok(events)
 }
 
-const DEFAULT_POST_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{title}}</title></head><body><h1>{{title}}</h1><article>{{content}}</article></body></html>";
-const DEFAULT_PAGE_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{title}}</title></head><body><h1>{{title}}</h1><article>{{content}}</article></body></html>";
-const DEFAULT_INDEX_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{site_title}}</title></head><body><h1>{{site_title}}</h1><ul>{{items}}</ul></body></html>";
-const DEFAULT_RSS_TEMPLATE: &str = "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel><title>{{site_title}}</title>{{items}}</channel></rss>";
-const DEFAULT_ATOM_TEMPLATE: &str = "<?xml version=\"1.0\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><title>{{site_title}}</title><updated>{{updated}}</updated>{{entries}}</feed>";
-const DEFAULT_TAG_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{tag}}</title></head><body><h1>{{tag}}</h1><ul>{{items}}</ul></body></html>";
-pub const SITE_TEMPLATES_DIR: &str = "site_templates";
-
 /// Builds the default "site_context" which is used by everything
 fn default_context(site: &entities::site::Model, page_title: &str) -> tera::Context {
     let mut context = Context::new();
@@ -141,20 +134,18 @@ async fn write_atom(
     tera: &Tera,
     site: &entities::site::Model,
     post_items: &[entities::content_item::Model],
-) -> Result<(), String> {
-    let atom_entries = render_atom_entries_xml(&post_items);
+) -> Result<(), SiteError> {
+    let atom_entries = render_atom_entries_xml(post_items);
     let updated = post_items
         .first()
         .map(|m| m.content_publish_timestamp())
         .unwrap_or_else(|| Utc::now().to_rfc3339());
-    let mut atom_context = default_context(&site, &site.full_title);
+    let mut atom_context = default_context(site, &site.full_title);
     atom_context.insert("link", "/");
     atom_context.insert("updated", &updated);
     atom_context.insert("entries", &atom_entries);
-    let rendered_atom = render_template(&tera, "atom.xml", &atom_context)?;
-    fs::write(tmp_root.join("atom.xml"), rendered_atom.as_bytes())
-        .await
-        .map_err(|error| error.to_string())?;
+    let rendered_atom = render_template(tera, "atom.xml", &atom_context)?;
+    fs::write(tmp_root.join("atom.xml"), rendered_atom.as_bytes()).await?;
     Ok(())
 }
 
@@ -163,16 +154,14 @@ async fn write_rss(
     tera: &Tera,
     site: &entities::site::Model,
     post_items: &[entities::content_item::Model],
-) -> Result<(), String> {
-    let rss_items = render_rss_items_xml(&post_items);
-    let mut rss_context = default_context(&site, &site.full_title);
+) -> Result<(), SiteError> {
+    let rss_items = render_rss_items_xml(post_items);
+    let mut rss_context = default_context(site, &site.full_title);
     rss_context.insert("link", "/");
     rss_context.insert("updated", &Utc::now().to_rfc2822());
     rss_context.insert("items", &rss_items);
-    let rendered_rss = render_template(&tera, "rss.xml", &rss_context)?;
-    fs::write(tmp_root.join("rss.xml"), rendered_rss.as_bytes())
-        .await
-        .map_err(|error| error.to_string())?;
+    let rendered_rss = render_template(tera, "rss.xml", &rss_context)?;
+    fs::write(tmp_root.join("rss.xml"), rendered_rss.as_bytes()).await?;
     Ok(())
 }
 
@@ -181,16 +170,12 @@ async fn write_index(
     tera: &Tera,
     site: &entities::site::Model,
     index_rows: &str,
-) -> Result<(), String> {
-    let mut index_context = default_context(&site, &site.full_title);
+) -> Result<(), SiteError> {
+    let mut index_context = default_context(site, &site.full_title);
     index_context.insert("items", &index_rows);
-    let rendered_index = render_template(&tera, "index.html", &index_context)?;
-    fs::create_dir_all(&tmp_root)
-        .await
-        .map_err(|error| error.to_string())?;
-    fs::write(tmp_root.join("index.html"), rendered_index)
-        .await
-        .map_err(|error| error.to_string())?;
+    let rendered_index = render_template(tera, "index.html", &index_context)?;
+    fs::create_dir_all(&tmp_root).await?;
+    fs::write(tmp_root.join("index.html"), rendered_index).await?;
     Ok(())
 }
 
@@ -198,61 +183,35 @@ async fn write_index(
 pub async fn render_site(
     db: &DatabaseConnection,
     site_id: Uuid,
-    templates_dir: &str,
-    rendered_dir: &str,
-) -> Result<usize, String> {
+    templates_dir: &Path,
+    rendered_dir: &Path,
+) -> Result<usize, SiteError> {
     let site = entities::site::Entity::find_by_id(site_id)
         .one(db)
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "site not found".to_string())?;
+        .await?
+        .ok_or_else(|| SiteError::internal("site not found"))?;
 
     let content_items = entities::content_item::Entity::find()
         .filter(entities::content_item::Column::SiteId.eq(site.id))
         .filter(entities::content_item::Column::Draft.eq(false))
         .order_by_desc(entities::content_item::Column::CreatedAt)
         .all(db)
-        .await
-        .map_err(|error| error.to_string())?;
+        .await?;
     let now = Utc::now();
     let content_items = content_items
         .into_iter()
         .filter(|item| content_is_publishable_at(item, now))
         .collect::<Vec<_>>();
 
-    let template_root = Path::new(templates_dir).join(site.template_name.clone());
-    let tera = load_site_templates(
-        &template_root,
-        &[
-            ("post.html", DEFAULT_POST_TEMPLATE),
-            ("page.html", DEFAULT_PAGE_TEMPLATE),
-            ("index.html", DEFAULT_INDEX_TEMPLATE),
-            ("rss.xml", DEFAULT_RSS_TEMPLATE),
-            ("atom.xml", DEFAULT_ATOM_TEMPLATE),
-            ("tag.html", DEFAULT_TAG_TEMPLATE),
-        ],
-    )
-    .await?;
+    let template_root = templates_dir.join(site.template_name.clone());
 
-    let rendered_root = Path::new(rendered_dir).join(site.short_name.clone());
-    let tmp_root = Path::new(rendered_dir).join(format!("{}.tmp", site.short_name));
+    let tera = load_site_templates(&template_root).await?;
 
-    let tmp_parent = tmp_root
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf();
-    fs::create_dir_all(&tmp_parent)
-        .await
-        .map_err(|error| error.to_string())?;
+    let rendered_root = rendered_dir.join(site.short_name.clone());
+    let tmp_root = tempfile::tempdir().map_err(SiteError::internal)?;
 
-    if fs::metadata(&tmp_root).await.is_ok() {
-        fs::remove_dir_all(&tmp_root)
-            .await
-            .map_err(|error| error.to_string())?;
-    }
-    fs::create_dir_all(&tmp_root)
-        .await
-        .map_err(|error| error.to_string())?;
+    // make sure the final path exists
+    fs::create_dir_all(&rendered_root).await?;
 
     let mut files_written = 0usize;
     let mut index_rows = String::new();
@@ -264,18 +223,13 @@ pub async fn render_site(
         let aliases = entities::content_alias::Entity::find()
             .filter(entities::content_alias::Column::ContentId.eq(item.id))
             .all(db)
-            .await
-            .map_err(|error: DbErr| error.to_string())?;
+            .await?;
         for alias in aliases {
             routes.insert(alias.alias_path);
         }
 
         let html = markdown::to_html(&item.page_content);
-        let template = if item.page_type == PageType::Post {
-            "post.html"
-        } else {
-            "page.html"
-        };
+
         let tags = load_tag_names(db, item.id).await?;
         let tag_links = render_tag_links(&tags);
         let mut context = default_context(&site, &item.title);
@@ -291,22 +245,18 @@ pub async fn render_site(
         );
         context.insert("tags", &tags);
         context.insert("tag_links", &tag_links);
-        let rendered = render_template(&tera, template, &context)?;
+        let rendered = render_template(&tera, item.page_type.template(), &context)?;
 
         for route in routes {
             let route = route.trim_end_matches('/').trim_start_matches('/');
             let output_dir = if route.is_empty() {
-                tmp_root.join("")
+                tmp_root.path().join("")
             } else {
-                tmp_root.join(route)
+                tmp_root.path().join(route)
             };
 
-            fs::create_dir_all(&output_dir)
-                .await
-                .map_err(|error| error.to_string())?;
-            fs::write(output_dir.join("index.html"), rendered.as_bytes())
-                .await
-                .map_err(|error| error.to_string())?;
+            fs::create_dir_all(&output_dir).await?;
+            fs::write(output_dir.join("index.html"), rendered.as_bytes()).await?;
             files_written = files_written.saturating_add(1);
         }
 
@@ -319,7 +269,7 @@ pub async fn render_site(
         ));
     }
 
-    write_index(&tmp_root, &tera, &site, &index_rows).await?;
+    write_index(tmp_root.path(), &tera, &site, &index_rows).await?;
     files_written = files_written.saturating_add(1);
 
     let post_items = content_items
@@ -328,36 +278,30 @@ pub async fn render_site(
         .cloned()
         .collect::<Vec<_>>();
 
-    write_rss(&tmp_root, &tera, &site, &post_items).await?;
+    write_rss(tmp_root.path(), &tera, &site, &post_items).await?;
     files_written = files_written.saturating_add(1);
 
-    write_atom(&tmp_root, &tera, &site, &post_items).await?;
+    write_atom(tmp_root.path(), &tera, &site, &post_items).await?;
     files_written = files_written.saturating_add(1);
 
     let tags = entities::tag::Entity::find()
         .filter(entities::tag::Column::SiteId.eq(site.id))
         .all(db)
-        .await
-        .map_err(|error: DbErr| error.to_string())?;
+        .await?;
 
     for tag in tags {
         let mut tag_rows = String::new();
         let links = entities::content_tag::Entity::find()
             .filter(entities::content_tag::Column::TagId.eq(tag.id))
             .all(db)
-            .await
-            .map_err(|error: DbErr| error.to_string())?;
+            .await?;
 
         for link in links {
             if let Some(content) = entities::content_item::Entity::find_by_id(link.content_id)
+                .filter(entities::content_item::Column::Draft.eq(false))
                 .one(db)
-                .await
-                .map_err(|error| error.to_string())?
+                .await?
             {
-                if content.draft {
-                    continue;
-                }
-
                 tag_rows.push_str(&format!(
                     "<li><a href=\"/{}/\">{}</a></li>",
                     content_primary_route(&content).trim_matches('/'),
@@ -371,21 +315,17 @@ pub async fn render_site(
         tag_context.insert("items", &tag_rows);
         let tag_output = render_template(&tera, "tag.html", &tag_context)?;
         let tag_slug = sanitize_tag_slug(&tag.name);
-        let tag_path = tmp_root.join("tags").join(tag_slug);
+        let tag_path = tmp_root.path().join("tags").join(tag_slug);
 
-        fs::create_dir_all(&tag_path)
-            .await
-            .map_err(|error| error.to_string())?;
-        fs::write(tag_path.join("index.html"), tag_output.as_bytes())
-            .await
-            .map_err(|error| error.to_string())?;
+        fs::create_dir_all(&tag_path).await?;
+        fs::write(tag_path.join("index.html"), tag_output.as_bytes()).await?;
         files_written = files_written.saturating_add(1);
     }
 
     let template_assets = template_root.join("assets");
     copy_directory_recursive(
         &template_assets,
-        &tmp_root.join("assets"),
+        &tmp_root.path().join("assets"),
         &mut files_written,
     )
     .await?;
@@ -395,19 +335,15 @@ pub async fn render_site(
         db,
         site.id,
         uploads_root,
-        &tmp_root.join("media/images"),
+        &tmp_root.path().join("media/images"),
         &mut files_written,
     )
     .await?;
 
     if fs::metadata(&rendered_root).await.is_ok() {
-        fs::remove_dir_all(&rendered_root)
-            .await
-            .map_err(|error| error.to_string())?;
+        fs::remove_dir_all(&rendered_root).await?;
     }
-    fs::rename(&tmp_root, &rendered_root)
-        .await
-        .map_err(|error| error.to_string())?;
+    fs::rename(&tmp_root, &rendered_root).await?;
 
     Ok(files_written)
 }
@@ -417,36 +353,23 @@ pub async fn render_content_preview(
     site_id: Uuid,
     content_id: Uuid,
     templates_dir: &str,
-) -> Result<String, String> {
+) -> Result<String, SiteError> {
     let site = entities::site::Entity::find_by_id(site_id)
         .one(db)
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "site not found".to_string())?;
+        .await?
+        .ok_or_else(|| SiteError::SiteNotFound(site_id.to_string()))?;
 
     let content = entities::content_item::Entity::find_by_id(content_id)
         .filter(entities::content_item::Column::SiteId.eq(site.id))
         .one(db)
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "content not found".to_string())?;
+        .await?
+        .ok_or_else(|| SiteError::ContentNotFound(content_id))?;
 
     let template_root = Path::new(templates_dir).join(site.template_name.clone());
-    let tera = load_site_templates(
-        &template_root,
-        &[
-            ("post.html", DEFAULT_POST_TEMPLATE),
-            ("page.html", DEFAULT_PAGE_TEMPLATE),
-        ],
-    )
-    .await?;
+    let tera = load_site_templates(&template_root).await?;
 
     let html = markdown::to_html(&content.page_content);
-    let template = if content.page_type == PageType::Post {
-        "post.html"
-    } else {
-        "page.html"
-    };
+
     let tags = load_tag_names(db, content.id).await?;
     let tag_links = render_tag_links(&tags);
     let mut context = Context::new();
@@ -465,70 +388,107 @@ pub async fn render_content_preview(
     context.insert("tags", &tags);
     context.insert("tag_links", &tag_links);
 
-    render_template(&tera, template, &context)
+    render_template(&tera, content.page_type.template(), &context)
 }
 
-async fn load_template(
-    template_root: &Path,
-    filename: &str,
-    fallback: &str,
-) -> Result<String, String> {
+async fn load_template(template_root: &Path, filename: &str) -> Result<String, SiteError> {
     let template_path = template_root.join(filename);
     match fs::read_to_string(&template_path).await {
         Ok(template) => Ok(template),
         Err(err) => {
-            warn!(
+            debug!(
                 error=?err,
                 path=?template_path.display(),
                 "Failed to load template, using fallback",
             );
-            Ok(fallback.to_string())
+            let fallback_path = Path::new(SITE_TEMPLATES_DIR).join("default").join(filename);
+            let fallback = fs::read_to_string(fallback_path).await.inspect_err(|err| {
+                error!(
+                    error=?err,
+                    path=?filename,
+                    "Failed to load fallback template"
+                )
+            })?;
+            Ok(fallback)
         }
     }
 }
 
-async fn load_site_templates(
+async fn add_raw_template(
+    tera: &mut Tera,
     template_root: &Path,
-    required_templates: &[(&str, &str)],
-) -> Result<Tera, String> {
+    name: &str,
+    contents: &str,
+) -> Result<(), SiteError> {
+    if let Err(err) = tera.add_raw_template(name, contents) {
+        if let tera::ErrorKind::MissingParent { parent, .. } = &err.kind {
+            if tera
+                .get_template_names()
+                .collect::<Vec<_>>()
+                .contains(&parent.as_str())
+            {
+                error!(
+                    "Parent template {} is reportedly missing but already exists in tera, cannot resolve!",
+                    parent
+                );
+                return Err(SiteError::from(err));
+            }
+            debug!("Need to load a parent first!");
+            let parent_contents = load_template(template_root, parent).await?;
+            Box::pin(add_raw_template(
+                tera,
+                template_root,
+                parent,
+                &parent_contents,
+            ))
+            .await?;
+            tera.add_raw_template(name, contents)
+                .map_err(SiteError::from)
+        } else {
+            Err(SiteError::from(err))
+        }
+    } else {
+        Ok(())
+    }
+}
+
+async fn load_site_templates(template_root: &Path) -> Result<Tera, SiteError> {
     let mut tera = Tera::default();
     tera.autoescape_on(vec![]);
+
     let mut loaded_templates = HashSet::new();
 
-    match fs::read_dir(template_root).await {
-        Ok(mut entries) => {
-            while let Some(entry) = entries
-                .next_entry()
-                .await
-                .map_err(|error| error.to_string())?
-            {
-                let entry_type = entry.file_type().await.map_err(|error| error.to_string())?;
-                if !entry_type.is_file() {
-                    continue;
-                }
-
-                let name = entry.file_name().to_string_lossy().to_string();
-                let content = fs::read_to_string(entry.path())
-                    .await
-                    .map_err(|error| error.to_string())?;
-                tera.add_raw_template(&name, &content)
-                    .map_err(|error| error.to_string())?;
-                loaded_templates.insert(name);
-            }
-        }
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
-        Err(error) => return Err(error.to_string()),
+    for required_file in REQUIRED_TEMPLATES.iter() {
+        let contents = load_template(template_root, required_file).await?;
+        add_raw_template(&mut tera, template_root, required_file, &contents)
+            .await
+            .inspect_err(|error| error!(error=?error, "failed to load required template"))?;
+        loaded_templates.insert(required_file.to_string());
+        info!("Loaded template {}", required_file);
     }
 
-    for (name, fallback) in required_templates {
-        if loaded_templates.contains(*name) {
-            continue;
-        }
+    let mut template_dir_glob = glob::glob(
+        template_root
+            .join("**/*.html")
+            .to_str()
+            .ok_or_else(|| SiteError::internal("invalid template directory path"))?,
+    )
+    .map_err(|error| SiteError::internal(format!("failed to read template directory: {error}")))?;
 
-        let template = load_template(template_root, name, fallback).await?;
-        tera.add_raw_template(name, &template)
-            .map_err(|error| error.to_string())?;
-        loaded_templates.insert((*name).to_string());
+    while let Some(Ok(path)) = template_dir_glob.next() {
+        if path.is_file()
+            && let Some(filename) = path.file_name().and_then(|name| name.to_str())
+            && !loaded_templates.contains(filename)
+            && (filename.ends_with(".html") || filename.ends_with(".xml"))
+        {
+            let contents = fs::read_to_string(&path).await.inspect_err(
+                |err| error!(error=?err, path=?path.display(), "Failed to read template!"),
+            )?;
+            add_raw_template(&mut tera, template_root, filename, &contents).await?;
+
+            loaded_templates.insert(filename.to_string());
+            debug!("Loaded template {}", filename);
+        }
     }
 
     Ok(tera)
@@ -538,28 +498,25 @@ async fn copy_directory_recursive(
     source: &Path,
     destination: &Path,
     files_written: &mut usize,
-) -> Result<(), String> {
+) -> Result<(), SiteError> {
     let mut dirs = vec![(source.to_path_buf(), destination.to_path_buf())];
 
     while let Some((source_path, destination_path)) = dirs.pop() {
         let mut source_dir = match fs::read_dir(&source_path).await {
             Ok(dir) => dir,
-            Err(error) if error.kind() == ErrorKind::NotFound => continue,
-            Err(error) => return Err(error.to_string()),
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                continue;
+            }
+
+            Err(error) => return Err(SiteError::internal(error)),
         };
 
-        fs::create_dir_all(&destination_path)
-            .await
-            .map_err(|error| error.to_string())?;
+        fs::create_dir_all(&destination_path).await?;
 
-        while let Some(entry) = source_dir
-            .next_entry()
-            .await
-            .map_err(|error| error.to_string())?
-        {
+        while let Some(entry) = source_dir.next_entry().await? {
             let next_source = entry.path();
             let next_destination = destination_path.join(entry.file_name());
-            let metadata = entry.metadata().await.map_err(|error| error.to_string())?;
+            let metadata = entry.metadata().await?;
 
             if metadata.is_dir() {
                 dirs.push((next_source, next_destination));
@@ -579,12 +536,11 @@ async fn copy_media_variants(
     source_root: &Path,
     destination_root: &Path,
     files_written: &mut usize,
-) -> Result<(), String> {
+) -> Result<(), SiteError> {
     let assets = entities::asset::Entity::find()
         .filter(entities::asset::Column::SiteId.eq(site_id))
         .all(db)
-        .await
-        .map_err(|error: DbErr| error.to_string())?;
+        .await?;
 
     let mut media_files = HashSet::new();
     for asset in assets.iter() {
@@ -596,8 +552,7 @@ async fn copy_media_variants(
         let variants = entities::asset_variant::Entity::find()
             .filter(entities::asset_variant::Column::AssetId.is_in(asset_ids))
             .all(db)
-            .await
-            .map_err(|error: DbErr| error.to_string())?;
+            .await?;
 
         for variant in variants {
             media_files.insert(variant.filename);
@@ -615,18 +570,14 @@ async fn copy_media_variants(
     Ok(())
 }
 
-async fn copy_file_if_exists(source: &Path, destination: &Path) -> Result<bool, String> {
+async fn copy_file_if_exists(source: &Path, destination: &Path) -> Result<bool, SiteError> {
     match fs::metadata(source).await {
         Ok(metadata) if metadata.is_file() => {
             if let Some(parent) = destination.parent() {
-                fs::create_dir_all(parent)
-                    .await
-                    .map_err(|error| error.to_string())?;
+                fs::create_dir_all(parent).await?;
             }
 
-            fs::copy(source, destination)
-                .await
-                .map_err(|error| error.to_string())?;
+            fs::copy(source, destination).await?;
 
             Ok(true)
         }
@@ -634,9 +585,8 @@ async fn copy_file_if_exists(source: &Path, destination: &Path) -> Result<bool, 
     }
 }
 
-fn render_template(tera: &Tera, name: &str, context: &Context) -> Result<String, String> {
-    tera.render(name, context)
-        .map_err(|error| error.to_string())
+fn render_template(tera: &Tera, name: &str, context: &Context) -> Result<String, SiteError> {
+    tera.render(name, context).map_err(SiteError::from)
 }
 
 fn sanitize_tag_slug(tag_name: &str) -> String {
@@ -661,12 +611,14 @@ fn sanitize_tag_slug(tag_name: &str) -> String {
     }
 }
 
-async fn load_tag_names(db: &DatabaseConnection, content_id: Uuid) -> Result<Vec<String>, String> {
+async fn load_tag_names(
+    db: &DatabaseConnection,
+    content_id: Uuid,
+) -> Result<Vec<String>, SiteError> {
     let links = entities::content_tag::Entity::find()
         .filter(entities::content_tag::Column::ContentId.eq(content_id))
         .all(db)
-        .await
-        .map_err(|error: DbErr| error.to_string())?;
+        .await?;
 
     if links.is_empty() {
         return Ok(Vec::new());
@@ -679,8 +631,7 @@ async fn load_tag_names(db: &DatabaseConnection, content_id: Uuid) -> Result<Vec
     let tags = entities::tag::Entity::find()
         .filter(entities::tag::Column::Id.is_in(tag_ids))
         .all(db)
-        .await
-        .map_err(|error: DbErr| error.to_string())?;
+        .await?;
 
     Ok(tags.into_iter().map(|tag| tag.name).collect())
 }
@@ -741,8 +692,7 @@ fn escape_xml_text(input: &str) -> String {
 }
 
 fn content_is_publishable_at(content: &entities::content_item::Model, now: DateTime<Utc>) -> bool {
-    let timestamp = content.published_at.unwrap_or(content.created_at);
-    timestamp <= now
+    content.published_at.unwrap_or(content.created_at) <= now
 }
 
 /// Creates a site record and returns the persisted row.
@@ -806,7 +756,7 @@ pub async fn list_sites(db: &DatabaseConnection) -> Result<Vec<entities::site::M
 pub async fn create_content<C: ConnectionTrait>(
     db: &C,
     input: NewContent,
-) -> Result<entities::content_item::Model, String> {
+) -> Result<entities::content_item::Model, SiteError> {
     let now = Utc::now();
     let content_id = Uuid::now_v7();
     let revision_id = Uuid::now_v7();
@@ -841,8 +791,7 @@ pub async fn create_content<C: ConnectionTrait>(
         published_at: Set(published_at),
     }
     .insert(db)
-    .await
-    .map_err(|error| error.to_string())?;
+    .await?;
 
     let revision = entities::content_revision::ActiveModel {
         id: Set(revision_id),
@@ -858,8 +807,7 @@ pub async fn create_content<C: ConnectionTrait>(
         created_at: Set(now),
     }
     .insert(db)
-    .await
-    .map_err(|error| error.to_string())?;
+    .await?;
 
     drop(revision);
 
@@ -1032,10 +980,8 @@ pub async fn import_wordpress<C: ConnectionTrait>(
     site_id: Uuid,
     file_path: &str,
     creator_sub: &str,
-) -> Result<usize, String> {
-    let xml = fs::read_to_string(file_path)
-        .await
-        .map_err(|error| error.to_string())?;
+) -> Result<usize, SiteError> {
+    let xml = fs::read_to_string(file_path).await?;
     let items = parse_wordpress_wxr(xml.as_str())?;
     let mut imported = 0usize;
 
@@ -1106,7 +1052,7 @@ pub async fn import_wordpress<C: ConnectionTrait>(
     Ok(imported)
 }
 
-fn parse_wordpress_wxr(xml: &str) -> Result<Vec<WordpressItem>, String> {
+fn parse_wordpress_wxr(xml: &str) -> Result<Vec<WordpressItem>, SiteError> {
     let mut reader = Reader::from_str(xml);
     let mut buf = Vec::new();
     let mut items = Vec::new();
@@ -1151,7 +1097,7 @@ fn parse_wordpress_wxr(xml: &str) -> Result<Vec<WordpressItem>, String> {
                 assign_wordpress_field(&mut current, current_tag.as_str(), text.as_str());
             }
             Ok(Event::Eof) => break,
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(SiteError::from(error)),
             _ => {}
         }
         buf.clear();
@@ -1227,8 +1173,8 @@ fn normalize_slug(value: &str) -> String {
 pub async fn create_alias<C: ConnectionTrait>(
     db: &C,
     input: NewAlias,
-) -> Result<entities::content_alias::Model, String> {
-    let model = entities::content_alias::ActiveModel {
+) -> Result<entities::content_alias::Model, SiteError> {
+    entities::content_alias::ActiveModel {
         id: Set(Uuid::now_v7()),
         content_id: Set(input.content_id),
         site_id: Set(input.site_id),
@@ -1237,9 +1183,7 @@ pub async fn create_alias<C: ConnectionTrait>(
     }
     .insert(db)
     .await
-    .map_err(|error| error.to_string())?;
-
-    Ok(model)
+    .map_err(SiteError::from)
 }
 
 /// Returns all content aliases, optionally scoped to content_id.
@@ -1247,7 +1191,7 @@ pub async fn list_aliases(
     db: &DatabaseConnection,
     site_id: Uuid,
     content_id: Option<Uuid>,
-) -> Result<Vec<entities::content_alias::Model>, String> {
+) -> Result<Vec<entities::content_alias::Model>, SiteError> {
     let query = entities::content_alias::Entity::find()
         .filter(entities::content_alias::Column::SiteId.eq(site_id));
     let query = if let Some(content_id) = content_id {
@@ -1256,39 +1200,33 @@ pub async fn list_aliases(
         query
     };
 
-    let aliases = query.all(db).await.map_err(|error| error.to_string())?;
-
-    Ok(aliases)
+    query.all(db).await.map_err(SiteError::from)
 }
 
 /// Creates a tag record.
 pub async fn create_tag<C: ConnectionTrait>(
     db: &C,
     input: NewTag,
-) -> Result<entities::tag::Model, String> {
+) -> Result<entities::tag::Model, SiteError> {
     let model = entities::tag::ActiveModel {
         id: Set(Uuid::now_v7()),
         site_id: Set(input.site_id),
         name: Set(input.name),
     };
 
-    let model = model.insert(db).await.map_err(|error| error.to_string())?;
-
-    Ok(model)
+    model.insert(db).await.map_err(SiteError::from)
 }
 
 /// Returns all tags for a site.
 pub async fn list_tags(
     db: &DatabaseConnection,
     site_id: Uuid,
-) -> Result<Vec<entities::tag::Model>, String> {
-    let tags = entities::tag::Entity::find()
+) -> Result<Vec<entities::tag::Model>, SiteError> {
+    entities::tag::Entity::find()
         .filter(entities::tag::Column::SiteId.eq(site_id))
         .all(db)
         .await
-        .map_err(|error| error.to_string())?;
-
-    Ok(tags)
+        .map_err(SiteError::from)
 }
 
 /// Adds a tag to content (creates the tag if missing).
@@ -1654,16 +1592,15 @@ pub async fn assign_tags_to_content<C: ConnectionTrait>(
             .map_err(|error| error.to_string())?;
         let tag = match existing_tag {
             Some(tag) => tag,
-            None => {
-                create_tag(
-                    db,
-                    NewTag {
-                        site_id,
-                        name: normalized.clone(),
-                    },
-                )
-                .await?
-            }
+            None => create_tag(
+                db,
+                NewTag {
+                    site_id,
+                    name: normalized.clone(),
+                },
+            )
+            .await
+            .map_err(|err| format!("Failed to create tag: {}", err))?,
         };
 
         let existing_content_tag = entities::content_tag::Entity::find()
@@ -1781,17 +1718,15 @@ pub async fn list_asset_variants(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::test_db_start;
     use crate::entities::audit_event::log_audit_event;
+    use crate::entities::site::get_by_id;
     use crate::entities::user::upsert_user_login;
-    use crate::{db::test_db_start, entities::site::get_by_id};
     use sea_orm::{DatabaseConnection, TransactionTrait};
     use tempfile::TempDir;
     use tokio::fs;
 
-    async fn setup_db() -> DatabaseConnection {
-        test_db_start().await.as_ref().clone()
-    }
-
+    /// test function to create a site with default values for testing
     async fn create_site_fixture(db: &DatabaseConnection) -> entities::site::Model {
         create_site(
             db,
@@ -1818,6 +1753,7 @@ mod tests {
         .expect("failed to create site")
     }
 
+    /// test function to create content with default values for testing
     async fn create_content_fixture(
         db: &DatabaseConnection,
         site_id: Uuid,
@@ -1844,7 +1780,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_audit_events_filters_by_site() {
-        let db = setup_db().await;
+        let db = test_db_start().await;
         let site = create_site_fixture(&db).await;
 
         log_audit_event(&db, "actor", "create", "site", "1", Some(site.id), None)
@@ -1867,7 +1803,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_list_and_get_sites() {
-        let db = setup_db().await;
+        let db = test_db_start().await;
         let site = create_site_fixture(&db).await;
 
         let sites = list_sites(&db).await.expect("failed to list sites");
@@ -1879,7 +1815,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_site_settings_updates_values() {
-        let db = setup_db().await;
+        let db = test_db_start().await;
         let site = create_site_fixture(&db).await;
 
         let updated = update_site_settings(
@@ -1898,7 +1834,7 @@ mod tests {
 
     #[tokio::test]
     async fn transaction_rolls_back_on_error() {
-        let db = setup_db().await;
+        let db = test_db_start().await;
         let txn = db.begin().await.expect("failed to start transaction");
 
         let site_1 = create_site(
@@ -1928,7 +1864,7 @@ mod tests {
 
     #[tokio::test]
     async fn content_lifecycle_and_revisions() {
-        let db = setup_db().await;
+        let db = test_db_start().await;
         let site = create_site_fixture(&db).await;
 
         let content = create_content_fixture(&db, site.id, PageType::Post, "hello", true).await;
@@ -2051,7 +1987,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_and_list_tags() {
-        let db = setup_db().await;
+        let db = test_db_start().await;
         let site = create_site_fixture(&db).await;
 
         let tag = create_tag(
@@ -2087,7 +2023,7 @@ mod tests {
 
     #[tokio::test]
     async fn users_and_memberships() {
-        let db = setup_db().await;
+        let db = test_db_start().await;
         let site = create_site_fixture(&db).await;
 
         let user = entities::user::create_user(&db, "alice")
@@ -2126,7 +2062,7 @@ mod tests {
 
     #[tokio::test]
     async fn assets_variants_and_copy_media() {
-        let db = setup_db().await;
+        let db = test_db_start().await;
         let site = create_site_fixture(&db).await;
 
         let asset = create_asset(
@@ -2202,7 +2138,7 @@ mod tests {
 
     #[tokio::test]
     async fn import_wordpress_creates_content_and_aliases() {
-        let db = setup_db().await;
+        let db = test_db_start().await;
         let site = create_site_fixture(&db).await;
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         let file_path = temp_dir.path().join("import.xml");
@@ -2250,7 +2186,7 @@ mod tests {
 
     #[tokio::test]
     async fn render_site_outputs_files() {
-        let db = setup_db().await;
+        let db = test_db_start().await;
         let site = create_site_fixture(&db).await;
         let templates_dir = TempDir::new().expect("failed to create templates dir");
         let rendered_dir = TempDir::new().expect("failed to create rendered dir");
@@ -2267,17 +2203,9 @@ mod tests {
         .await
         .expect("failed to tag content");
 
-        let files_written = render_site(
-            &db,
-            site.id,
-            templates_dir
-                .path()
-                .to_str()
-                .expect("invalid templates path"),
-            rendered_dir.path().to_str().expect("invalid rendered path"),
-        )
-        .await
-        .expect("failed to render site");
+        let files_written = render_site(&db, site.id, templates_dir.path(), rendered_dir.path())
+            .await
+            .expect("failed to render site");
         assert!(files_written >= 4);
 
         let rendered_root = rendered_dir.path().join(site.short_name);
@@ -2303,7 +2231,7 @@ mod tests {
 
     #[tokio::test]
     async fn render_content_preview_uses_site_template_files() {
-        let db = setup_db().await;
+        let db = test_db_start().await;
         let site = create_site_with_template_fixture(&db, "preview-site", "custom-preview").await;
         let templates_dir = TempDir::new().expect("failed to create templates dir");
         let template_root = templates_dir.path().join("custom-preview");
@@ -2343,7 +2271,7 @@ mod tests {
 
     #[tokio::test]
     async fn render_site_supports_template_inheritance() {
-        let db = setup_db().await;
+        let db = test_db_start().await;
         let site = create_site_with_template_fixture(&db, "render-site", "custom-render").await;
         let templates_dir = TempDir::new().expect("failed to create templates dir");
         let rendered_dir = TempDir::new().expect("failed to create rendered dir");
@@ -2359,7 +2287,7 @@ mod tests {
         .expect("failed to write base template");
         fs::write(
             template_root.join("post.html"),
-            r#"{% extends "base_template.html" %}{% block content %}<article class="post-template">{{title}}</article>{% endblock %}"#,
+            r#"{% extends "base_template.html" %}{% block content %}<article class="post-template">{{page_title}}</article>{% endblock %}"#,
         )
         .await
         .expect("failed to write post template");
@@ -2372,17 +2300,9 @@ mod tests {
 
         let _content = create_content_fixture(&db, site.id, PageType::Post, "hello", false).await;
 
-        render_site(
-            &db,
-            site.id,
-            templates_dir
-                .path()
-                .to_str()
-                .expect("invalid templates path"),
-            rendered_dir.path().to_str().expect("invalid rendered path"),
-        )
-        .await
-        .expect("failed to render site");
+        render_site(&db, site.id, templates_dir.path(), rendered_dir.path())
+            .await
+            .expect("failed to render site");
 
         let rendered_root = rendered_dir.path().join(site.short_name);
         let page_output = fs::read_to_string(rendered_root.join("hello").join("index.html"))

@@ -7,8 +7,8 @@ use crate::errors::SiteError;
 use crate::images::{generate_thumbnail, mime_from_extension};
 use crate::middleware::log_requests;
 use crate::oidc::{
-    OIDC_HTTP_CLIENT, OIDC_SESSION_OIDC_NONCE_KEY, OIDC_SESSION_OIDC_PKCE_KEY,
-    OIDC_SESSION_OIDC_STATE_KEY, admin_login_callback, build_oidc_client,
+    OIDC_SESSION_OIDC_NONCE_KEY, OIDC_SESSION_OIDC_PKCE_KEY, OIDC_SESSION_OIDC_STATE_KEY,
+    admin_login_callback, build_http_client, build_oidc_client,
 };
 use crate::tls::build_tls_config;
 use crate::{
@@ -87,36 +87,108 @@ pub(crate) struct AdminState {
     pub(crate) oidc_client_secret: Option<ClientSecret>,
     pub(crate) oidc_frontend_url: Url,
     pub(crate) oidc_discovery_url: IssuerUrl,
+    pub(crate) oidc_client: Arc<reqwest::Client>,
 }
-
-macro_rules! admin_page_template {
-    ($name:ident, $path:literal) => {
-        #[derive(Template, WebTemplate)]
-        #[template(path = $path)]
-        struct $name {
-            template_shared: AdminTemplateData,
-            heading: String,
-            rows: Vec<AdminRow>,
-            links: Vec<AdminLink>,
-            inline_body: String,
-            pre_body: String,
-        }
-    };
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_index.html")]
+struct AdminIndexTemplate {
+    template_shared: AdminTemplateData,
+    heading: String,
+    rows: Vec<AdminRow>,
+    links: Vec<AdminLink>,
+    inline_body: String,
+    pre_body: String,
 }
-
-admin_page_template!(AdminIndexTemplate, "admin_index.html");
-admin_page_template!(AdminSitesNewTemplate, "admin_sites_new.html");
-admin_page_template!(AdminSearchTemplate, "admin_content_search.html");
-admin_page_template!(AdminContentDetailTemplate, "admin_content_detail.html");
-admin_page_template!(AdminContentAdvancedTemplate, "admin_content_advanced.html");
-admin_page_template!(
-    AdminContentRevisionsTemplate,
-    "admin_content_revisions.html"
-);
-admin_page_template!(AdminRevisionDiffTemplate, "admin_revision_diff.html");
-admin_page_template!(AdminAssetsTemplate, "admin_assets.html");
-admin_page_template!(AdminAssetsNewTemplate, "admin_assets_new.html");
-admin_page_template!(AdminRenderTemplate, "admin_render.html");
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_sites_new.html")]
+struct AdminSitesNewTemplate {
+    template_shared: AdminTemplateData,
+    heading: String,
+    rows: Vec<AdminRow>,
+    links: Vec<AdminLink>,
+    inline_body: String,
+    pre_body: String,
+}
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_content_search.html")]
+struct AdminSearchTemplate {
+    template_shared: AdminTemplateData,
+    heading: String,
+    rows: Vec<AdminRow>,
+    links: Vec<AdminLink>,
+    inline_body: String,
+    pre_body: String,
+}
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_content_detail.html")]
+struct AdminContentDetailTemplate {
+    template_shared: AdminTemplateData,
+    heading: String,
+    rows: Vec<AdminRow>,
+    links: Vec<AdminLink>,
+    inline_body: String,
+    pre_body: String,
+}
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_content_advanced.html")]
+struct AdminContentAdvancedTemplate {
+    template_shared: AdminTemplateData,
+    heading: String,
+    rows: Vec<AdminRow>,
+    links: Vec<AdminLink>,
+    inline_body: String,
+    pre_body: String,
+}
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_content_revisions.html")]
+struct AdminContentRevisionsTemplate {
+    template_shared: AdminTemplateData,
+    heading: String,
+    rows: Vec<AdminRow>,
+    links: Vec<AdminLink>,
+    inline_body: String,
+    pre_body: String,
+}
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_revision_diff.html")]
+struct AdminRevisionDiffTemplate {
+    template_shared: AdminTemplateData,
+    heading: String,
+    rows: Vec<AdminRow>,
+    links: Vec<AdminLink>,
+    inline_body: String,
+    pre_body: String,
+}
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_assets.html")]
+struct AdminAssetsTemplate {
+    template_shared: AdminTemplateData,
+    heading: String,
+    rows: Vec<AdminRow>,
+    links: Vec<AdminLink>,
+    inline_body: String,
+    pre_body: String,
+}
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_assets_new.html")]
+struct AdminAssetsNewTemplate {
+    template_shared: AdminTemplateData,
+    heading: String,
+    rows: Vec<AdminRow>,
+    links: Vec<AdminLink>,
+    inline_body: String,
+    pre_body: String,
+}
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_render.html")]
+struct AdminRenderTemplate {
+    template_shared: AdminTemplateData,
+    heading: String,
+    rows: Vec<AdminRow>,
+    links: Vec<AdminLink>,
+    inline_body: String,
+    pre_body: String,
+}
 
 #[derive(Template, WebTemplate)]
 #[template(path = "admin_content_list.html")]
@@ -369,6 +441,7 @@ pub async fn run_admin_server(
         oidc_frontend_url: oidc.frontend_url.clone(),
         oidc_discovery_url: IssuerUrl::new(oidc.oidc_discovery_url.clone())
             .context("Failed to parse discovery URL")?,
+        oidc_client: Arc::new(build_http_client().context("Failed to build OIDC HTTP client")?),
     };
 
     let pool = db.get_sqlite_connection_pool();
@@ -750,7 +823,7 @@ async fn admin_login(
     State(state): State<AdminState>,
     session: Session,
 ) -> Result<Response, SiteError> {
-    let client = match build_oidc_client(&state, &OIDC_HTTP_CLIENT).await {
+    let client = match build_oidc_client(&state).await {
         Ok(client) => client,
         Err(error) => {
             return Err(SiteError::internal(format!(
@@ -2211,8 +2284,8 @@ async fn admin_site_render(
     render_site(
         state.db.as_ref(),
         site_id,
-        crate::SITE_TEMPLATES_DIR,
-        "./rendered",
+        std::path::Path::new(crate::constants::SITE_TEMPLATES_DIR),
+        std::path::Path::new(crate::constants::RENDERED_DIR),
     )
     .await
     .map_err(|error| SiteError::internal(format!("failed to render site {site_id}: {error}")))
