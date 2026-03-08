@@ -163,6 +163,11 @@ pub(crate) async fn admin_login_callback(
 
     let subject = claims.subject().as_str().to_string();
     let email = claims.email().map(|e| e.as_str());
+    // TODO store the user's display name?
+    // let display_name: Option<&str> = claims
+    //     .name()
+    //     .map(|n| n.get(None).map(|v| v.as_str()))
+    //     .flatten();
     if session
         .insert(SESSION_USER_SUB, subject.clone())
         .await
