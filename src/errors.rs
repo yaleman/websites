@@ -16,6 +16,8 @@ pub enum SiteError {
     Io(String),
     TeraTemplate(tera::Error),
     XmlParsing(String),
+    BadRequest(String),
+    MembershipNotFound(Uuid),
 }
 
 impl SiteError {
@@ -60,6 +62,16 @@ impl IntoResponse for SiteError {
                 Json(json!({"message" :  "XML Parsing Error", "details" : msg})),
             )
                 .into_response(),
+            SiteError::BadRequest(msg) => (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"message" :  "Invalid Input", "details" : msg})),
+            )
+                .into_response(),
+            SiteError::MembershipNotFound(identifier) => (
+                axum::http::StatusCode::NOT_FOUND,
+                Json(json!({"message" :  "Membership Not Found", "identifier" : identifier})),
+            )
+                .into_response(),
         }
     }
 }
@@ -77,6 +89,10 @@ impl std::fmt::Display for SiteError {
             SiteError::SiteNotFound(identifier) => write!(f, "site not found: {identifier}"),
             SiteError::ContentNotFound(identifier) => write!(f, "content not found: {identifier}"),
             SiteError::XmlParsing(msg) => write!(f, "XML parsing error: {msg}"),
+            SiteError::BadRequest(msg) => write!(f, "invalid input: {msg}"),
+            SiteError::MembershipNotFound(identifier) => {
+                write!(f, "membership not found: {identifier}")
+            }
         }
     }
 }

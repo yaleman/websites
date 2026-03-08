@@ -31,3 +31,5 @@ The system manages site metadata, content, tags, assets, and memberships in a SQ
 - 2026-03-07: Replaced raw SQL schema bootstrapping with SeaORM migrations (`sea-orm-migration`) and set SQLite foreign keys via the connection URL.
 - 2026-03-08: Documented the rendering split: admin UI templates use Askama from `templates/`, while site previews and published site output use Tera from `site_templates/`.
 - 2026-03-08: Site previews now rewrite `/assets/...` references to an authenticated preview asset route that serves files from `site_templates/<template>/assets/`.
+- 2026-03-08: Added a global user admin flag that bypasses per-site membership checks for admin routes; site memberships remain limited to viewer/author/editor/owner roles. Published site rendering now copies uploaded media from the resolved runtime upload root instead of assuming a fixed relative path.
+- 2026-03-08: Added a user profile admin view keyed by database user UUID. Global admins can view any user profile, and non-admin users can view only their own profile; the view shows stored user details plus site memberships.

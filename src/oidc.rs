@@ -13,7 +13,7 @@ use tower_sessions::Session;
 
 use crate::{
     constants::{
-        SESSION_OIDC_NONCE_KEY, SESSION_OIDC_PKCE_KEY, SESSION_OIDC_STATE_KEY, SESSION_USER_SUB,
+        SESSION_OIDC_NONCE_KEY, SESSION_OIDC_PKCE_KEY, SESSION_OIDC_STATE_KEY, SESSION_USER,
     },
     entities::user::upsert_user_login,
     errors::SiteError,
@@ -168,15 +168,13 @@ pub(crate) async fn admin_login_callback(
     //     .name()
     //     .map(|n| n.get(None).map(|v| v.as_str()))
     //     .flatten();
-    if session
-        .insert(SESSION_USER_SUB, subject.clone())
-        .await
-        .is_err()
-    {
-        return Err(SiteError::internal("failed to store session".to_string()));
-    }
+    let user = upsert_user_login(state.db.as_ref(), &subject, email).await?;
 
-    upsert_user_login(state.db.as_ref(), &subject, email).await?;
+    if let Err(err) = session.insert(SESSION_USER, user).await {
+        return Err(SiteError::internal(format!(
+            "failed to store user session: {err}"
+        )));
+    }
 
     Ok(Redirect::to("/admin"))
 }

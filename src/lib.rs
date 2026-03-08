@@ -9,8 +9,9 @@ use sea_orm::{
     EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
 };
 use std::collections::HashSet;
+use std::env;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tera::{Context, Tera};
 use tokio::fs;
@@ -102,6 +103,35 @@ pub struct UpdateContent {
     pub editor_sub: String,
 }
 
+pub fn resolve_upload_root() -> PathBuf {
+    if let Ok(value) = env::var("WEBSITES_UPLOAD_ROOT") {
+        let path = PathBuf::from(value);
+        if path.exists() {
+            return path;
+        }
+    }
+
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut candidates = vec![cwd.join("uploads/media-storage")];
+
+    if let Ok(exe) = env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        candidates.push(dir.join("uploads/media-storage"));
+        if let Some(parent) = dir.parent() {
+            candidates.push(parent.join("uploads/media-storage"));
+        }
+    }
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+
+    cwd.join("uploads/media-storage")
+}
+
 /// Returns audit events, optionally filtered by site_id.
 pub async fn list_audit_events(
     db: &DatabaseConnection,
@@ -186,6 +216,7 @@ pub async fn render_site(
     site_id: Uuid,
     templates_dir: &Path,
     rendered_dir: &Path,
+    upload_root: &Path,
 ) -> Result<usize, SiteError> {
     let site = entities::site::Entity::find_by_id(site_id)
         .one(db)
@@ -331,11 +362,10 @@ pub async fn render_site(
     )
     .await?;
 
-    let uploads_root = Path::new("uploads/media-storage");
     copy_media_variants(
         db,
         site.id,
-        uploads_root,
+        upload_root,
         &tmp_root.path().join("media/images"),
         &mut files_written,
     )
@@ -1410,7 +1440,13 @@ pub async fn list_users(db: &DatabaseConnection) -> Result<Vec<entities::user::M
 pub async fn create_membership<C: ConnectionTrait>(
     db: &C,
     input: NewMembership,
-) -> Result<entities::site_membership::Model, String> {
+) -> Result<entities::site_membership::Model, SiteError> {
+    if input.role.is_admin() {
+        return Err(SiteError::BadRequest(
+            "cannot assign admin role to a site".to_string(),
+        ));
+    }
+
     let model = entities::site_membership::ActiveModel {
         id: Set(Uuid::now_v7()),
         site_id: Set(input.site_id),
@@ -1418,7 +1454,7 @@ pub async fn create_membership<C: ConnectionTrait>(
         role: Set(input.role),
     };
 
-    let model = model.insert(db).await.map_err(|error| error.to_string())?;
+    let model = model.insert(db).await.map_err(SiteError::from)?;
 
     Ok(model)
 }
@@ -1441,30 +1477,41 @@ pub async fn list_memberships(
 pub async fn get_membership_by_id<C: ConnectionTrait>(
     db: &C,
     membership_id: Uuid,
-) -> Result<Option<entities::site_membership::Model>, String> {
+) -> Result<Option<entities::site_membership::Model>, SiteError> {
     entities::site_membership::Entity::find_by_id(membership_id)
         .one(db)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(SiteError::from)
 }
 
 /// Returns a user by subject.
 pub async fn get_user_by_subject<C: ConnectionTrait>(
     db: &C,
     subject: &str,
-) -> Result<Option<entities::user::Model>, String> {
+) -> Result<Option<entities::user::Model>, SiteError> {
     entities::user::Entity::find()
         .filter(entities::user::Column::Subject.eq(subject.to_string()))
         .one(db)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(SiteError::from)
+}
+
+/// Returns a user by id.
+pub async fn get_user_by_id<C: ConnectionTrait>(
+    db: &C,
+    user_id: Uuid,
+) -> Result<Option<entities::user::Model>, SiteError> {
+    entities::user::Entity::find_by_id(user_id)
+        .one(db)
+        .await
+        .map_err(SiteError::from)
 }
 
 /// Returns users by id.
 pub async fn list_users_by_ids<C: ConnectionTrait>(
     db: &C,
     user_ids: Vec<Uuid>,
-) -> Result<Vec<entities::user::Model>, String> {
+) -> Result<Vec<entities::user::Model>, SiteError> {
     if user_ids.is_empty() {
         return Ok(vec![]);
     }
@@ -1473,7 +1520,19 @@ pub async fn list_users_by_ids<C: ConnectionTrait>(
         .filter(entities::user::Column::Id.is_in(user_ids))
         .all(db)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(SiteError::from)
+}
+
+/// Returns memberships for a user.
+pub async fn list_memberships_for_user_id<C: ConnectionTrait>(
+    db: &C,
+    user_id: Uuid,
+) -> Result<Vec<entities::site_membership::Model>, SiteError> {
+    entities::site_membership::Entity::find()
+        .filter(entities::site_membership::Column::UserId.eq(user_id))
+        .all(db)
+        .await
+        .map_err(SiteError::from)
 }
 
 /// Returns a membership for a site and user subject.
@@ -1481,7 +1540,7 @@ pub async fn get_membership_for_subject<C: ConnectionTrait>(
     db: &C,
     site_id: Uuid,
     subject: &str,
-) -> Result<Option<entities::site_membership::Model>, String> {
+) -> Result<Option<entities::site_membership::Model>, SiteError> {
     let Some(user) = get_user_by_subject(db, subject).await? else {
         return Ok(None);
     };
@@ -1491,14 +1550,14 @@ pub async fn get_membership_for_subject<C: ConnectionTrait>(
         .filter(entities::site_membership::Column::UserId.eq(user.id))
         .one(db)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(SiteError::from)
 }
 
 /// Returns all sites where the subject has a membership.
 pub async fn list_sites_for_subject(
     db: &DatabaseConnection,
     subject: &str,
-) -> Result<Vec<entities::site::Model>, String> {
+) -> Result<Vec<entities::site::Model>, SiteError> {
     let Some(user) = get_user_by_subject(db, subject).await? else {
         return Ok(vec![]);
     };
@@ -1506,8 +1565,7 @@ pub async fn list_sites_for_subject(
     let memberships = entities::site_membership::Entity::find()
         .filter(entities::site_membership::Column::UserId.eq(user.id))
         .all(db)
-        .await
-        .map_err(|error| error.to_string())?;
+        .await?;
 
     if memberships.is_empty() {
         return Ok(vec![]);
@@ -1522,7 +1580,7 @@ pub async fn list_sites_for_subject(
         .order_by_asc(entities::site::Column::ShortName)
         .all(db)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(SiteError::from)?;
 
     Ok(sites)
 }
@@ -1532,13 +1590,19 @@ pub async fn update_membership_role<C: ConnectionTrait>(
     db: &C,
     membership_id: Uuid,
     role: SiteRole,
-) -> Result<entities::site_membership::Model, String> {
+) -> Result<entities::site_membership::Model, SiteError> {
+    if role.is_admin() {
+        return Err(SiteError::BadRequest(
+            "cannot assign admin role to a site".to_string(),
+        ));
+    }
+
     let Some(membership) = get_membership_by_id(db, membership_id).await? else {
-        return Err("membership not found".to_string());
+        return Err(SiteError::MembershipNotFound(membership_id));
     };
     let mut active = membership.into_active_model();
     active.role = Set(role);
-    active.update(db).await.map_err(|error| error.to_string())
+    active.update(db).await.map_err(SiteError::from)
 }
 
 /// Deletes the membership by id.
@@ -2015,7 +2079,7 @@ mod tests {
         let db = test_db_start().await;
         let site = create_site_fixture(&db).await;
 
-        let user = entities::user::create_user(&db, "alice", None)
+        let user = upsert_user_login(&db, "alice", None)
             .await
             .expect("failed to create user");
 
@@ -2023,11 +2087,15 @@ mod tests {
             .await
             .expect("failed to upsert user login");
         assert_eq!(updated.id, user.id);
+        assert!(updated.admin);
+
         assert!(updated.last_login_at.is_some());
 
-        let _ = upsert_user_login(&db, "bob", None)
+        let bob = upsert_user_login(&db, "bob", None)
             .await
             .expect("failed to insert user login");
+
+        assert!(!bob.admin);
 
         let users = list_users(&db).await.expect("failed to list users");
         assert_eq!(users.len(), 2);
@@ -2047,6 +2115,28 @@ mod tests {
             .await
             .expect("failed to list memberships");
         assert!(memberships.iter().any(|model| model.id == membership.id));
+
+        let fetched_user = get_user_by_id(&db, user.id)
+            .await
+            .expect("failed to fetch user by id");
+        assert_eq!(fetched_user.map(|value| value.id), Some(user.id));
+
+        let user_memberships = list_memberships_for_user_id(&db, user.id)
+            .await
+            .expect("failed to list memberships by user id");
+        assert_eq!(user_memberships.len(), 1);
+        assert_eq!(user_memberships[0].id, membership.id);
+
+        let admin_membership = create_membership(
+            &db,
+            NewMembership {
+                site_id: site.id,
+                user_id: bob.id,
+                role: SiteRole::Admin,
+            },
+        )
+        .await;
+        assert!(admin_membership.is_err());
     }
 
     #[tokio::test]
@@ -2179,6 +2269,7 @@ mod tests {
         let site = create_site_fixture(&db).await;
         let templates_dir = TempDir::new().expect("failed to create templates dir");
         let rendered_dir = TempDir::new().expect("failed to create rendered dir");
+        let upload_root = TempDir::new().expect("failed to create upload dir");
 
         let content = create_content_fixture(&db, site.id, PageType::Post, "hello", false).await;
         let _ = add_content_tag(
@@ -2192,9 +2283,15 @@ mod tests {
         .await
         .expect("failed to tag content");
 
-        let files_written = render_site(&db, site.id, templates_dir.path(), rendered_dir.path())
-            .await
-            .expect("failed to render site");
+        let files_written = render_site(
+            &db,
+            site.id,
+            templates_dir.path(),
+            rendered_dir.path(),
+            upload_root.path(),
+        )
+        .await
+        .expect("failed to render site");
         assert!(files_written >= 4);
 
         let rendered_root = rendered_dir.path().join(site.short_name);
@@ -2264,6 +2361,7 @@ mod tests {
         let site = create_site_with_template_fixture(&db, "render-site", "custom-render").await;
         let templates_dir = TempDir::new().expect("failed to create templates dir");
         let rendered_dir = TempDir::new().expect("failed to create rendered dir");
+        let upload_root = TempDir::new().expect("failed to create upload dir");
         let template_root = templates_dir.path().join("custom-render");
         fs::create_dir_all(&template_root)
             .await
@@ -2289,9 +2387,15 @@ mod tests {
 
         let _content = create_content_fixture(&db, site.id, PageType::Post, "hello", false).await;
 
-        render_site(&db, site.id, templates_dir.path(), rendered_dir.path())
-            .await
-            .expect("failed to render site");
+        render_site(
+            &db,
+            site.id,
+            templates_dir.path(),
+            rendered_dir.path(),
+            upload_root.path(),
+        )
+        .await
+        .expect("failed to render site");
 
         let rendered_root = rendered_dir.path().join(site.short_name);
         let page_output = fs::read_to_string(rendered_root.join("hello").join("index.html"))
@@ -2305,5 +2409,79 @@ mod tests {
         assert!(page_output.contains("shell"));
         assert!(index_output.contains("index-template"));
         assert!(index_output.contains("shell"));
+    }
+
+    #[tokio::test]
+    async fn render_site_copies_media_from_upload_root() {
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+        let templates_dir = TempDir::new().expect("failed to create templates dir");
+        let rendered_dir = TempDir::new().expect("failed to create rendered dir");
+        let upload_root = TempDir::new().expect("failed to create upload dir");
+
+        let _content = create_content_fixture(&db, site.id, PageType::Post, "hello", false).await;
+        let asset = create_asset(
+            &db,
+            NewAsset {
+                site_id: site.id,
+                uploader_sub: "uploader".to_string(),
+                original_filename: "photo.jpg".to_string(),
+                storage_basename: "asset.jpg".to_string(),
+                mime_type: "image/jpeg".to_string(),
+                byte_length: 10,
+                width: Some(100),
+                height: Some(200),
+            },
+        )
+        .await
+        .expect("failed to create asset");
+        create_asset_variant(
+            &db,
+            NewAssetVariant {
+                asset_id: asset.id,
+                variant_kind: "thumbnail".to_string(),
+                filename: "asset-thumb.jpg".to_string(),
+                mime_type: "image/jpeg".to_string(),
+                byte_length: 5,
+                width: Some(50),
+                height: Some(50),
+            },
+        )
+        .await
+        .expect("failed to create asset variant");
+
+        fs::write(upload_root.path().join("asset.jpg"), b"asset data")
+            .await
+            .expect("failed to write asset file");
+        fs::write(upload_root.path().join("asset-thumb.jpg"), b"thumb data")
+            .await
+            .expect("failed to write variant file");
+
+        render_site(
+            &db,
+            site.id,
+            templates_dir.path(),
+            rendered_dir.path(),
+            upload_root.path(),
+        )
+        .await
+        .expect("failed to render site");
+
+        let rendered_root = rendered_dir.path().join(site.short_name);
+        assert!(
+            fs::metadata(rendered_root.join("media").join("images").join("asset.jpg"))
+                .await
+                .is_ok()
+        );
+        assert!(
+            fs::metadata(
+                rendered_root
+                    .join("media")
+                    .join("images")
+                    .join("asset-thumb.jpg")
+            )
+            .await
+            .is_ok()
+        );
     }
 }
