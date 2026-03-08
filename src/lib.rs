@@ -9,11 +9,10 @@ use sea_orm::{
 use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::Path;
-use std::result::Result as StdResult;
 use std::str::FromStr;
 use tera::{Context, Tera};
 use tokio::fs;
-use tracing::error;
+use tracing::{error, warn};
 use url::Url;
 use uuid::Uuid;
 
@@ -102,7 +101,7 @@ pub struct UpdateContent {
 pub async fn list_audit_events(
     db: &DatabaseConnection,
     site_id: Option<Uuid>,
-) -> StdResult<Vec<entities::audit_event::Model>, String> {
+) -> Result<Vec<entities::audit_event::Model>, String> {
     let query = entities::audit_event::Entity::find();
     let query = if let Some(site_id) = site_id {
         query.filter(entities::audit_event::Column::SiteId.eq(site_id))
@@ -132,7 +131,7 @@ pub async fn render_site(
     site_id: Uuid,
     templates_dir: &str,
     rendered_dir: &str,
-) -> StdResult<usize, String> {
+) -> Result<usize, String> {
     let site = entities::site::Entity::find_by_id(site_id)
         .one(db)
         .await
@@ -381,7 +380,7 @@ pub async fn render_content_preview(
     site_id: Uuid,
     content_id: Uuid,
     templates_dir: &str,
-) -> StdResult<String, String> {
+) -> Result<String, String> {
     let site = entities::site::Entity::find_by_id(site_id)
         .one(db)
         .await
@@ -436,18 +435,25 @@ async fn load_template(
     template_root: &Path,
     filename: &str,
     fallback: &str,
-) -> StdResult<String, String> {
+) -> Result<String, String> {
     let template_path = template_root.join(filename);
     match fs::read_to_string(&template_path).await {
         Ok(template) => Ok(template),
-        Err(_) => Ok(fallback.to_string()),
+        Err(err) => {
+            warn!(
+                error=?err,
+                path=?template_path.display(),
+                "Failed to load template, using fallback",
+            );
+            Ok(fallback.to_string())
+        }
     }
 }
 
 async fn load_site_templates(
     template_root: &Path,
     required_templates: &[(&str, &str)],
-) -> StdResult<Tera, String> {
+) -> Result<Tera, String> {
     let mut tera = Tera::default();
     tera.autoescape_on(vec![]);
     let mut loaded_templates = HashSet::new();
@@ -495,7 +501,7 @@ async fn copy_directory_recursive(
     source: &Path,
     destination: &Path,
     files_written: &mut usize,
-) -> StdResult<(), String> {
+) -> Result<(), String> {
     let mut dirs = vec![(source.to_path_buf(), destination.to_path_buf())];
 
     while let Some((source_path, destination_path)) = dirs.pop() {
@@ -536,7 +542,7 @@ async fn copy_media_variants(
     source_root: &Path,
     destination_root: &Path,
     files_written: &mut usize,
-) -> StdResult<(), String> {
+) -> Result<(), String> {
     let assets = entities::asset::Entity::find()
         .filter(entities::asset::Column::SiteId.eq(site_id))
         .all(db)
@@ -572,7 +578,7 @@ async fn copy_media_variants(
     Ok(())
 }
 
-async fn copy_file_if_exists(source: &Path, destination: &Path) -> StdResult<bool, String> {
+async fn copy_file_if_exists(source: &Path, destination: &Path) -> Result<bool, String> {
     match fs::metadata(source).await {
         Ok(metadata) if metadata.is_file() => {
             if let Some(parent) = destination.parent() {
@@ -591,7 +597,7 @@ async fn copy_file_if_exists(source: &Path, destination: &Path) -> StdResult<boo
     }
 }
 
-fn render_template(tera: &Tera, name: &str, context: &Context) -> StdResult<String, String> {
+fn render_template(tera: &Tera, name: &str, context: &Context) -> Result<String, String> {
     tera.render(name, context)
         .map_err(|error| error.to_string())
 }
@@ -618,10 +624,7 @@ fn sanitize_tag_slug(tag_name: &str) -> String {
     }
 }
 
-async fn load_tag_names(
-    db: &DatabaseConnection,
-    content_id: Uuid,
-) -> StdResult<Vec<String>, String> {
+async fn load_tag_names(db: &DatabaseConnection, content_id: Uuid) -> Result<Vec<String>, String> {
     let links = entities::content_tag::Entity::find()
         .filter(entities::content_tag::Column::ContentId.eq(content_id))
         .all(db)
@@ -711,7 +714,7 @@ pub async fn create_site<C: ConnectionTrait>(
     short_name: String,
     full_title: String,
     template_name: String,
-) -> StdResult<entities::site::Model, String> {
+) -> Result<entities::site::Model, String> {
     let now = Utc::now();
     let model = entities::site::ActiveModel {
         id: Set(Uuid::now_v7()),
@@ -736,7 +739,7 @@ pub async fn update_site_settings<C: ConnectionTrait>(
     site_id: Uuid,
     full_title: String,
     template_name: String,
-) -> StdResult<entities::site::Model, String> {
+) -> Result<entities::site::Model, String> {
     let existing = entities::site::Entity::find_by_id(site_id)
         .one(db)
         .await
@@ -753,7 +756,7 @@ pub async fn update_site_settings<C: ConnectionTrait>(
 }
 
 /// Returns all sites ordered by short name.
-pub async fn list_sites(db: &DatabaseConnection) -> StdResult<Vec<entities::site::Model>, String> {
+pub async fn list_sites(db: &DatabaseConnection) -> Result<Vec<entities::site::Model>, String> {
     let sites = entities::site::Entity::find()
         .all(db)
         .await
@@ -766,7 +769,7 @@ pub async fn list_sites(db: &DatabaseConnection) -> StdResult<Vec<entities::site
 pub async fn create_content<C: ConnectionTrait>(
     db: &C,
     input: NewContent,
-) -> StdResult<entities::content_item::Model, String> {
+) -> Result<entities::content_item::Model, String> {
     let now = Utc::now();
     let content_id = Uuid::now_v7();
     let revision_id = Uuid::now_v7();
@@ -830,7 +833,7 @@ pub async fn create_content<C: ConnectionTrait>(
 pub async fn update_content<C: ConnectionTrait>(
     db: &C,
     input: UpdateContent,
-) -> StdResult<entities::content_item::Model, String> {
+) -> Result<entities::content_item::Model, String> {
     let now = Utc::now();
     let existing = entities::content_item::Entity::find_by_id(input.content_id)
         .one(db)
@@ -940,7 +943,7 @@ pub async fn list_content(
     db: &DatabaseConnection,
     site_id: Uuid,
     page_type: Option<PageType>,
-) -> StdResult<Vec<entities::content_item::Model>, String> {
+) -> Result<Vec<entities::content_item::Model>, String> {
     let query = entities::content_item::Entity::find()
         .filter(entities::content_item::Column::SiteId.eq(site_id));
     let query = if let Some(filter) = page_type {
@@ -959,7 +962,7 @@ pub async fn search_content(
     db: &DatabaseConnection,
     site_id: Uuid,
     query: &str,
-) -> StdResult<Vec<entities::content_item::Model>, String> {
+) -> Result<Vec<entities::content_item::Model>, String> {
     let condition = Condition::any()
         .add(entities::content_item::Column::Title.contains(query))
         .add(entities::content_item::Column::Slug.contains(query))
@@ -992,7 +995,7 @@ pub async fn import_wordpress<C: ConnectionTrait>(
     site_id: Uuid,
     file_path: &str,
     creator_sub: &str,
-) -> StdResult<usize, String> {
+) -> Result<usize, String> {
     let xml = fs::read_to_string(file_path)
         .await
         .map_err(|error| error.to_string())?;
@@ -1066,7 +1069,7 @@ pub async fn import_wordpress<C: ConnectionTrait>(
     Ok(imported)
 }
 
-fn parse_wordpress_wxr(xml: &str) -> StdResult<Vec<WordpressItem>, String> {
+fn parse_wordpress_wxr(xml: &str) -> Result<Vec<WordpressItem>, String> {
     let mut reader = Reader::from_str(xml);
     let mut buf = Vec::new();
     let mut items = Vec::new();
@@ -1187,7 +1190,7 @@ fn normalize_slug(value: &str) -> String {
 pub async fn create_alias<C: ConnectionTrait>(
     db: &C,
     input: NewAlias,
-) -> StdResult<entities::content_alias::Model, String> {
+) -> Result<entities::content_alias::Model, String> {
     let model = entities::content_alias::ActiveModel {
         id: Set(Uuid::now_v7()),
         content_id: Set(input.content_id),
@@ -1207,7 +1210,7 @@ pub async fn list_aliases(
     db: &DatabaseConnection,
     site_id: Uuid,
     content_id: Option<Uuid>,
-) -> StdResult<Vec<entities::content_alias::Model>, String> {
+) -> Result<Vec<entities::content_alias::Model>, String> {
     let query = entities::content_alias::Entity::find()
         .filter(entities::content_alias::Column::SiteId.eq(site_id));
     let query = if let Some(content_id) = content_id {
@@ -1225,7 +1228,7 @@ pub async fn list_aliases(
 pub async fn create_tag<C: ConnectionTrait>(
     db: &C,
     input: NewTag,
-) -> StdResult<entities::tag::Model, String> {
+) -> Result<entities::tag::Model, String> {
     let model = entities::tag::ActiveModel {
         id: Set(Uuid::now_v7()),
         site_id: Set(input.site_id),
@@ -1241,7 +1244,7 @@ pub async fn create_tag<C: ConnectionTrait>(
 pub async fn list_tags(
     db: &DatabaseConnection,
     site_id: Uuid,
-) -> StdResult<Vec<entities::tag::Model>, String> {
+) -> Result<Vec<entities::tag::Model>, String> {
     let tags = entities::tag::Entity::find()
         .filter(entities::tag::Column::SiteId.eq(site_id))
         .all(db)
@@ -1255,7 +1258,7 @@ pub async fn list_tags(
 pub async fn add_content_tag<C: ConnectionTrait>(
     db: &C,
     input: NewContentTag,
-) -> StdResult<entities::content_tag::Model, String> {
+) -> Result<entities::content_tag::Model, String> {
     let content = entities::content_item::Entity::find_by_id(input.content_id)
         .one(db)
         .await
@@ -1301,7 +1304,7 @@ pub async fn add_content_tag<C: ConnectionTrait>(
 pub async fn list_content_tags(
     db: &DatabaseConnection,
     content_id: Uuid,
-) -> StdResult<Vec<entities::tag::Model>, String> {
+) -> Result<Vec<entities::tag::Model>, String> {
     let links = entities::content_tag::Entity::find()
         .filter(entities::content_tag::Column::ContentId.eq(content_id))
         .all(db)
@@ -1329,7 +1332,7 @@ pub async fn list_content_tags(
 pub async fn list_revision_aliases(
     db: &DatabaseConnection,
     revision_id: Uuid,
-) -> StdResult<Vec<entities::content_revision_alias::Model>, String> {
+) -> Result<Vec<entities::content_revision_alias::Model>, String> {
     let revision_aliases = entities::content_revision_alias::Entity::find()
         .filter(entities::content_revision_alias::Column::RevisionId.eq(revision_id))
         .all(db)
@@ -1343,7 +1346,7 @@ pub async fn list_revision_aliases(
 pub async fn list_revision_tags(
     db: &DatabaseConnection,
     revision_id: Uuid,
-) -> StdResult<Vec<entities::tag::Model>, String> {
+) -> Result<Vec<entities::tag::Model>, String> {
     let links = entities::content_revision_tag::Entity::find()
         .filter(entities::content_revision_tag::Column::RevisionId.eq(revision_id))
         .all(db)
@@ -1371,7 +1374,7 @@ pub async fn list_revision_tags(
 pub async fn list_revisions(
     db: &DatabaseConnection,
     content_id: Uuid,
-) -> StdResult<Vec<entities::content_revision::Model>, String> {
+) -> Result<Vec<entities::content_revision::Model>, String> {
     let revisions = entities::content_revision::Entity::find()
         .filter(entities::content_revision::Column::ContentId.eq(content_id))
         .order_by_desc(entities::content_revision::Column::RevisionNumber)
@@ -1386,7 +1389,7 @@ pub async fn list_revisions(
 pub async fn get_revision(
     db: &DatabaseConnection,
     revision_id: Uuid,
-) -> StdResult<entities::content_revision::Model, String> {
+) -> Result<entities::content_revision::Model, String> {
     let revision = entities::content_revision::Entity::find_by_id(revision_id)
         .one(db)
         .await
@@ -1401,7 +1404,7 @@ pub async fn get_revision_by_number<C: ConnectionTrait>(
     db: &C,
     content_id: Uuid,
     revision_number: i32,
-) -> StdResult<Option<entities::content_revision::Model>, String> {
+) -> Result<Option<entities::content_revision::Model>, String> {
     let revision = entities::content_revision::Entity::find()
         .filter(entities::content_revision::Column::ContentId.eq(content_id))
         .filter(entities::content_revision::Column::RevisionNumber.eq(revision_number))
@@ -1431,7 +1434,7 @@ fn content_date_path(date: &DateTime<Utc>) -> String {
 pub async fn create_user<C: ConnectionTrait>(
     db: &C,
     input: NewUser,
-) -> StdResult<entities::user::Model, String> {
+) -> Result<entities::user::Model, String> {
     let model = entities::user::ActiveModel {
         id: Set(Uuid::now_v7()),
         subject: Set(input.subject),
@@ -1445,7 +1448,7 @@ pub async fn create_user<C: ConnectionTrait>(
 }
 
 /// Returns all users.
-pub async fn list_users(db: &DatabaseConnection) -> StdResult<Vec<entities::user::Model>, String> {
+pub async fn list_users(db: &DatabaseConnection) -> Result<Vec<entities::user::Model>, String> {
     let users = entities::user::Entity::find()
         .all(db)
         .await
@@ -1458,7 +1461,7 @@ pub async fn list_users(db: &DatabaseConnection) -> StdResult<Vec<entities::user
 pub async fn upsert_user_login<C: ConnectionTrait>(
     db: &C,
     subject: &str,
-) -> StdResult<entities::user::Model, String> {
+) -> Result<entities::user::Model, String> {
     let existing = entities::user::Entity::find()
         .filter(entities::user::Column::Subject.eq(subject.to_string()))
         .one(db)
@@ -1488,7 +1491,7 @@ pub async fn upsert_user_login<C: ConnectionTrait>(
 pub async fn create_membership<C: ConnectionTrait>(
     db: &C,
     input: NewMembership,
-) -> StdResult<entities::site_membership::Model, String> {
+) -> Result<entities::site_membership::Model, String> {
     let model = entities::site_membership::ActiveModel {
         id: Set(Uuid::now_v7()),
         site_id: Set(input.site_id),
@@ -1505,7 +1508,7 @@ pub async fn create_membership<C: ConnectionTrait>(
 pub async fn list_memberships(
     db: &DatabaseConnection,
     site_id: Uuid,
-) -> StdResult<Vec<entities::site_membership::Model>, String> {
+) -> Result<Vec<entities::site_membership::Model>, String> {
     let memberships = entities::site_membership::Entity::find()
         .filter(entities::site_membership::Column::SiteId.eq(site_id))
         .all(db)
@@ -1519,7 +1522,7 @@ pub async fn list_memberships(
 pub async fn get_membership_by_id<C: ConnectionTrait>(
     db: &C,
     membership_id: Uuid,
-) -> StdResult<Option<entities::site_membership::Model>, String> {
+) -> Result<Option<entities::site_membership::Model>, String> {
     entities::site_membership::Entity::find_by_id(membership_id)
         .one(db)
         .await
@@ -1530,7 +1533,7 @@ pub async fn get_membership_by_id<C: ConnectionTrait>(
 pub async fn get_user_by_subject<C: ConnectionTrait>(
     db: &C,
     subject: &str,
-) -> StdResult<Option<entities::user::Model>, String> {
+) -> Result<Option<entities::user::Model>, String> {
     entities::user::Entity::find()
         .filter(entities::user::Column::Subject.eq(subject.to_string()))
         .one(db)
@@ -1542,7 +1545,7 @@ pub async fn get_user_by_subject<C: ConnectionTrait>(
 pub async fn list_users_by_ids<C: ConnectionTrait>(
     db: &C,
     user_ids: Vec<Uuid>,
-) -> StdResult<Vec<entities::user::Model>, String> {
+) -> Result<Vec<entities::user::Model>, String> {
     if user_ids.is_empty() {
         return Ok(vec![]);
     }
@@ -1559,7 +1562,7 @@ pub async fn get_membership_for_subject<C: ConnectionTrait>(
     db: &C,
     site_id: Uuid,
     subject: &str,
-) -> StdResult<Option<entities::site_membership::Model>, String> {
+) -> Result<Option<entities::site_membership::Model>, String> {
     let Some(user) = get_user_by_subject(db, subject).await? else {
         return Ok(None);
     };
@@ -1576,7 +1579,7 @@ pub async fn get_membership_for_subject<C: ConnectionTrait>(
 pub async fn list_sites_for_subject(
     db: &DatabaseConnection,
     subject: &str,
-) -> StdResult<Vec<entities::site::Model>, String> {
+) -> Result<Vec<entities::site::Model>, String> {
     let Some(user) = get_user_by_subject(db, subject).await? else {
         return Ok(vec![]);
     };
@@ -1610,7 +1613,7 @@ pub async fn update_membership_role<C: ConnectionTrait>(
     db: &C,
     membership_id: Uuid,
     role: String,
-) -> StdResult<entities::site_membership::Model, String> {
+) -> Result<entities::site_membership::Model, String> {
     let Some(membership) = get_membership_by_id(db, membership_id).await? else {
         return Err("membership not found".to_string());
     };
@@ -1623,7 +1626,7 @@ pub async fn update_membership_role<C: ConnectionTrait>(
 pub async fn delete_membership<C: ConnectionTrait>(
     db: &C,
     membership_id: Uuid,
-) -> StdResult<(), String> {
+) -> Result<(), String> {
     entities::site_membership::Entity::delete_by_id(membership_id)
         .exec(db)
         .await
@@ -1638,7 +1641,7 @@ pub async fn assign_tags_to_content<C: ConnectionTrait>(
     content_id: Uuid,
     revision_id: Uuid,
     tag_names: Vec<String>,
-) -> StdResult<(), String> {
+) -> Result<(), String> {
     let mut unique = HashSet::new();
 
     for raw in tag_names {
@@ -1715,7 +1718,7 @@ pub async fn assign_tags_to_content<C: ConnectionTrait>(
 pub async fn create_asset<C: ConnectionTrait>(
     db: &C,
     input: NewAsset,
-) -> StdResult<entities::asset::Model, String> {
+) -> Result<entities::asset::Model, String> {
     let model = entities::asset::ActiveModel {
         id: Set(Uuid::now_v7()),
         site_id: Set(input.site_id),
@@ -1738,7 +1741,7 @@ pub async fn create_asset<C: ConnectionTrait>(
 pub async fn list_assets(
     db: &DatabaseConnection,
     site_id: Uuid,
-) -> StdResult<Vec<entities::asset::Model>, String> {
+) -> Result<Vec<entities::asset::Model>, String> {
     let assets = entities::asset::Entity::find()
         .filter(entities::asset::Column::SiteId.eq(site_id))
         .all(db)
@@ -1752,7 +1755,7 @@ pub async fn list_assets(
 pub async fn create_asset_variant<C: ConnectionTrait>(
     db: &C,
     input: NewAssetVariant,
-) -> StdResult<entities::asset_variant::Model, String> {
+) -> Result<entities::asset_variant::Model, String> {
     let model = entities::asset_variant::ActiveModel {
         id: Set(Uuid::now_v7()),
         asset_id: Set(input.asset_id),
@@ -1773,7 +1776,7 @@ pub async fn create_asset_variant<C: ConnectionTrait>(
 pub async fn list_asset_variants(
     db: &DatabaseConnection,
     asset_id: Uuid,
-) -> StdResult<Vec<entities::asset_variant::Model>, String> {
+) -> Result<Vec<entities::asset_variant::Model>, String> {
     let variants = entities::asset_variant::Entity::find()
         .filter(entities::asset_variant::Column::AssetId.eq(asset_id))
         .all(db)
