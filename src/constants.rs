@@ -12,6 +12,15 @@ pub static REQUIRED_TEMPLATES: &[&str] = &[
     "rss.xml",
     "atom.xml",
 ];
+pub static CUSTOMIZABLE_TEMPLATE_FILES: &[&str] = &[
+    "base_template.html",
+    "index.html",
+    "post.html",
+    "page.html",
+    "tag.html",
+    "rss.xml",
+    "atom.xml",
+];
 
 pub static SESSION_USER: &str = "user";
 

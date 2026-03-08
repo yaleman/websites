@@ -1,0 +1,46 @@
+{% extends "base_template.html" %}
+{% block body %}
+<p class="inline-body">
+  Editing <code>{{ file_name }}</code> for <strong>{{ site_short_name }}</strong>. Current source: <strong>{{ source_origin }}</strong>.
+</p>
+
+<section class="content-editor__meta">
+  <div class="form-grid">
+    <div class="meta-card">
+      <span class="meta-label">Template</span>
+      <span class="meta-value">{{ template_name }}</span>
+    </div>
+    <div class="meta-card">
+      <span class="meta-label">File</span>
+      <span class="meta-value">{{ file_name }}</span>
+    </div>
+    <div class="meta-card">
+      <span class="meta-label">Override Status</span>
+      <span class="meta-value">{% if override_exists %}Custom override{% else %}Inherited{% endif %}</span>
+    </div>
+  </div>
+</section>
+
+<form method="post" action class="editor-form">
+  <div class="form-field">
+    <label for="source">Template Source</label>
+    <textarea id="source" name="source" rows="28">{{ source }}</textarea>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="save">Save override</button>
+  </div>
+</form>
+
+{% if override_exists %}
+<section>
+  <h2>Reset Override</h2>
+  <p class="inline-body">
+    Resetting removes the site-specific copy and falls back to the shared template again.
+  </p>
+  <form method="post" action="/admin/site/{{ site_id }}/settings/templates/{{ file_name }}/reset">
+    <button type="submit">Reset override</button>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

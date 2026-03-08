@@ -20,6 +20,7 @@ type RequestSetup = {
   path: string;
   form?: Record<string, string>;
   multipart?: Record<string, unknown>;
+  beforeRequest?: () => Promise<void>;
   assertSuccess: (response: APIResponse) => Promise<void>;
 };
 
@@ -112,6 +113,9 @@ async function requestWithSetup(
   route: RouteCase,
   setup: RequestSetup,
 ): Promise<APIResponse> {
+  if (setup.beforeRequest) {
+    await setup.beforeRequest();
+  }
   return api.fetch(setup.path, {
     method: route.method,
     failOnStatusCode: false,
@@ -469,6 +473,75 @@ const routeCases: RouteCase[] = [
       },
       assertSuccess: async (response) => {
         expect(response.headers()["location"]).toBe(`/admin/site/${harness.siteId}/settings`);
+      },
+    }),
+  },
+  {
+    name: "template override editor",
+    method: "GET",
+    requiredRole: "owner",
+    lowerRole: "editor",
+    successStatus: 200,
+    prepare: async (harness) => ({
+      path: `/admin/site/${harness.siteId}/settings/templates/page.html`,
+      assertSuccess: async (response) => {
+        expect(await response.text()).toContain("Template Override: page.html");
+      },
+    }),
+  },
+  {
+    name: "template override update",
+    method: "POST",
+    requiredRole: "owner",
+    lowerRole: "editor",
+    successStatus: 303,
+    prepare: async (harness, _fixtures, scenario) => ({
+      path: `/admin/site/${harness.siteId}/settings/templates/page.html`,
+      form: {
+        source: `{% extends "base_template.html" %}{% block content %}<article>${scenario}</article>{% endblock %}`,
+      },
+      assertSuccess: async (response) => {
+        expect(response.headers()["location"]).toBe(
+          `/admin/site/${harness.siteId}/settings/templates/page.html?saved=1`,
+        );
+      },
+    }),
+  },
+  {
+    name: "template override reset",
+    method: "POST",
+    requiredRole: "owner",
+    lowerRole: "editor",
+    successStatus: 303,
+    prepare: async (harness, fixtures, scenario) => ({
+      path: `/admin/site/${harness.siteId}/settings/templates/page.html/reset`,
+      form: {},
+      assertSuccess: async (response) => {
+        expect(response.headers()["location"]).toBe(
+          `/admin/site/${harness.siteId}/settings/templates/page.html?reset=1`,
+        );
+      },
+      beforeRequest: async () => {
+        const ownerContext = await createAuthenticatedApiContext(
+          harness,
+          fixtures.ownerSubject,
+        );
+        try {
+          const seedResponse = await ownerContext.api.fetch(
+            `/admin/site/${harness.siteId}/settings/templates/page.html`,
+            {
+              method: "POST",
+              maxRedirects: 0,
+              failOnStatusCode: false,
+              form: {
+                source: `{% extends "base_template.html" %}{% block content %}<article>${scenario}</article>{% endblock %}`,
+              },
+            },
+          );
+          expect(seedResponse.status()).toBe(303);
+        } finally {
+          await ownerContext.api.dispose();
+        }
       },
     }),
   },

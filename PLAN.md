@@ -19,6 +19,7 @@ Reviewed against the current implementation on 2026-03-08.
 - [x] Extend tag management beyond create-time assignment. Existing content can now update tags from the editor, and the tags admin page supports create/delete workflows.
 - [ ] Replace placeholder admin views with real workflows where needed, especially the advanced content view and the assets listing screens.
 - [ ] Implement template customization UI in admin; current site settings only select an existing template.
+- [ ] add an option to provide an image URL for import instead of just uploading
 
 ## Follow-up testing
 

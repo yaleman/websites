@@ -1,4 +1,4 @@
-use crate::constants::{REQUIRED_TEMPLATES, SITE_TEMPLATES_DIR};
+use crate::constants::{CUSTOMIZABLE_TEMPLATE_FILES, REQUIRED_TEMPLATES, SITE_TEMPLATES_DIR};
 use crate::web::SiteRole;
 use crate::{entities::PageType, errors::SiteError};
 use chrono::{DateTime, Datelike, Utc};
@@ -105,10 +105,7 @@ pub struct UpdateContent {
 
 pub fn resolve_upload_root() -> PathBuf {
     if let Ok(value) = env::var("WEBSITES_UPLOAD_ROOT") {
-        let path = PathBuf::from(value);
-        if path.exists() {
-            return path;
-        }
+        return PathBuf::from(value);
     }
 
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -130,6 +127,16 @@ pub fn resolve_upload_root() -> PathBuf {
     }
 
     cwd.join("uploads/media-storage")
+}
+
+pub fn resolve_site_template_override_root(site_id: Uuid) -> PathBuf {
+    resolve_upload_root()
+        .join(".site-template-overrides")
+        .join(site_id.to_string())
+}
+
+pub fn is_customizable_template_file(filename: &str) -> bool {
+    CUSTOMIZABLE_TEMPLATE_FILES.contains(&filename)
 }
 
 /// Returns audit events, optionally filtered by site_id.
@@ -218,6 +225,26 @@ pub async fn render_site(
     rendered_dir: &Path,
     upload_root: &Path,
 ) -> Result<usize, SiteError> {
+    let override_root = resolve_site_template_override_root(site_id);
+    render_site_with_overrides(
+        db,
+        site_id,
+        templates_dir,
+        rendered_dir,
+        upload_root,
+        &override_root,
+    )
+    .await
+}
+
+async fn render_site_with_overrides(
+    db: &DatabaseConnection,
+    site_id: Uuid,
+    templates_dir: &Path,
+    rendered_dir: &Path,
+    upload_root: &Path,
+    override_root: &Path,
+) -> Result<usize, SiteError> {
     let site = entities::site::Entity::find_by_id(site_id)
         .one(db)
         .await?
@@ -237,7 +264,7 @@ pub async fn render_site(
 
     let template_root = templates_dir.join(site.template_name.clone());
 
-    let tera = load_site_templates(&template_root).await?;
+    let tera = load_site_templates(&template_root, override_root).await?;
 
     let rendered_root = rendered_dir.join(site.short_name.clone());
     let tmp_root = tempfile::tempdir().map_err(SiteError::internal)?;
@@ -265,6 +292,7 @@ pub async fn render_site(
         let tags = load_tag_names(db, item.id).await?;
         let tag_links = render_tag_links(&tags);
         let mut context = default_context(&site, &item.title);
+        context.insert("title", &item.title);
         context.insert("content", &html);
         context.insert("slug", &item.slug);
         context.insert("page_type", &item.page_type);
@@ -385,6 +413,18 @@ pub async fn render_content_preview(
     content_id: Uuid,
     templates_dir: &str,
 ) -> Result<String, SiteError> {
+    let override_root = resolve_site_template_override_root(site_id);
+    render_content_preview_with_overrides(db, site_id, content_id, templates_dir, &override_root)
+        .await
+}
+
+async fn render_content_preview_with_overrides(
+    db: &DatabaseConnection,
+    site_id: Uuid,
+    content_id: Uuid,
+    templates_dir: &str,
+    override_root: &Path,
+) -> Result<String, SiteError> {
     let site = entities::site::Entity::find_by_id(site_id)
         .one(db)
         .await?
@@ -397,7 +437,7 @@ pub async fn render_content_preview(
         .ok_or_else(|| SiteError::ContentNotFound(content_id))?;
 
     let template_root = Path::new(templates_dir).join(site.template_name.clone());
-    let tera = load_site_templates(&template_root).await?;
+    let tera = load_site_templates(&template_root, override_root).await?;
 
     let html = markdown::to_html(&content.page_content);
 
@@ -424,7 +464,16 @@ pub async fn render_content_preview(
         .map_err(SiteError::from)
 }
 
-async fn load_template(template_root: &Path, filename: &str) -> Result<String, SiteError> {
+async fn load_template(
+    template_root: &Path,
+    override_root: &Path,
+    filename: &str,
+) -> Result<String, SiteError> {
+    let override_path = override_root.join(filename);
+    if let Ok(template) = fs::read_to_string(&override_path).await {
+        return Ok(template);
+    }
+
     let template_path = template_root.join(filename);
     match fs::read_to_string(&template_path).await {
         Ok(template) => Ok(template),
@@ -450,6 +499,7 @@ async fn load_template(template_root: &Path, filename: &str) -> Result<String, S
 async fn add_raw_template(
     tera: &mut Tera,
     template_root: &Path,
+    override_root: &Path,
     name: &str,
     contents: &str,
 ) -> Result<(), SiteError> {
@@ -467,10 +517,11 @@ async fn add_raw_template(
                 return Err(SiteError::from(err));
             }
             debug!("Need to load a parent first!");
-            let parent_contents = load_template(template_root, parent).await?;
+            let parent_contents = load_template(template_root, override_root, parent).await?;
             Box::pin(add_raw_template(
                 tera,
                 template_root,
+                override_root,
                 parent,
                 &parent_contents,
             ))
@@ -485,17 +536,26 @@ async fn add_raw_template(
     }
 }
 
-async fn load_site_templates(template_root: &Path) -> Result<Tera, SiteError> {
+async fn load_site_templates(
+    template_root: &Path,
+    override_root: &Path,
+) -> Result<Tera, SiteError> {
     let mut tera = Tera::default();
     tera.autoescape_on(vec![]);
 
     let mut loaded_templates = HashSet::new();
 
     for required_file in REQUIRED_TEMPLATES.iter() {
-        let contents = load_template(template_root, required_file).await?;
-        add_raw_template(&mut tera, template_root, required_file, &contents)
-            .await
-            .inspect_err(|error| error!(error=?error, "failed to load required template"))?;
+        let contents = load_template(template_root, override_root, required_file).await?;
+        add_raw_template(
+            &mut tera,
+            template_root,
+            override_root,
+            required_file,
+            &contents,
+        )
+        .await
+        .inspect_err(|error| error!(error=?error, "failed to load required template"))?;
         loaded_templates.insert(required_file.to_string());
         debug!("Loaded required template {}", required_file);
     }
@@ -517,7 +577,7 @@ async fn load_site_templates(template_root: &Path) -> Result<Tera, SiteError> {
             let contents = fs::read_to_string(&path).await.inspect_err(
                 |err| error!(error=?err, path=?path.display(), "Failed to read template!"),
             )?;
-            add_raw_template(&mut tera, template_root, filename, &contents).await?;
+            add_raw_template(&mut tera, template_root, override_root, filename, &contents).await?;
 
             loaded_templates.insert(filename.to_string());
             debug!("Loaded template {}", filename);
@@ -2585,6 +2645,55 @@ mod tests {
 
         assert!(rendered.contains("data-template=\"custom-preview\""));
         assert!(rendered.contains("site-shell"));
+    }
+
+    #[tokio::test]
+    async fn render_content_preview_prefers_site_template_overrides() {
+        let db = test_db_start().await;
+        let site =
+            create_site_with_template_fixture(&db, "override-preview", "custom-preview").await;
+        let templates_dir = TempDir::new().expect("failed to create templates dir");
+        let override_root = TempDir::new().expect("failed to create override dir");
+        let template_root = templates_dir.path().join("custom-preview");
+        fs::create_dir_all(&template_root)
+            .await
+            .expect("failed to create template root");
+        fs::write(
+            template_root.join("base_template.html"),
+            r#"<!doctype html><html><body>{% block content %}{% endblock %}</body></html>"#,
+        )
+        .await
+        .expect("failed to write base template");
+        fs::write(
+            template_root.join("page.html"),
+            r#"{% extends "base_template.html" %}{% block content %}<article data-template="shared">{{title}}</article>{% endblock %}"#,
+        )
+        .await
+        .expect("failed to write shared page template");
+        fs::write(
+            override_root.path().join("page.html"),
+            r#"{% extends "base_template.html" %}{% block content %}<article data-template="override">{{title}}</article>{% endblock %}"#,
+        )
+        .await
+        .expect("failed to write override page template");
+
+        let content =
+            create_content_fixture(&db, site.id, PageType::Page, "override-page", true).await;
+        let rendered = render_content_preview_with_overrides(
+            &db,
+            site.id,
+            content.id,
+            templates_dir
+                .path()
+                .to_str()
+                .expect("invalid templates path"),
+            override_root.path(),
+        )
+        .await
+        .expect("failed to render preview");
+
+        assert!(rendered.contains("data-template=\"override\""));
+        assert!(!rendered.contains("data-template=\"shared\""));
     }
 
     #[tokio::test]
