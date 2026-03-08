@@ -662,7 +662,9 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 Ok(())
             }
             AssetCommands::List { site_id } => {
-                let assets = list_assets(db_ref, site_id).await?;
+                let assets = list_assets(db_ref, site_id)
+                    .await
+                    .map_err(|err| format!("Failed to list assets: {err}"))?;
                 if assets.is_empty() {
                     println!("no assets");
                     return Ok(());
