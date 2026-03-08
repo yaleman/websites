@@ -964,8 +964,9 @@ async fn admin_sites_create(
     .await
     .map_err(|error| SiteError::internal(format!("failed to log site audit: {error}")))?;
 
-    // TODO make sure we get the user's email from the OIDC claims
-    if let Some(membership) = ensure_site_owner_membership(&txn, &user_sub, None, site.id).await? {
+    if let Some(membership) =
+        ensure_site_owner_membership(&txn, &user_sub, actor.email.as_deref(), site.id).await?
+    {
         log_audit_event(
             &txn,
             &actor.subject,
