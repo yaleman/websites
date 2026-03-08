@@ -19,10 +19,6 @@
 </table>
 {% endif %}
 
-{% if !pre_body.is_empty() %}
-<pre>{{ pre_body }}</pre>
-{% endif %}
-
 <form method="get" action>
   <label for="q">Search Query</label>
   <input id="q" name="q" value="{{ query }}" />

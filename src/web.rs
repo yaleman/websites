@@ -112,7 +112,6 @@ struct AdminSearchTemplate {
     template_shared: AdminTemplateData,
     heading: String,
     rows: Vec<AdminRow>,
-    pre_body: String,
     query: String,
 }
 #[derive(Template, WebTemplate)]
@@ -128,9 +127,6 @@ struct AdminContentAdvancedTemplate {
     template_shared: AdminTemplateData,
     heading: String,
     rows: Vec<AdminRow>,
-
-    inline_body: String,
-    pre_body: String,
 }
 #[derive(Template, WebTemplate)]
 #[template(path = "admin_content_revisions.html")]
@@ -139,7 +135,6 @@ struct AdminContentRevisionsTemplate {
     heading: String,
     rows: Vec<AdminRow>,
     inline_body: String,
-    pre_body: String,
 }
 #[derive(Template, WebTemplate)]
 #[template(path = "admin_revision_diff.html")]
@@ -147,7 +142,6 @@ struct AdminRevisionDiffTemplate {
     template_shared: AdminTemplateData,
     heading: String,
     rows: Vec<AdminRow>,
-    inline_body: String,
     pre_body: String,
 }
 #[derive(Template, WebTemplate)]
@@ -182,8 +176,6 @@ struct AdminContentListTemplate {
     heading: String,
     site_id: Uuid,
     content_items: Vec<entities::content_item::Model>,
-    inline_body: String,
-    pre_body: String,
 }
 
 #[derive(Template, WebTemplate)]
@@ -848,9 +840,6 @@ async fn admin_site_content_list(
             heading: site.full_title,
             site_id,
             content_items: pages,
-
-            inline_body: String::new(),
-            pre_body: String::new(),
         }),
         Err(error) => Err(SiteError::internal(format!(
             "failed to load content for site {site_id}: {error}"
@@ -1103,7 +1092,6 @@ async fn admin_site_search(
         heading: format!("Search Content {site_id}"),
         rows,
         query: query_text.trim().to_string(),
-        pre_body: String::new(),
     })
 }
 
@@ -1534,8 +1522,6 @@ async fn admin_site_content_advanced(
                     .unwrap_or_else(|| "n/a".to_string()),
             },
         ],
-        inline_body: String::new(),
-        pre_body: String::new(),
     })
 }
 
@@ -1593,7 +1579,6 @@ async fn admin_site_content_revisions(
                 diff_links
             )
         },
-        pre_body: String::new(),
     })
 }
 
@@ -1676,7 +1661,6 @@ async fn admin_site_revision_diff(
             },
         ],
 
-        inline_body: String::new(),
         pre_body: diff_text,
     })
 }
