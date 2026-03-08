@@ -23,9 +23,13 @@
 <pre>{{ pre_body }}</pre>
 {% endif %}
 
-{% if !inline_body.is_empty() %}
 <section class="inline-body">
-  {{ inline_body | safe }}
+  <form method="post" action enctype="multipart/form-data">
+    <label for="file">Upload File</label>
+    <input id="file" name="file" type="file" required />
+
+    <button type="submit">Upload</button>
+  </form>
 </section>
-{% endif %}
+
 {% endblock %}

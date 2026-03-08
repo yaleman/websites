@@ -23,9 +23,11 @@
 <pre>{{ pre_body }}</pre>
 {% endif %}
 
-{% if !inline_body.is_empty() %}
-<section class="inline-body">
-  {{ inline_body | safe }}
-</section>
-{% endif %}
+<form method="get" action>
+  <label for="q">Search Query</label>
+  <input id="q" name="q" value="{{ query }}" />
+
+  <button type="submit">Search</button>
+</form>
+
 {% endblock %}

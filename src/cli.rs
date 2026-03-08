@@ -389,13 +389,15 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                     .await
                     .map_err(|error| format!("failed to begin transaction: {error}"))?;
 
-                let site = create_site(&txn, short_name, full_title, template_name).await?;
+                let site = create_site(&txn, short_name, full_title, template_name)
+                    .await
+                    .map_err(|error| format!("failed to create site: {error}"))?;
                 log_audit_event(
                     &txn,
                     "system",
                     "create_site",
                     "site",
-                    &site.id.to_string(),
+                    &site.id,
                     Some(site.id),
                     Some(json!({
                         "short_name": &site.short_name,
@@ -411,7 +413,9 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 Ok(())
             }
             SiteCommands::List => {
-                let sites = list_sites(db_ref).await?;
+                let sites = list_sites(db_ref)
+                    .await
+                    .map_err(|err| format!("failed to get sites {err}"))?;
                 if sites.is_empty() {
                     println!("no sites");
                     return Ok(());
@@ -448,11 +452,11 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                 "system",
                                 "create_membership",
                                 "site_membership",
-                                &membership.id.to_string(),
+                                &membership.id,
                                 Some(membership.site_id),
                                 Some(json!({
-                                    "site_id": membership.site_id.to_string(),
-                                    "user_id": membership.user_id.to_string(),
+                                    "site_id": membership.site_id,
+                                    "user_id": membership.user_id,
                                     "role": membership.role
                                 })),
                             )
@@ -491,7 +495,7 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                 "system",
                                 "create_tag",
                                 "tag",
-                                &tag.id.to_string(),
+                                &tag.id,
                                 Some(tag.site_id),
                                 Some(json!({"name": &tag.name})),
                             )
@@ -545,7 +549,7 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                 "system",
                                 "create_user",
                                 "user",
-                                &user.id.to_string(),
+                                &user.id,
                                 None,
                                 Some(json!({"subject": &user.subject})),
                             )
@@ -608,7 +612,7 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                 &asset.uploader_sub,
                                 "create_asset",
                                 "asset",
-                                &asset.id.to_string(),
+                                &asset.id,
                                 Some(asset.site_id),
                                 Some(json!({
                                     "original_filename": &asset.original_filename,
@@ -671,7 +675,7 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                 "system",
                                 "create_asset_variant",
                                 "asset_variant",
-                                &variant.id.to_string(),
+                                &variant.id,
                                 Some(variant.asset_id),
                                 Some(json!({
                                     "variant_kind": &variant.variant_kind,
@@ -783,10 +787,10 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                 &content.creator_sub,
                                 "create_content",
                                 "content_item",
-                                &content.id.to_string(),
+                                &content.id,
                                 Some(content.site_id),
                                 Some(json!({
-                                    "page_type": content.page_type.to_string(),
+                                    "page_type": content.page_type,
                                     "slug": &content.slug,
                                     "title": &content.title,
                                     "draft": content.draft
@@ -857,10 +861,10 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                 "system",
                                 "create_alias",
                                 "content_alias",
-                                &alias.id.to_string(),
+                                &alias.id,
                                 Some(alias.site_id),
                                 Some(json!({
-                                    "content_id": alias.content_id.to_string(),
+                                    "content_id": alias.content_id,
                                     "alias_path": &alias.alias_path,
                                     "kind": &alias.kind
                                 })),
@@ -1032,11 +1036,11 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                 &content.creator_sub,
                                 "update_content",
                                 "content_item",
-                                &content.id.to_string(),
+                                &content.id,
                                 Some(content.site_id),
                                 Some(json!({
-                                    "content_id": content.id.to_string(),
-                                    "page_type": content.page_type.to_string(),
+                                    "content_id": content.id,
+                                    "page_type": content.page_type,
                                     "slug": &content.slug,
                                     "title": &content.title
                                 })),
@@ -1073,11 +1077,11 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                 "system",
                                 "add_content_tag",
                                 "content_tag",
-                                &content_tag.id.to_string(),
+                                &content_tag.id,
                                 Some(content_tag.content_id),
                                 Some(json!({
-                                    "content_id": content_tag.content_id.to_string(),
-                                    "tag_id": content_tag.tag_id.to_string()
+                                    "content_id": content_tag.content_id,
+                                    "tag_id": content_tag.tag_id
                                 })),
                             )
                             .await
@@ -1122,7 +1126,7 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                 &creator_sub,
                                 "import_wordpress",
                                 "content_item",
-                                &site_id.to_string(),
+                                &site_id,
                                 Some(site_id),
                                 Some(json!({"imported": imported})),
                             )

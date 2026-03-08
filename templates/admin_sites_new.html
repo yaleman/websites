@@ -1,31 +1,17 @@
 {% extends "base_template.html" %}
 {% block body %}
-{% if !rows.is_empty() %}
-<table>
-  <thead>
-    <tr>
-      <th>Title</th>
-      <th>Value</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for row in rows %}
-    <tr>
-      <td>{{ row.label }}</td>
-      <td>{{ row.value }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% endif %}
 
-{% if !pre_body.is_empty() %}
-<pre>{{ pre_body }}</pre>
-{% endif %}
+<form method="post" action="/admin/sites/new">
+  <label for="short_name">Short Name</label>
+  <input id="short_name" name="short_name" required />
 
-{% if !inline_body.is_empty() %}
-<section class="inline-body">
-  {{ inline_body | safe }}
-</section>
-{% endif %}
+  <label for="full_title">Full Title</label>
+  <input id="full_title" name="full_title" required />
+
+  <label for="template_name">Template Name</label>
+  <input id="template_name" name="template_name" value="default" />
+
+  <button type="submit">Create site</button>
+</form>
+
 {% endblock %}

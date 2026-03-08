@@ -1,4 +1,3 @@
-
 use axum::{
     extract::{Query, State},
     response::Redirect,
@@ -12,7 +11,14 @@ use reqwest::redirect::Policy;
 use serde::Deserialize;
 use tower_sessions::Session;
 
-use crate::{entities::user::upsert_user_login, errors::SiteError, web::AdminState};
+use crate::{
+    constants::{
+        SESSION_OIDC_NONCE_KEY, SESSION_OIDC_PKCE_KEY, SESSION_OIDC_STATE_KEY, SESSION_USER_SUB,
+    },
+    entities::user::upsert_user_login,
+    errors::SiteError,
+    web::AdminState,
+};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct OidcCallbackQuery {
@@ -31,10 +37,6 @@ type OidcClient = CoreClient<
     EndpointMaybeSet,
 >;
 
-pub(crate) static OIDC_SESSION_OIDC_PKCE_KEY: &str = "oidc_pkce";
-pub(crate) static OIDC_SESSION_OIDC_STATE_KEY: &str = "oidc_state";
-pub(crate) static OIDC_SESSION_OIDC_NONCE_KEY: &str = "oidc_nonce";
-
 /// Builds a HTTP client for use with OIDC operations, configured to allow a limited number of redirects
 pub(crate) fn build_http_client() -> Result<reqwest::Client, reqwest::Error> {
     reqwest::ClientBuilder::new()
@@ -42,9 +44,7 @@ pub(crate) fn build_http_client() -> Result<reqwest::Client, reqwest::Error> {
         .build()
 }
 
-pub(crate) async fn build_oidc_client(
-    state: &AdminState,
-) -> Result<OidcClient, SiteError> {
+pub(crate) async fn build_oidc_client(state: &AdminState) -> Result<OidcClient, SiteError> {
     let frontend_url = state.oidc_frontend_url.clone();
     let oidc_client = state.oidc_client.clone();
     let provider_metadata =
@@ -93,7 +93,7 @@ pub(crate) async fn admin_login_callback(
     };
 
     let stored_state = session
-        .get::<String>(OIDC_SESSION_OIDC_STATE_KEY)
+        .get::<String>(SESSION_OIDC_STATE_KEY)
         .await
         .unwrap_or(None)
         .unwrap_or_default();
@@ -102,12 +102,12 @@ pub(crate) async fn admin_login_callback(
     }
 
     let pkce_verifier = session
-        .get::<String>(OIDC_SESSION_OIDC_PKCE_KEY)
+        .get::<String>(SESSION_OIDC_PKCE_KEY)
         .await
         .unwrap_or(None)
         .unwrap_or_default();
     let nonce_value = session
-        .get::<String>(OIDC_SESSION_OIDC_NONCE_KEY)
+        .get::<String>(SESSION_OIDC_NONCE_KEY)
         .await
         .unwrap_or(None)
         .unwrap_or_default();
@@ -162,7 +162,11 @@ pub(crate) async fn admin_login_callback(
     };
 
     let subject = claims.subject().as_str().to_string();
-    if session.insert("user_sub", subject.clone()).await.is_err() {
+    if session
+        .insert(SESSION_USER_SUB, subject.clone())
+        .await
+        .is_err()
+    {
         return Err(SiteError::internal("failed to store session".to_string()));
     }
 
