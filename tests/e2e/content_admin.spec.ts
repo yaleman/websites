@@ -69,6 +69,7 @@ test.describe("content admin", () => {
       await expect(page.getByRole("heading", { name: "Current Content" })).toBeVisible();
       await expect(page.locator("body")).toContainText("Primary Route");
       await expect(page.locator("body")).toContainText("/guide-to-testing");
+      await expect(page.locator("body")).toContainText("/legacy/testing-guide");
       await expect(page.locator("body")).toContainText("guides");
       await expect(page.locator("body")).toContainText("latest is revision 2");
 
@@ -76,11 +77,11 @@ test.describe("content admin", () => {
         `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/advanced`,
         { waitUntil: "domcontentloaded" },
       );
-      await expect(page.getByRole("heading", { name: "Metadata & Routing: Guide to Testing" })).toBeVisible();
+      await expect(page).toHaveURL(
+        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}`,
+      );
+      await expect(page.getByRole("heading", { name: "Content: /guide-to-testing" })).toBeVisible();
       await expect(page.getByRole("heading", { name: "Routes" })).toBeVisible();
-      await expect(page.locator("body")).toContainText("/legacy/testing-guide");
-      await expect(page.locator("body")).toContainText("Stored Metadata");
-      await expect(page.locator("body")).toContainText("guides");
 
       await context.close();
     } finally {

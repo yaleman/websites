@@ -162,11 +162,13 @@ const routeCases: RouteCase[] = [
     name: "content advanced",
     method: "GET",
     requiredRole: "viewer",
-    successStatus: 200,
+    successStatus: 303,
     prepare: async (harness, fixtures) => ({
       path: `/admin/site/${harness.siteId}/content/${fixtures.contentId}/advanced`,
       assertSuccess: async (response) => {
-        expect(await response.text()).toContain("Routes");
+        expect(response.headers()["location"]).toBe(
+          `/admin/site/${harness.siteId}/content/${fixtures.contentId}`,
+        );
       },
     }),
   },
