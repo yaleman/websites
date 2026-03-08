@@ -5,14 +5,9 @@ body {
 	color: #182034;
 }
 
-.site-header {
-	padding: 1rem 1.25rem;
-	background: #1d3557;
-	color: #fff;
-}
-
 a {
 	color: #1d3557;
+	text-decoration: underline rgba(29, 53, 87, 0.5);
 }
 
 main {
@@ -27,6 +22,14 @@ main {
 
 ul {
 	padding-left: 1.25rem;
+}
+
+.site-header,
+.site-header a {
+	padding: 1rem 1.25rem;
+	background: #1d3557;
+	color: #fff;
+	text-decoration: none;
 }
 
 .content {
