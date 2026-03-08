@@ -9,3 +9,6 @@
 database.sqlite
 build_rs_cov.profraw
 tarpaulin-report.html
+
+!uploads/media-storage/.gitkeeper
+uploads/media-storage/
