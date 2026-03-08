@@ -12,7 +12,11 @@
       <a href="/">Home</a>
     </header>
     <main>
-      <ul>{{items}}</ul>
+      <ul>
+        {% for item in items %}
+        <li><a href="{{ item.url }}">{{ item.title }}</a></li>
+        {% endfor %}
+      </ul>
     </main>
   </body>
 </html>

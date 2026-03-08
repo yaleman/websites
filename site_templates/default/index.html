@@ -3,5 +3,9 @@
 {% block title %}{{site_title}}{% endblock %}
 
 {% block content %}
-<ul>{{items}}</ul>
+<ul>
+  {% for item in items %}
+  <li><a href="{{ item.url }}">{{ item.title }}</a></li>
+  {% endfor %}
+</ul>
 {% endblock %}
