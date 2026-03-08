@@ -18,11 +18,21 @@
     <tbody>
       {% for membership in memberships %}
       <tr>
-        <td><span aria-label="{{membership.subject }}">{{ membership.email }}</span></td>
+        <td>
+          {% if let Some(profile_href) = membership.profile_href %}
+          <a href="{{ profile_href }}" aria-label="{{membership.subject }}">{{ membership.email }}</a>
+          {% else %}
+          <span aria-label="{{membership.subject }}">{{ membership.email }}</span>
+          {% endif %}
+        </td>
         <td>
           <form method="post" action="{{ membership.update_href }}">
             <select name="role">
-              <option value="viewer" {% if membership.role.is_viewer() %}selected{% endif %}>
+              {% for role in SiteRole::all_without_admin() %}
+              <option value="{{ role.label() }}" {% if membership.role == role %}selected{% endif %}>
+                {{ role }}</option>
+              {% endfor %}
+              {# <option value="viewer" {% if membership.role.is_viewer() %}selected{% endif %}>
                 Viewer
               </option>
               <option value="author" {% if membership.role.is_author() %}selected{% endif %}>
@@ -33,7 +43,7 @@
               </option>
               <option value="owner" {% if membership.role.is_owner() %}selected{% endif %}>
                 Owner
-              </option>
+              </option> #}
             </select>
             <button type="submit">Update</button>
           </form>
@@ -58,10 +68,9 @@
 
     <label for="role">Role</label>
     <select id="role" name="role" required>
-      <option value="viewer">Viewer</option>
-      <option value="author">Author</option>
-      <option value="editor">Editor</option>
-      <option value="owner">Owner</option>
+      {% for role in roles %}
+      <option value="{{ role.label() }}">{{ role }}</option>
+      {% endfor %}
     </select>
 
     <button type="submit">Add member</button>

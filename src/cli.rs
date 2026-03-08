@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand};
-use sea_orm::TransactionTrait;
+use sea_orm::{EntityTrait, TransactionTrait};
 use serde_json::json;
 use url::Url;
 use uuid::Uuid;
@@ -158,7 +158,7 @@ pub enum SiteCommands {
         #[arg(long)]
         user_id: Uuid,
         #[arg(long, value_parser = ["owner", "editor", "author", "viewer"])]
-        role: SiteRole,
+        role: String,
     },
     /// List site memberships.
     MemberList {
@@ -196,6 +196,12 @@ pub enum UserCommands {
         subject: String,
         #[arg(long)]
         email: Option<String>,
+        #[arg(
+            long,
+            default_value = "false",
+            help = "Create the user with system-admin level permissions"
+        )]
+        admin: bool,
     },
     /// List users.
     List,
@@ -437,6 +443,13 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 user_id,
                 role,
             } => {
+                let role = match role.as_str() {
+                    "viewer" => SiteRole::Viewer,
+                    "author" => SiteRole::Author,
+                    "editor" => SiteRole::Editor,
+                    "owner" => SiteRole::Owner,
+                    _ => return Err(format!("invalid site role: {role}")),
+                };
                 let membership = db_ref
                     .transaction::<_, _, String>(|txn| {
                         Box::pin(async move {
@@ -448,7 +461,8 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                     role,
                                 },
                             )
-                            .await?;
+                            .await
+                            .map_err(|error| error.to_string())?;
                             log_audit_event(
                                 txn,
                                 "system",
@@ -541,19 +555,25 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 templates_dir,
                 rendered_dir,
             } => {
-                let files_written = render_site(db_ref, site_id, &templates_dir, &rendered_dir)
-                    .await
-                    .map_err(|err| err.to_string())?;
+                let upload_root = resolve_upload_root();
+                let files_written =
+                    render_site(db_ref, site_id, &templates_dir, &rendered_dir, &upload_root)
+                        .await
+                        .map_err(|err| err.to_string())?;
                 println!("rendered site {} files {}", site_id, files_written);
                 Ok(())
             }
         },
         Commands::User { command } => match command {
-            UserCommands::Create { subject, email } => {
+            UserCommands::Create {
+                subject,
+                email,
+                admin,
+            } => {
                 let user = db_ref
                     .transaction::<_, _, String>(|txn| {
                         Box::pin(async move {
-                            let user = create_user(txn, &subject, email.as_deref())
+                            let user = create_user(txn, &subject, email.as_deref(), admin)
                                 .await
                                 .map_err(|error| error.to_string())?;
                             log_audit_event(
@@ -669,6 +689,15 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 let variant = db_ref
                     .transaction::<_, _, String>(|txn| {
                         Box::pin(async move {
+                            let asset = crate::entities::asset::Entity::find_by_id(asset_id)
+                                .one(txn)
+                                .await
+                                .map_err(|error| {
+                                    format!("failed to load asset for variant: {error}")
+                                })?
+                                .ok_or_else(|| {
+                                    format!("asset not found for variant creation: {asset_id}")
+                                })?;
                             let variant = create_asset_variant(
                                 txn,
                                 NewAssetVariant {
@@ -688,7 +717,7 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                 "create_asset_variant",
                                 "asset_variant",
                                 &variant.id,
-                                Some(variant.asset_id),
+                                Some(asset.site_id),
                                 Some(json!({
                                     "variant_kind": &variant.variant_kind,
                                     "filename": &variant.filename

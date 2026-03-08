@@ -1,4 +1,3 @@
-pub(crate) static ADMIN_ACTOR_SUB: &str = "web-admin";
 pub(crate) static DEFAULT_TEMPLATE_NAME: &str = "default";
 pub(crate) static THUMBNAIL_MAX_SIZE: u32 = 320;
 
@@ -14,7 +13,7 @@ pub static REQUIRED_TEMPLATES: &[&str] = &[
     "atom.xml",
 ];
 
-pub static SESSION_USER_SUB: &str = "user_sub";
+pub static SESSION_USER: &str = "user";
 
 pub(crate) static SESSION_OIDC_PKCE_KEY: &str = "oidc_pkce";
 pub(crate) static SESSION_OIDC_STATE_KEY: &str = "oidc_state";

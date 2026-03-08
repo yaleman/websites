@@ -127,6 +127,13 @@ type TestHarness = {
   siteId: string;
 };
 
+const oidcTestArgs = [
+  "--client-id",
+  "playwright-test-client",
+  "--discovery-url",
+  "https://example.com/.well-known/openid-configuration",
+] as const;
+
 async function resolveTlsPaths(): Promise<{ tlsCertPath: string; tlsKeyPath: string }> {
   const tlsCertPath = await loadEnvValue("WEBSITES_TLS_CERT_PATH");
   const tlsKeyPath = await loadEnvValue("WEBSITES_TLS_KEY_PATH");
@@ -158,6 +165,7 @@ async function setupHarness(): Promise<TestHarness> {
       tlsKeyPath,
       "--frontend-url",
       "https://127.0.0.1",
+      ...oidcTestArgs,
       "init",
     ],
     { env },
@@ -175,6 +183,7 @@ async function setupHarness(): Promise<TestHarness> {
       tlsKeyPath,
       "--frontend-url",
       "https://127.0.0.1",
+      ...oidcTestArgs,
       "site",
       "create",
       "--short-name",
@@ -208,6 +217,7 @@ async function setupHarness(): Promise<TestHarness> {
       tlsKeyPath,
       "--frontend-url",
       `https://127.0.0.1:${port}`,
+      ...oidcTestArgs,
       "serve",
       "admin",
       "--listen",
@@ -257,6 +267,7 @@ async function createUser(
       harness.tlsKeyPath,
       "--frontend-url",
       "https://127.0.0.1",
+      ...oidcTestArgs,
       "user",
       "create",
       "--subject",
@@ -289,6 +300,7 @@ async function addMembership(
       harness.tlsKeyPath,
       "--frontend-url",
       "https://127.0.0.1",
+      ...oidcTestArgs,
       "site",
       "member-add",
       "--site-id",
@@ -316,6 +328,7 @@ async function createTag(harness: TestHarness, name: string): Promise<void> {
       harness.tlsKeyPath,
       "--frontend-url",
       "https://127.0.0.1",
+      ...oidcTestArgs,
       "site",
       "tag-create",
       "--site-id",
@@ -352,6 +365,7 @@ async function createAssetWithThumbnail(
       harness.tlsKeyPath,
       "--frontend-url",
       "https://127.0.0.1",
+      ...oidcTestArgs,
       "asset",
       "create",
       "--site-id",
@@ -392,6 +406,7 @@ async function createAssetWithThumbnail(
       harness.tlsKeyPath,
       "--frontend-url",
       "https://127.0.0.1",
+      ...oidcTestArgs,
       "asset",
       "variant-create",
       "--asset-id",
@@ -416,19 +431,24 @@ async function createAssetWithThumbnail(
 async function seedSession(
   harness: TestHarness,
   subject: string,
+  setAdmin = false,
 ): Promise<string> {
+  const args = [
+    "run",
+    "--bin",
+    "session_seed",
+    "--",
+    "--database-url",
+    harness.databaseUrl,
+    "--user-sub",
+    subject,
+  ];
+  if (setAdmin) {
+    args.push("--set-admin");
+  }
   const result = await runCommand(
     "cargo",
-    [
-      "run",
-      "--bin",
-      "session_seed",
-      "--",
-      "--database-url",
-      harness.databaseUrl,
-      "--user-sub",
-      subject,
-    ],
+    args,
     { env: harness.env },
   );
   const sessionId = result.stdout.trim();
@@ -517,8 +537,10 @@ test.describe("content new editor", () => {
         `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/memberships`,
         { waitUntil: "domcontentloaded" },
       );
-      await expect(page.getByText("Memberships")).toBeVisible();
-      await expect(page.getByText("test-user")).toBeVisible();
+      await expect(
+        page.getByRole("heading", { name: "Memberships", exact: true }),
+      ).toBeVisible();
+      await expect(page.locator('span[aria-label="test-user"]')).toBeVisible();
     } finally {
       await cleanupHarness(harness);
     }
@@ -547,8 +569,149 @@ test.describe("content new editor", () => {
       );
 
       expect(response).not.toBeNull();
+      expect(response?.status()).toBe(401);
+      await expect(page.locator("body")).toContainText(
+        `missing membership for site ${harness.siteId}`,
+      );
+    } finally {
+      await cleanupHarness(harness);
+    }
+  });
+
+  test("allows system admin access without membership", async ({ browser }) => {
+    const harness = await setupHarness();
+
+    try {
+      const sessionId = await seedSession(harness, "site-admin", true);
+
+      const context = await browser.newContext({ ignoreHTTPSErrors: true });
+      await context.addCookies([
+        {
+          name: "id",
+          value: sessionId,
+          url: `https://127.0.0.1:${harness.port}`,
+        },
+      ]);
+
+      const page = await context.newPage();
+      const response = await page.goto(
+        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/new`,
+        { waitUntil: "domcontentloaded" },
+      );
+
+      expect(response).not.toBeNull();
       expect(response?.status()).toBe(200);
       await expect(page.locator("#editor")).toBeVisible();
+    } finally {
+      await cleanupHarness(harness);
+    }
+  });
+});
+
+test.describe("user profile", () => {
+  test.setTimeout(120_000);
+
+  test("lets a user view their own profile details and memberships", async ({ browser }) => {
+    const harness = await setupHarness();
+
+    try {
+      const userId = await createUser(harness, "profile-user");
+      await addMembership(harness, userId, "author");
+      const sessionId = await seedSession(harness, "profile-user");
+
+      const context = await browser.newContext({ ignoreHTTPSErrors: true });
+      await context.addCookies([
+        {
+          name: "id",
+          value: sessionId,
+          url: `https://127.0.0.1:${harness.port}`,
+        },
+      ]);
+
+      const page = await context.newPage();
+      const response = await page.goto(
+        `https://127.0.0.1:${harness.port}/admin/users/${userId}`,
+        { waitUntil: "domcontentloaded" },
+      );
+
+      expect(response).not.toBeNull();
+      expect(response?.status()).toBe(200);
+      await expect(
+        page.getByRole("heading", { name: "User Profile: profile-user" }),
+      ).toBeVisible();
+      await expect(page.getByRole("cell", { name: userId })).toBeVisible();
+      await expect(page.getByRole("cell", { name: "profile-user" })).toBeVisible();
+      await expect(page.getByRole("cell", { name: "No" })).toBeVisible();
+      await expect(page.getByRole("link", { name: "Test Site" })).toBeVisible();
+      await expect(page.getByRole("cell", { name: "Author" })).toBeVisible();
+    } finally {
+      await cleanupHarness(harness);
+    }
+  });
+
+  test("lets a system admin view another user's profile", async ({ browser }) => {
+    const harness = await setupHarness();
+
+    try {
+      const targetUserId = await createUser(harness, "target-user");
+      await addMembership(harness, targetUserId, "viewer");
+      const sessionId = await seedSession(harness, "global-admin", true);
+
+      const context = await browser.newContext({ ignoreHTTPSErrors: true });
+      await context.addCookies([
+        {
+          name: "id",
+          value: sessionId,
+          url: `https://127.0.0.1:${harness.port}`,
+        },
+      ]);
+
+      const page = await context.newPage();
+      const response = await page.goto(
+        `https://127.0.0.1:${harness.port}/admin/users/${targetUserId}`,
+        { waitUntil: "domcontentloaded" },
+      );
+
+      expect(response).not.toBeNull();
+      expect(response?.status()).toBe(200);
+      await expect(
+        page.getByRole("heading", { name: "User Profile: target-user" }),
+      ).toBeVisible();
+      await expect(page.getByRole("cell", { name: "target-user" })).toBeVisible();
+      await expect(page.getByRole("cell", { name: "Viewer" })).toBeVisible();
+    } finally {
+      await cleanupHarness(harness);
+    }
+  });
+
+  test("blocks a non-admin user from viewing another user's profile", async ({ browser }) => {
+    const harness = await setupHarness();
+
+    try {
+      await createUser(harness, "viewer-user");
+      const targetUserId = await createUser(harness, "private-user");
+      const sessionId = await seedSession(harness, "viewer-user");
+
+      const context = await browser.newContext({ ignoreHTTPSErrors: true });
+      await context.addCookies([
+        {
+          name: "id",
+          value: sessionId,
+          url: `https://127.0.0.1:${harness.port}`,
+        },
+      ]);
+
+      const page = await context.newPage();
+      const response = await page.goto(
+        `https://127.0.0.1:${harness.port}/admin/users/${targetUserId}`,
+        { waitUntil: "domcontentloaded" },
+      );
+
+      expect(response).not.toBeNull();
+      expect(response?.status()).toBe(401);
+      await expect(page.locator("body")).toContainText(
+        "cannot view another user's profile",
+      );
     } finally {
       await cleanupHarness(harness);
     }
