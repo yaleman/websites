@@ -148,7 +148,7 @@ test.describe("web audit attribution", () => {
       const context = await createRoleApi(harness, actor, "author");
       try {
         const response = await context.api.fetch(
-          `/admin/site/${harness.siteId}/content/${contentId}/source`,
+          `/admin/site/${harness.siteId}/content/${contentId}/edit`,
           {
             method: "POST",
             form: {
@@ -166,7 +166,7 @@ test.describe("web audit attribution", () => {
         );
         expect(response.status()).toBe(303);
         expect(response.headers()["location"]).toBe(
-          `/admin/site/${harness.siteId}/content/${contentId}/source?saved=1`,
+          `/admin/site/${harness.siteId}/content/${contentId}/edit?saved=1`,
         );
 
         const events = await listAuditEvents(harness, harness.siteId);

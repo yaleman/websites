@@ -74,7 +74,7 @@ test.describe("content new editor", () => {
         page.locator("[data-editor-preview-body]"),
       ).toContainText("Preview check");
       await expect(page.locator("[data-editor-source-panel]")).toBeHidden();
-      await page.getByRole("button", { name: "Source" }).click();
+      await page.getByRole("button", { name: "Markdown" }).click();
       await expect(page.locator("[data-editor-source-panel]")).toBeVisible();
       await expect(page.locator("#page_content")).toBeVisible();
       await page.locator("#page_content").fill("## Raw heading\n\nraw body");
@@ -167,16 +167,16 @@ test.describe("content new editor", () => {
         "editor-user",
       );
       await page.goto(
-        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/source`,
+        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/edit`,
         { waitUntil: "domcontentloaded" },
       );
 
-      await page.getByRole("button", { name: "Source" }).click();
+      await page.getByRole("button", { name: "Markdown" }).click();
       await page.locator("#page_content").fill("Updated body from source mode");
       await page.getByRole("button", { name: "Save content" }).click();
 
       await expect(page).toHaveURL(
-        new RegExp(`/admin/site/${harness.siteId}/content/${contentId}/source`),
+        new RegExp(`/admin/site/${harness.siteId}/content/${contentId}/edit`),
       );
       const toast = page.locator(".message--toast");
       await expect(toast).toBeVisible();
@@ -211,7 +211,7 @@ test.describe("content new editor", () => {
         "tag-editor",
       );
       await page.goto(
-        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/source`,
+        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/edit`,
         { waitUntil: "domcontentloaded" },
       );
 
@@ -224,13 +224,13 @@ test.describe("content new editor", () => {
           (response) =>
             response.request().method() === "POST" &&
             response.url() ===
-              `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/source`,
+              `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/edit`,
         ),
         page.getByRole("button", { name: "Save content" }).click(),
       ]);
       await page.waitForLoadState("domcontentloaded");
       await page.goto(
-        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/source`,
+        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/edit`,
         { waitUntil: "domcontentloaded" },
       );
 
@@ -246,13 +246,13 @@ test.describe("content new editor", () => {
           (response) =>
             response.request().method() === "POST" &&
             response.url() ===
-              `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/source`,
+              `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/edit`,
         ),
         page.getByRole("button", { name: "Save content" }).click(),
       ]);
       await page.waitForLoadState("domcontentloaded");
       await page.goto(
-        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/source`,
+        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/edit`,
         { waitUntil: "domcontentloaded" },
       );
       await expect(page.locator('[data-tag-chip="guides"]')).toBeVisible();

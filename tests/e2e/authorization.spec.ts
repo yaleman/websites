@@ -263,26 +263,26 @@ const routeCases: RouteCase[] = [
     },
   },
   {
-    name: "source editor",
+    name: "content editor",
     method: "GET",
     requiredRole: "author",
     lowerRole: "viewer",
     successStatus: 200,
     prepare: async (harness, fixtures) => ({
-      path: `/admin/site/${harness.siteId}/content/${fixtures.contentId}/source`,
+      path: `/admin/site/${harness.siteId}/content/${fixtures.contentId}/edit`,
       assertSuccess: async (response) => {
         expect(await response.text()).toContain("Save content");
       },
     }),
   },
   {
-    name: "source update",
+    name: "content editor update",
     method: "POST",
     requiredRole: "author",
     lowerRole: "viewer",
     successStatus: 303,
     prepare: async (harness, fixtures, scenario) => ({
-      path: `/admin/site/${harness.siteId}/content/${fixtures.contentId}/source`,
+      path: `/admin/site/${harness.siteId}/content/${fixtures.contentId}/edit`,
       form: {
         page_type: "page",
         title: `Updated from ${scenario}`,
@@ -294,7 +294,7 @@ const routeCases: RouteCase[] = [
       },
       assertSuccess: async (response) => {
         expect(response.headers()["location"]).toBe(
-          `/admin/site/${harness.siteId}/content/${fixtures.contentId}/source?saved=1`,
+          `/admin/site/${harness.siteId}/content/${fixtures.contentId}/edit?saved=1`,
         );
       },
     }),
