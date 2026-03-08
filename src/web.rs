@@ -322,7 +322,6 @@ type OidcClient = CoreClient<
 
 const ADMIN_ACTOR_SUB: &str = "web-admin";
 const DEFAULT_TEMPLATE_NAME: &str = "default";
-const UPLOAD_ROOT: &str = "./uploads/media-storage";
 const THUMBNAIL_MAX_SIZE: u32 = 320;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -475,7 +474,9 @@ pub async fn run_admin_server(
     );
 
     let assets_dir = resolve_admin_assets_dir();
+    let upload_root = resolve_upload_root();
     tracing::info!("admin assets dir: {}", assets_dir.display());
+    tracing::info!("upload root dir: {}", upload_root.display());
     if !assets_dir.join("editor.js").exists() {
         tracing::warn!(
             "admin editor assets not found; run `pnpm run build:admin` to generate them"
@@ -488,6 +489,7 @@ pub async fn run_admin_server(
         .route("/oauth2/callback", get(admin_login_callback))
         .route("/admin/logout", get(admin_logout))
         .nest_service("/admin/assets", ServeDir::new(assets_dir))
+        .nest_service("/media/images", ServeDir::new(upload_root))
         .merge(protected_routes)
         .layer(session_layer)
         .layer(from_fn(log_requests))
@@ -530,6 +532,35 @@ fn resolve_admin_assets_dir() -> PathBuf {
     }
 
     cwd.join("admin-ui-assets")
+}
+
+fn resolve_upload_root() -> PathBuf {
+    if let Ok(value) = env::var("WEBSITES_UPLOAD_ROOT") {
+        let path = PathBuf::from(value);
+        if path.exists() {
+            return path;
+        }
+    }
+
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut candidates = vec![cwd.join("uploads/media-storage")];
+
+    if let Ok(exe) = env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        candidates.push(dir.join("uploads/media-storage"));
+        if let Some(parent) = dir.parent() {
+            candidates.push(parent.join("uploads/media-storage"));
+        }
+    }
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+
+    cwd.join("uploads/media-storage")
 }
 
 async fn admin_root() -> Redirect {
@@ -1990,9 +2021,10 @@ async fn admin_site_assets_create(
         .unwrap_or("bin")
         .to_lowercase();
     let storage_basename = format!("{}.{}", Uuid::now_v7(), extension);
-    let storage_path = StdPath::new(UPLOAD_ROOT).join(&storage_basename);
+    let upload_root = resolve_upload_root();
+    let storage_path = upload_root.join(&storage_basename);
 
-    if let Err(error) = fs::create_dir_all(UPLOAD_ROOT).await {
+    if let Err(error) = fs::create_dir_all(&upload_root).await {
         return Err(SiteError::internal(format!(
             "failed to create upload directory: {error}"
         )));
@@ -2095,7 +2127,7 @@ async fn admin_site_assets_create(
             .and_then(|value| value.to_str())
             .unwrap_or("asset");
         let filename = format!("{stem}_thumb.{}", thumbnail.extension);
-        let thumb_path = StdPath::new(UPLOAD_ROOT).join(&filename);
+        let thumb_path = upload_root.join(&filename);
         if let Err(error) = fs::write(&thumb_path, &thumbnail.bytes).await {
             return Err(SiteError::internal(format!(
                 "failed to write thumbnail: {error}"
