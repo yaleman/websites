@@ -42,6 +42,40 @@ select {
 	color: var(--text-dark);
 }
 
+.tag-editor {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+}
+
+.tag-editor__chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	min-height: 2.5rem;
+	padding: 0.5rem;
+	border: 1px solid var(--border-light);
+	border-radius: var(--small-border-radius);
+	background: white;
+}
+
+.tag-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	padding: 0.35rem 0.6rem;
+	border: 1px solid var(--dark-purple);
+	border-radius: 999px;
+	background: rgba(100, 0, 215, 0.12);
+	color: var(--text-dark);
+}
+
+.tag-chip__remove {
+	font-size: 0.85rem;
+	font-weight: 700;
+	line-height: 1;
+}
+
 h1.page-title {
 	margin: 0;
 }

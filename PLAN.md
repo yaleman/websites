@@ -16,8 +16,8 @@ Reviewed against the current implementation on 2026-03-08.
 
 - [x] first user to log into a system gets created as an admin user
 - [ ] Clarify or implement real editing modes. The current `/source` screen is a rich editor, and the "advanced" screen is metadata-only, so there is not yet a true source-vs-visual mode split.
-- [ ] Extend tag management beyond create-time assignment. Existing content cannot update tags from the editor, and the tags admin page is list-only.
-- [ ] Replace placeholder admin views with real workflows where needed, especially the advanced content view and the tags/assets listing screens.
+- [x] Extend tag management beyond create-time assignment. Existing content can now update tags from the editor, and the tags admin page supports create/delete workflows.
+- [ ] Replace placeholder admin views with real workflows where needed, especially the advanced content view and the assets listing screens.
 - [ ] Implement template customization UI in admin; current site settings only select an existing template.
 
 ## Follow-up testing

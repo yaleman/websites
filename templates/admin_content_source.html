@@ -70,6 +70,37 @@
     <div class="editor-preview__body" data-editor-preview-body></div>
   </section>
 
+  <div class="form-field">
+    <label for="tags">Tags</label>
+    <div class="tag-editor" data-tag-editor>
+      <input type="hidden" name="tag_list" value="" data-tag-list />
+      <div class="tag-editor__chips" data-tag-chips>
+      {% for tag in tags %}
+      {% if tag.selected %}
+        <button type="button" class="tag-chip" data-tag-chip="{{ tag.name }}">
+          <span>{{ tag.name }}</span>
+          <span class="tag-chip__remove" aria-hidden="true">x</span>
+        </button>
+      {% endif %}
+      {% endfor %}
+      </div>
+      <input
+        id="tags"
+        type="text"
+        list="tag-suggestions"
+        placeholder="Type a tag and press Enter"
+        data-tag-input
+        autocomplete="off"
+      />
+      <datalist id="tag-suggestions">
+      {% for tag in tags %}
+      <option value="{{ tag.name }}"></option>
+      {% endfor %}
+      </datalist>
+    </div>
+    <p class="inline-body">Type to autocomplete existing tags. Press Enter or comma to add a tag.</p>
+  </div>
+
   <div class="form-actions">
     <button type="submit" class="save">Save content</button>
   </div>

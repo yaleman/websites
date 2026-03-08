@@ -1,22 +1,42 @@
 {% extends "base_template.html" %}
 {% block body %}
-{% if !rows.is_empty() %}
+<form method="post" action="/admin/site/{{ site_id }}/tags/new" class="stack-form">
+  <div class="form-grid">
+    <div class="form-field">
+      <label for="name">New tag</label>
+      <input id="name" name="name" type="text" required />
+    </div>
+  </div>
+  <div class="form-actions">
+    <button type="submit" class="save">Create tag</button>
+  </div>
+</form>
+
+{% if !tags.is_empty() %}
 <table>
   <thead>
     <tr>
-      <th>Title</th>
-      <th>Value</th>
+      <th>Name</th>
+      <th>ID</th>
+      <th>Actions</th>
     </tr>
   </thead>
   <tbody>
-    {% for row in rows %}
+    {% for tag in tags %}
     <tr>
-      <td>{{ row.label }}</td>
-      <td>{{ row.value }}</td>
+      <td>{{ tag.name }}</td>
+      <td>{{ tag.id }}</td>
+      <td>
+        <form method="post" action="{{ tag.delete_href }}">
+          <button type="submit">Delete</button>
+        </form>
+      </td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
+{% else %}
+<p class="inline-body">No tags defined yet.</p>
 {% endif %}
 
 {% endblock %}

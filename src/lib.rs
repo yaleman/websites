@@ -1236,6 +1236,30 @@ pub async fn create_tag<C: ConnectionTrait>(
     model.insert(db).await.map_err(SiteError::from)
 }
 
+/// Deletes a tag for a specific site.
+pub async fn delete_tag<C: ConnectionTrait>(
+    db: &C,
+    site_id: Uuid,
+    tag_id: Uuid,
+) -> Result<(), SiteError> {
+    let tag = entities::tag::Entity::find_by_id(tag_id)
+        .one(db)
+        .await
+        .map_err(SiteError::from)?
+        .ok_or_else(|| SiteError::internal("tag not found".to_string()))?;
+    if tag.site_id != site_id {
+        return Err(SiteError::UnAuthorized(
+            "tag does not belong to site".to_string(),
+        ));
+    }
+
+    entities::tag::Entity::delete_by_id(tag_id)
+        .exec(db)
+        .await
+        .map_err(SiteError::from)?;
+    Ok(())
+}
+
 /// Returns all tags for a site.
 pub async fn list_tags(
     db: &DatabaseConnection,
@@ -1696,6 +1720,86 @@ pub async fn assign_tags_to_content<C: ConnectionTrait>(
     Ok(())
 }
 
+/// Replaces the current tag set for content and the specified revision.
+pub async fn sync_tags_to_content<C: ConnectionTrait>(
+    db: &C,
+    site_id: Uuid,
+    content_id: Uuid,
+    revision_id: Uuid,
+    tag_names: Vec<String>,
+) -> Result<(), String> {
+    let mut unique = HashSet::new();
+    let mut desired_tag_ids = Vec::new();
+
+    for raw in tag_names {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let normalized = trimmed.to_string();
+        if !unique.insert(normalized.clone()) {
+            continue;
+        }
+
+        let existing_tag = entities::tag::Entity::find()
+            .filter(entities::tag::Column::SiteId.eq(site_id))
+            .filter(entities::tag::Column::Name.eq(normalized.clone()))
+            .one(db)
+            .await
+            .map_err(|error| error.to_string())?;
+        let tag = match existing_tag {
+            Some(tag) => tag,
+            None => create_tag(
+                db,
+                NewTag {
+                    site_id,
+                    name: normalized,
+                },
+            )
+            .await
+            .map_err(|error| error.to_string())?,
+        };
+        desired_tag_ids.push(tag.id);
+    }
+
+    let existing_content_tags = entities::content_tag::Entity::find()
+        .filter(entities::content_tag::Column::ContentId.eq(content_id))
+        .all(db)
+        .await
+        .map_err(|error| error.to_string())?;
+    for existing in existing_content_tags {
+        if !desired_tag_ids.contains(&existing.tag_id) {
+            entities::content_tag::Entity::delete_by_id(existing.id)
+                .exec(db)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+    }
+
+    let existing_revision_tags = entities::content_revision_tag::Entity::find()
+        .filter(entities::content_revision_tag::Column::RevisionId.eq(revision_id))
+        .all(db)
+        .await
+        .map_err(|error| error.to_string())?;
+    for existing in existing_revision_tags {
+        if !desired_tag_ids.contains(&existing.tag_id) {
+            entities::content_revision_tag::Entity::delete_by_id(existing.id)
+                .exec(db)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+    }
+
+    assign_tags_to_content(
+        db,
+        site_id,
+        content_id,
+        revision_id,
+        unique.into_iter().collect(),
+    )
+    .await
+}
+
 /// Creates an asset record.
 pub async fn create_asset<C: ConnectionTrait>(
     db: &C,
@@ -2113,6 +2217,91 @@ mod tests {
             .await
             .expect("failed to list content tags");
         assert_eq!(content_tags.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn sync_tags_to_content_replaces_current_tag_set_for_latest_revision() {
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+        let content = create_content_fixture(&db, site.id, PageType::Post, "tag-sync", true).await;
+        let rev1 = get_revision_by_number(&db, content.id, 1)
+            .await
+            .expect("failed to fetch revision 1")
+            .expect("missing revision 1");
+
+        assign_tags_to_content(
+            &db,
+            site.id,
+            content.id,
+            rev1.id,
+            vec!["Docs".to_string(), "News".to_string()],
+        )
+        .await
+        .expect("failed to assign initial tags");
+
+        update_content(
+            &db,
+            UpdateContent {
+                content_id: content.id,
+                page_type: None,
+                title: Some("Tag Sync Updated".to_string()),
+                slug: Some("tag-sync-updated".to_string()),
+                page_content: Some("Updated body".to_string()),
+                draft: Some(false),
+                published_at: None,
+                editor_sub: "editor".to_string(),
+            },
+        )
+        .await
+        .expect("failed to update content");
+
+        let rev2 = get_revision_by_number(&db, content.id, 2)
+            .await
+            .expect("failed to fetch revision 2")
+            .expect("missing revision 2");
+
+        sync_tags_to_content(
+            &db,
+            site.id,
+            content.id,
+            rev2.id,
+            vec!["News".to_string(), "Guides".to_string()],
+        )
+        .await
+        .expect("failed to sync tags");
+
+        let mut current_tag_names = list_content_tags(&db, content.id)
+            .await
+            .expect("failed to list content tags")
+            .into_iter()
+            .map(|tag| tag.name)
+            .collect::<Vec<_>>();
+        current_tag_names.sort();
+        assert_eq!(
+            current_tag_names,
+            vec!["Guides".to_string(), "News".to_string()]
+        );
+
+        let mut rev2_tag_names = list_revision_tags(&db, rev2.id)
+            .await
+            .expect("failed to list revision 2 tags")
+            .into_iter()
+            .map(|tag| tag.name)
+            .collect::<Vec<_>>();
+        rev2_tag_names.sort();
+        assert_eq!(
+            rev2_tag_names,
+            vec!["Guides".to_string(), "News".to_string()]
+        );
+
+        let mut rev1_tag_names = list_revision_tags(&db, rev1.id)
+            .await
+            .expect("failed to list revision 1 tags")
+            .into_iter()
+            .map(|tag| tag.name)
+            .collect::<Vec<_>>();
+        rev1_tag_names.sort();
+        assert_eq!(rev1_tag_names, vec!["Docs".to_string(), "News".to_string()]);
     }
 
     #[tokio::test]
