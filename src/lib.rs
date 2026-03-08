@@ -17,11 +17,14 @@ use url::Url;
 use uuid::Uuid;
 
 pub mod cli;
+pub mod constants;
 pub mod db;
 pub mod entities;
 pub mod errors;
+pub mod images;
 pub mod middleware;
 pub mod migration;
+pub mod oidc;
 pub mod telemetry;
 pub mod tls;
 pub mod web;
@@ -119,11 +122,77 @@ pub async fn list_audit_events(
 
 const DEFAULT_POST_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{title}}</title></head><body><h1>{{title}}</h1><article>{{content}}</article></body></html>";
 const DEFAULT_PAGE_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{title}}</title></head><body><h1>{{title}}</h1><article>{{content}}</article></body></html>";
-const DEFAULT_INDEX_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{site}}</title></head><body><h1>{{site}}</h1><ul>{{items}}</ul></body></html>";
-const DEFAULT_RSS_TEMPLATE: &str = "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel><title>{{site}}</title>{{items}}</channel></rss>";
-const DEFAULT_ATOM_TEMPLATE: &str = "<?xml version=\"1.0\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><title>{{site}}</title><updated>{{updated}}</updated>{{entries}}</feed>";
+const DEFAULT_INDEX_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{site_title}}</title></head><body><h1>{{site_title}}</h1><ul>{{items}}</ul></body></html>";
+const DEFAULT_RSS_TEMPLATE: &str = "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel><title>{{site_title}}</title>{{items}}</channel></rss>";
+const DEFAULT_ATOM_TEMPLATE: &str = "<?xml version=\"1.0\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><title>{{site_title}}</title><updated>{{updated}}</updated>{{entries}}</feed>";
 const DEFAULT_TAG_TEMPLATE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{tag}}</title></head><body><h1>{{tag}}</h1><ul>{{items}}</ul></body></html>";
 pub const SITE_TEMPLATES_DIR: &str = "site_templates";
+
+/// Builds the default "site_context" which is used by everything
+fn default_context(site: &entities::site::Model, page_title: &str) -> tera::Context {
+    let mut context = Context::new();
+    context.insert("site_title", &site.full_title);
+    context.insert("page_title", page_title);
+    context
+}
+
+async fn write_atom(
+    tmp_root: &Path,
+    tera: &Tera,
+    site: &entities::site::Model,
+    post_items: &[entities::content_item::Model],
+) -> Result<(), String> {
+    let atom_entries = render_atom_entries_xml(&post_items);
+    let updated = post_items
+        .first()
+        .map(|m| m.content_publish_timestamp())
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
+    let mut atom_context = default_context(&site, &site.full_title);
+    atom_context.insert("link", "/");
+    atom_context.insert("updated", &updated);
+    atom_context.insert("entries", &atom_entries);
+    let rendered_atom = render_template(&tera, "atom.xml", &atom_context)?;
+    fs::write(tmp_root.join("atom.xml"), rendered_atom.as_bytes())
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+async fn write_rss(
+    tmp_root: &Path,
+    tera: &Tera,
+    site: &entities::site::Model,
+    post_items: &[entities::content_item::Model],
+) -> Result<(), String> {
+    let rss_items = render_rss_items_xml(&post_items);
+    let mut rss_context = default_context(&site, &site.full_title);
+    rss_context.insert("link", "/");
+    rss_context.insert("updated", &Utc::now().to_rfc2822());
+    rss_context.insert("items", &rss_items);
+    let rendered_rss = render_template(&tera, "rss.xml", &rss_context)?;
+    fs::write(tmp_root.join("rss.xml"), rendered_rss.as_bytes())
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+async fn write_index(
+    tmp_root: &Path,
+    tera: &Tera,
+    site: &entities::site::Model,
+    index_rows: &str,
+) -> Result<(), String> {
+    let mut index_context = default_context(&site, &site.full_title);
+    index_context.insert("items", &index_rows);
+    let rendered_index = render_template(&tera, "index.html", &index_context)?;
+    fs::create_dir_all(&tmp_root)
+        .await
+        .map_err(|error| error.to_string())?;
+    fs::write(tmp_root.join("index.html"), rendered_index)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
 
 /// Renders all published content for a site into ./rendered/<site_short_name>.
 pub async fn render_site(
@@ -209,11 +278,9 @@ pub async fn render_site(
         };
         let tags = load_tag_names(db, item.id).await?;
         let tag_links = render_tag_links(&tags);
-        let mut context = Context::new();
-        context.insert("title", &item.title);
+        let mut context = default_context(&site, &item.title);
         context.insert("content", &html);
         context.insert("slug", &item.slug);
-        context.insert("site_title", &site.full_title);
         context.insert("page_type", &item.page_type);
         context.insert("created_at", &item.created_at);
         context.insert("published_at", &item.published_at);
@@ -244,6 +311,7 @@ pub async fn render_site(
         }
 
         let primary_route = content_primary_route(item);
+        // TODO this is a terrible way to render the index
         index_rows.push_str(&format!(
             "<li><a href=\"/{}/\">{}</a></li>",
             primary_route.trim_matches('/'),
@@ -251,16 +319,7 @@ pub async fn render_site(
         ));
     }
 
-    let mut index_context = Context::new();
-    index_context.insert("site", &site.full_title);
-    index_context.insert("items", &index_rows);
-    let rendered_index = render_template(&tera, "index.html", &index_context)?;
-    fs::create_dir_all(&tmp_root)
-        .await
-        .map_err(|error| error.to_string())?;
-    fs::write(tmp_root.join("index.html"), rendered_index)
-        .await
-        .map_err(|error| error.to_string())?;
+    write_index(&tmp_root, &tera, &site, &index_rows).await?;
     files_written = files_written.saturating_add(1);
 
     let post_items = content_items
@@ -269,32 +328,10 @@ pub async fn render_site(
         .cloned()
         .collect::<Vec<_>>();
 
-    let rss_items = render_rss_items_xml(&post_items);
-    let mut rss_context = Context::new();
-    rss_context.insert("site", &site.full_title);
-    rss_context.insert("link", "/");
-    rss_context.insert("updated", &Utc::now().to_rfc2822());
-    rss_context.insert("items", &rss_items);
-    let rendered_rss = render_template(&tera, "rss.xml", &rss_context)?;
-    fs::write(tmp_root.join("rss.xml"), rendered_rss.as_bytes())
-        .await
-        .map_err(|error| error.to_string())?;
+    write_rss(&tmp_root, &tera, &site, &post_items).await?;
     files_written = files_written.saturating_add(1);
 
-    let atom_entries = render_atom_entries_xml(&post_items);
-    let updated = post_items
-        .first()
-        .map(|m| m.content_publish_timestamp())
-        .unwrap_or_else(|| Utc::now().to_rfc3339());
-    let mut atom_context = Context::new();
-    atom_context.insert("site", &site.full_title);
-    atom_context.insert("link", "/");
-    atom_context.insert("updated", &updated);
-    atom_context.insert("entries", &atom_entries);
-    let rendered_atom = render_template(&tera, "atom.xml", &atom_context)?;
-    fs::write(tmp_root.join("atom.xml"), rendered_atom.as_bytes())
-        .await
-        .map_err(|error| error.to_string())?;
+    write_atom(&tmp_root, &tera, &site, &post_items).await?;
     files_written = files_written.saturating_add(1);
 
     let tags = entities::tag::Entity::find()
@@ -1415,6 +1452,7 @@ pub async fn get_revision_by_number<C: ConnectionTrait>(
     Ok(revision)
 }
 
+/// Gets the primary path for this content item (based on page type, slug, and publish date).
 pub fn content_primary_route(content: &entities::content_item::Model) -> String {
     let slug = content.slug.trim_matches('/').to_string();
     if content.page_type.is_post() {
@@ -1426,25 +1464,9 @@ pub fn content_primary_route(content: &entities::content_item::Model) -> String 
     format!("{}/{}", content_date_path(&date_source), slug)
 }
 
+/// Returns a path segment based on the date, in the format "YYYY/MM/DD".
 fn content_date_path(date: &DateTime<Utc>) -> String {
     format!("{:04}/{:02}/{:02}", date.year(), date.month(), date.day())
-}
-
-/// Creates a user record and returns the persisted row.
-pub async fn create_user<C: ConnectionTrait>(
-    db: &C,
-    input: NewUser,
-) -> Result<entities::user::Model, String> {
-    let model = entities::user::ActiveModel {
-        id: Set(Uuid::now_v7()),
-        subject: Set(input.subject),
-        created_at: Set(Utc::now()),
-        last_login_at: Set(None),
-    };
-
-    let model = model.insert(db).await.map_err(|error| error.to_string())?;
-
-    Ok(model)
 }
 
 /// Returns all users.
@@ -1455,36 +1477,6 @@ pub async fn list_users(db: &DatabaseConnection) -> Result<Vec<entities::user::M
         .map_err(|error| error.to_string())?;
 
     Ok(users)
-}
-
-/// Ensures a user exists and updates last_login_at.
-pub async fn upsert_user_login<C: ConnectionTrait>(
-    db: &C,
-    subject: &str,
-) -> Result<entities::user::Model, String> {
-    let existing = entities::user::Entity::find()
-        .filter(entities::user::Column::Subject.eq(subject.to_string()))
-        .one(db)
-        .await
-        .map_err(|error| error.to_string())?;
-
-    let user = if let Some(existing) = existing {
-        let mut active = existing.into_active_model();
-        active.last_login_at = Set(Some(Utc::now()));
-        active.update(db).await.map_err(|error| error.to_string())?
-    } else {
-        entities::user::ActiveModel {
-            id: Set(Uuid::now_v7()),
-            subject: Set(subject.to_string()),
-            created_at: Set(Utc::now()),
-            last_login_at: Set(Some(Utc::now())),
-        }
-        .insert(db)
-        .await
-        .map_err(|error| error.to_string())?
-    };
-
-    Ok(user)
 }
 
 /// Creates one site membership record.
@@ -1790,6 +1782,7 @@ pub async fn list_asset_variants(
 mod tests {
     use super::*;
     use crate::entities::audit_event::log_audit_event;
+    use crate::entities::user::upsert_user_login;
     use crate::{db::test_db_start, entities::site::get_by_id};
     use sea_orm::{DatabaseConnection, TransactionTrait};
     use tempfile::TempDir;
@@ -2097,14 +2090,9 @@ mod tests {
         let db = setup_db().await;
         let site = create_site_fixture(&db).await;
 
-        let user = create_user(
-            &db,
-            NewUser {
-                subject: "alice".to_string(),
-            },
-        )
-        .await
-        .expect("failed to create user");
+        let user = entities::user::create_user(&db, "alice")
+            .await
+            .expect("failed to create user");
 
         let updated = upsert_user_login(&db, "alice")
             .await

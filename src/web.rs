@@ -1,8 +1,15 @@
+use crate::constants::*;
 use crate::entities::audit_event::log_audit_event;
 use crate::entities::site::get_by_id;
+use crate::entities::user::upsert_user_login;
 use crate::entities::{self, PageType};
 use crate::errors::SiteError;
+use crate::images::{generate_thumbnail, mime_from_extension};
 use crate::middleware::log_requests;
+use crate::oidc::{
+    OIDC_HTTP_CLIENT, OIDC_SESSION_OIDC_NONCE_KEY, OIDC_SESSION_OIDC_PKCE_KEY,
+    OIDC_SESSION_OIDC_STATE_KEY, admin_login_callback, build_oidc_client,
+};
 use crate::tls::build_tls_config;
 use crate::{
     NewAsset, NewAssetVariant, NewContent, cli::OidcConfig, content_primary_route, create_asset,
@@ -25,13 +32,11 @@ use axum::{
     routing::get,
 };
 use chrono::{DateTime, Utc};
-use image::{GenericImageView, ImageFormat};
+use openidconnect::ClientSecret;
 use openidconnect::{
-    AuthorizationCode, ClientId, CsrfToken, EndpointMaybeSet, EndpointNotSet, EndpointSet,
-    IssuerUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
-    core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata},
+    ClientId, CsrfToken, IssuerUrl, Nonce, PkceCodeChallenge, Scope, core::CoreAuthenticationFlow,
 };
-use reqwest::redirect::Policy;
+
 use sea_orm::{
     ColumnTrait as _, Condition, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
     QueryOrder, QuerySelect, TransactionTrait,
@@ -41,7 +46,6 @@ use serde_json::json;
 use similar::TextDiff;
 use std::collections::HashMap;
 use std::env;
-use std::io::Cursor;
 use std::net::SocketAddr;
 use std::path::{Component, Path as StdPath, PathBuf};
 use std::str::FromStr;
@@ -77,11 +81,12 @@ impl AdminTemplateData {
 }
 
 #[derive(Clone)]
-struct AdminState {
-    db: Arc<DatabaseConnection>,
-    oidc_client_id: Option<String>,
-    oidc_frontend_url: Url,
-    oidc_discovery_url: Option<String>,
+pub(crate) struct AdminState {
+    pub(crate) db: Arc<DatabaseConnection>,
+    pub(crate) oidc_client_id: ClientId,
+    pub(crate) oidc_client_secret: Option<ClientSecret>,
+    pub(crate) oidc_frontend_url: Url,
+    pub(crate) oidc_discovery_url: IssuerUrl,
 }
 
 macro_rules! admin_page_template {
@@ -305,27 +310,6 @@ struct AssetLibraryItem {
     has_thumbnail: bool,
 }
 
-#[derive(Debug, Deserialize)]
-struct OidcCallbackQuery {
-    code: Option<String>,
-    state: Option<String>,
-    error: Option<String>,
-    error_description: Option<String>,
-}
-
-type OidcClient = CoreClient<
-    EndpointSet,
-    EndpointNotSet,
-    EndpointNotSet,
-    EndpointNotSet,
-    EndpointMaybeSet,
-    EndpointMaybeSet,
->;
-
-const ADMIN_ACTOR_SUB: &str = "web-admin";
-const DEFAULT_TEMPLATE_NAME: &str = "default";
-const THUMBNAIL_MAX_SIZE: u32 = 320;
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum SiteRole {
     Viewer,
@@ -380,9 +364,11 @@ pub async fn run_admin_server(
 ) -> Result<(), anyhow::Error> {
     let state = AdminState {
         db: db.clone(),
-        oidc_client_id: oidc.oidc_client_id.clone(),
+        oidc_client_id: ClientId::new(oidc.oidc_client_id.clone()),
+        oidc_client_secret: oidc.oidc_client_secret.clone().map(ClientSecret::new),
         oidc_frontend_url: oidc.frontend_url.clone(),
-        oidc_discovery_url: oidc.oidc_discovery_url.clone(),
+        oidc_discovery_url: IssuerUrl::new(oidc.oidc_discovery_url.clone())
+            .context("Failed to parse discovery URL")?,
     };
 
     let pool = db.get_sqlite_connection_pool();
@@ -667,7 +653,7 @@ async fn ensure_site_owner_membership<C: ConnectionTrait>(
     user_sub: &str,
     site_id: Uuid,
 ) -> Result<Option<crate::entities::site_membership::Model>, SiteError> {
-    let user = crate::upsert_user_login(db, user_sub)
+    let user = upsert_user_login(db, user_sub)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load user: {error}")))?;
     let existing = crate::get_membership_for_subject(db, site_id, user_sub)
@@ -764,15 +750,7 @@ async fn admin_login(
     State(state): State<AdminState>,
     session: Session,
 ) -> Result<Response, SiteError> {
-    let http_client = match build_http_client() {
-        Ok(client) => client,
-        Err(error) => {
-            return Err(SiteError::internal(format!(
-                "failed to build http client: {error}"
-            )));
-        }
-    };
-    let client = match build_oidc_client(&state, &http_client).await {
+    let client = match build_oidc_client(&state, &OIDC_HTTP_CLIENT).await {
         Ok(client) => client,
         Err(error) => {
             return Err(SiteError::internal(format!(
@@ -795,15 +773,18 @@ async fn admin_login(
         .url();
 
     if session
-        .insert("oidc_state", csrf_state.secret().to_string())
+        .insert(OIDC_SESSION_OIDC_STATE_KEY, csrf_state.secret().to_string())
         .await
         .is_err()
         || session
-            .insert("oidc_pkce", pkce_verifier.secret().to_string())
+            .insert(
+                OIDC_SESSION_OIDC_PKCE_KEY,
+                pkce_verifier.secret().to_string(),
+            )
             .await
             .is_err()
         || session
-            .insert("oidc_nonce", nonce.secret().to_string())
+            .insert(OIDC_SESSION_OIDC_NONCE_KEY, nonce.secret().to_string())
             .await
             .is_err()
     {
@@ -816,159 +797,9 @@ async fn admin_login(
     Ok(Redirect::to(&auth_url).into_response())
 }
 
-async fn admin_login_callback(
-    State(state): State<AdminState>,
-    Query(query): Query<OidcCallbackQuery>,
-    session: Session,
-) -> Result<Redirect, SiteError> {
-    if let Some(error) = query.error {
-        let description = query.error_description.unwrap_or_default();
-        return Err(SiteError::internal(format!(
-            "OIDC error: {error} {description}"
-        )));
-    }
-
-    let code = match query.code {
-        Some(code) => code,
-        None => {
-            return Err(SiteError::UnAuthorized(
-                "missing authorization code".to_string(),
-            ));
-        }
-    };
-    let state_value = match query.state {
-        Some(state) => state,
-        None => return Err(SiteError::UnAuthorized("missing state".to_string())),
-    };
-
-    let stored_state = session
-        .get::<String>("oidc_state")
-        .await
-        .unwrap_or(None)
-        .unwrap_or_default();
-    if stored_state != state_value {
-        return Err(SiteError::UnAuthorized("OIDC state mismatch".to_string()));
-    }
-
-    let pkce_verifier = session
-        .get::<String>("oidc_pkce")
-        .await
-        .unwrap_or(None)
-        .unwrap_or_default();
-    let nonce_value = session
-        .get::<String>("oidc_nonce")
-        .await
-        .unwrap_or(None)
-        .unwrap_or_default();
-
-    let http_client = match build_http_client() {
-        Ok(client) => client,
-        Err(error) => {
-            return Err(SiteError::internal(format!(
-                "failed to build http client: {error}"
-            )));
-        }
-    };
-    let client = match build_oidc_client(&state, &http_client).await {
-        Ok(client) => client,
-        Err(error) => {
-            return Err(SiteError::internal(format!(
-                "failed to initialize OIDC client: {error}"
-            )));
-        }
-    };
-
-    let token_request = match client.exchange_code(AuthorizationCode::new(code)) {
-        Ok(request) => request,
-        Err(error) => {
-            return Err(SiteError::internal(format!(
-                "failed to build token request: {error}"
-            )));
-        }
-    };
-    let token_response = match token_request
-        .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier))
-        .request_async(&http_client)
-        .await
-    {
-        Ok(response) => response,
-        Err(error) => {
-            return Err(SiteError::internal(format!(
-                "failed to exchange code: {error}"
-            )));
-        }
-    };
-
-    let id_token = match token_response.id_token() {
-        Some(token) => token,
-        None => {
-            return Err(SiteError::internal(
-                "missing id_token in response".to_string(),
-            ));
-        }
-    };
-
-    let nonce = Nonce::new(nonce_value);
-    let claims = match id_token.claims(&client.id_token_verifier(), &nonce) {
-        Ok(claims) => claims,
-        Err(error) => {
-            return Err(SiteError::UnAuthorized(format!(
-                "failed to verify id_token: {error}"
-            )));
-        }
-    };
-
-    let subject = claims.subject().as_str().to_string();
-    if session.insert("user_sub", subject.clone()).await.is_err() {
-        return Err(SiteError::internal("failed to store session".to_string()));
-    }
-
-    let _ = crate::upsert_user_login(state.db.as_ref(), &subject).await;
-
-    Ok(Redirect::to("/admin"))
-}
-
 async fn admin_logout(session: Session) -> Redirect {
     let _ = session.clear().await;
     Redirect::to("/admin/login")
-}
-
-fn build_http_client() -> Result<reqwest::Client, String> {
-    reqwest::ClientBuilder::new()
-        .redirect(Policy::none())
-        .build()
-        .map_err(|error| error.to_string())
-}
-
-async fn build_oidc_client(
-    state: &AdminState,
-    http_client: &reqwest::Client,
-) -> Result<OidcClient, String> {
-    let discovery_url = state
-        .oidc_discovery_url
-        .clone()
-        .ok_or_else(|| "missing discovery url".to_string())?;
-    let client_id = state
-        .oidc_client_id
-        .clone()
-        .ok_or_else(|| "missing client id".to_string())?;
-    let frontend_url = state.oidc_frontend_url.clone();
-
-    let provider_metadata = CoreProviderMetadata::discover_async(
-        IssuerUrl::new(discovery_url).map_err(|error| error.to_string())?,
-        http_client,
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-
-    let redirect_url = frontend_url
-        .join("/oauth2/callback")
-        .map_err(|error| error.to_string())?;
-    let client =
-        CoreClient::from_provider_metadata(provider_metadata, ClientId::new(client_id), None)
-            .set_redirect_uri(RedirectUrl::from_url(redirect_url));
-
-    Ok(client)
 }
 
 async fn admin_site_content_list(
@@ -1081,7 +912,7 @@ async fn admin_site_membership_create(
     let txn = state.db.begin().await?;
     let actor = actor.clone();
     let subject = subject.to_string();
-    let user = crate::upsert_user_login(&txn, &subject)
+    let user = upsert_user_login(&txn, &subject)
         .await
         .map_err(|error| SiteError::internal(format!("failed to upsert user: {error}")))?;
     let membership = create_membership(
@@ -2265,81 +2096,6 @@ fn admin_site_assets_new_form_html() -> &'static str {
         <button type="submit">Upload</button>
       </form>
     "#
-}
-
-struct ThumbnailResult {
-    bytes: Vec<u8>,
-    extension: String,
-    mime_type: String,
-    byte_length: i32,
-    width: Option<i32>,
-    height: Option<i32>,
-}
-
-async fn generate_thumbnail(
-    bytes: Vec<u8>,
-    extension: &str,
-) -> Result<(Option<(u32, u32)>, Option<ThumbnailResult>), String> {
-    let extension = extension.to_string();
-    tokio::task::spawn_blocking(move || {
-        let format = ImageFormat::from_extension(&extension);
-        let image = match format {
-            Some(format) => image::load_from_memory_with_format(&bytes, format),
-            None => image::load_from_memory(&bytes),
-        };
-
-        let Ok(image) = image else {
-            return Ok((None, None));
-        };
-
-        let (width, height) = image.dimensions();
-        let thumbnail = image.thumbnail(THUMBNAIL_MAX_SIZE, THUMBNAIL_MAX_SIZE);
-        let thumb_format = format.unwrap_or(ImageFormat::Png);
-        let thumb_ext = image_format_extension(thumb_format).to_string();
-        let mut thumb_bytes = Vec::new();
-        thumbnail
-            .write_to(&mut Cursor::new(&mut thumb_bytes), thumb_format)
-            .map_err(|error| error.to_string())?;
-
-        let mime_type = mime_from_extension(thumb_ext.as_str()).to_string();
-        let byte_length = i32::try_from(thumb_bytes.len()).unwrap_or(i32::MAX);
-        let width_i32 = i32::try_from(thumbnail.width()).ok();
-        let height_i32 = i32::try_from(thumbnail.height()).ok();
-
-        Ok((
-            Some((width, height)),
-            Some(ThumbnailResult {
-                bytes: thumb_bytes,
-                extension: thumb_ext,
-                mime_type,
-                byte_length,
-                width: width_i32,
-                height: height_i32,
-            }),
-        ))
-    })
-    .await
-    .map_err(|error| error.to_string())?
-}
-
-fn image_format_extension(format: ImageFormat) -> &'static str {
-    match format {
-        ImageFormat::Jpeg => "jpg",
-        ImageFormat::Png => "png",
-        ImageFormat::Gif => "gif",
-        ImageFormat::WebP => "webp",
-        _ => "png",
-    }
-}
-
-fn mime_from_extension(extension: &str) -> &'static str {
-    match extension {
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        _ => "application/octet-stream",
-    }
 }
 
 fn normalize_optional(value: Option<String>) -> Option<String> {

@@ -1,11 +1,11 @@
 {% extends "base_template.html" %}
 
-{% block title %}{{title}}{% endblock %}
+{% block title %}{{site_title}}{% endblock %}
 
 {% block content %}
 <article>
   <header>
-    <h2>{{title}}</h2>
+    <h2>{{page_title}}</h2>
     {% if published_at %}
     <p class="meta">Published {{ published_at }}</p>
     {% endif %}

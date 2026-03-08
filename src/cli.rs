@@ -9,6 +9,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::entities::audit_event::log_audit_event;
+use crate::entities::user::create_user;
 use crate::*;
 
 #[derive(Debug, Args, Clone)]
@@ -43,7 +44,7 @@ pub struct OidcConfig {
         env = "WEBSITES_OIDC_CLIENT_ID",
         value_name = "STRING"
     )]
-    pub oidc_client_id: Option<String>,
+    pub oidc_client_id: String,
 
     /// OIDC discovery document URL.
     #[arg(
@@ -51,7 +52,15 @@ pub struct OidcConfig {
         env = "WEBSITES_OIDC_DISCOVERY_URL",
         value_name = "URL"
     )]
-    pub oidc_discovery_url: Option<String>,
+    pub oidc_discovery_url: String,
+
+    /// OIDC client secret, this is optional. If not provided, the OIDC client will be configured without a secret which may be appropriate for public clients that don't have a secure way to store a secret.
+    #[arg(
+        long = "client-secret",
+        env = "WEBSITES_OIDC_CLIENT_SECRET",
+        value_name = "CLIENT_SECRET"
+    )]
+    pub oidc_client_secret: Option<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -365,8 +374,8 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
             println!("tls_cert_path={:?}", &oidc.tls_cert_path.display());
             println!("tls_key_path={:?}", &oidc.tls_key_path.display());
             println!("frontend_url={}", &oidc.frontend_url);
-            println!("oidc_client_id={}", cli_value(&oidc.oidc_client_id));
-            println!("oidc_discovery_url={}", cli_value(&oidc.oidc_discovery_url));
+            println!("oidc_client_id={}", &oidc.oidc_client_id);
+            println!("oidc_discovery_url={}", &oidc.oidc_discovery_url);
             Ok(())
         }
         Commands::Site { command } => match command {
@@ -527,7 +536,9 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 let user = db_ref
                     .transaction::<_, _, String>(|txn| {
                         Box::pin(async move {
-                            let user = create_user(txn, NewUser { subject }).await?;
+                            let user = create_user(txn, &subject)
+                                .await
+                                .map_err(|error| error.to_string())?;
                             log_audit_event(
                                 txn,
                                 "system",
@@ -1135,12 +1146,6 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
             }
         },
     }
-}
-
-fn cli_value(value: &Option<String>) -> String {
-    value
-        .as_deref()
-        .map_or_else(|| "<unset>".to_string(), |value| value.to_string())
 }
 
 fn parse_uuid(value: &str, label: &str) -> Result<Uuid, String> {
