@@ -110,7 +110,19 @@ const oidcTestArgs = [
   "https://example.com/.well-known/openid-configuration",
 ] as const;
 const workspaceRoot = process.cwd();
-const manifestPath = path.join(workspaceRoot, "Cargo.toml");
+const executableSuffix = process.platform === "win32" ? ".exe" : "";
+const websitesBinaryPath = path.join(
+  workspaceRoot,
+  "target",
+  "debug",
+  `websites${executableSuffix}`,
+);
+const sessionSeedBinaryPath = path.join(
+  workspaceRoot,
+  "target",
+  "debug",
+  `session_seed${executableSuffix}`,
+);
 
 export const tinyPngBytes = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==",
@@ -155,12 +167,18 @@ export function runCommand(
   });
 }
 
-function cargoRunArgs(args: string[]): string[] {
-  return ["run", "--manifest-path", manifestPath, "--", ...args];
+function runWebsitesCommand(
+  args: string[],
+  options: { env?: NodeJS.ProcessEnv; cwd?: string } = {},
+): Promise<CommandResult> {
+  return runCommand(websitesBinaryPath, args, options);
 }
 
-function cargoBinArgs(bin: string, args: string[]): string[] {
-  return ["run", "--manifest-path", manifestPath, "--bin", bin, "--", ...args];
+function runSessionSeedCommand(
+  args: string[],
+  options: { env?: NodeJS.ProcessEnv; cwd?: string } = {},
+): Promise<CommandResult> {
+  return runCommand(sessionSeedBinaryPath, args, options);
 }
 
 async function loadEnvValue(name: string): Promise<string | undefined> {
@@ -317,9 +335,8 @@ export async function setupHarness(): Promise<TestHarness> {
     path.join(tempRoot, "site_templates"),
   );
 
-  await runCommand(
-    "cargo",
-    cargoRunArgs([
+  await runWebsitesCommand(
+    [
       "--database-url",
       dbPath,
       "--tls-cert-path",
@@ -330,12 +347,11 @@ export async function setupHarness(): Promise<TestHarness> {
       "https://127.0.0.1",
       ...oidcTestArgs,
       "init",
-    ]),
+    ],
     { cwd: tempRoot, env },
   );
-  const siteResult = await runCommand(
-    "cargo",
-    cargoRunArgs([
+  const siteResult = await runWebsitesCommand(
+    [
       "--database-url",
       dbPath,
       "--tls-cert-path",
@@ -353,7 +369,7 @@ export async function setupHarness(): Promise<TestHarness> {
       "Test Site",
       "--template-name",
       "default",
-    ]),
+    ],
     { cwd: tempRoot, env },
   );
 
@@ -362,8 +378,8 @@ export async function setupHarness(): Promise<TestHarness> {
   const baseUrl = `https://127.0.0.1:${port}`;
   const serverLogs = { stdout: "", stderr: "" };
   const server = spawn(
-    "cargo",
-    cargoRunArgs([
+    websitesBinaryPath,
+    [
       "--database-url",
       dbPath,
       "--tls-cert-path",
@@ -377,7 +393,7 @@ export async function setupHarness(): Promise<TestHarness> {
       "admin",
       "--listen",
       `127.0.0.1:${port}`,
-    ]),
+    ],
     {
       cwd: tempRoot,
       env,
@@ -413,9 +429,8 @@ export async function createUser(
   subject: string,
   admin = false,
 ): Promise<string> {
-  const result = await runCommand(
-    "cargo",
-    cargoRunArgs([
+  const result = await runWebsitesCommand(
+    [
       "--database-url",
       harness.dbPath,
       "--tls-cert-path",
@@ -430,7 +445,7 @@ export async function createUser(
       "--subject",
       subject,
       ...(admin ? ["--admin"] : []),
-    ]),
+    ],
     { cwd: harness.tempRoot, env: harness.env },
   );
   return parseCreatedId(result.stdout, "user");
@@ -441,9 +456,8 @@ export async function createMembership(
   userId: string,
   role: SiteRole,
 ): Promise<string> {
-  const result = await runCommand(
-    "cargo",
-    cargoRunArgs([
+  const result = await runWebsitesCommand(
+    [
       "--database-url",
       harness.dbPath,
       "--tls-cert-path",
@@ -461,7 +475,7 @@ export async function createMembership(
       userId,
       "--role",
       role,
-    ]),
+    ],
     { cwd: harness.tempRoot, env: harness.env },
   );
   return parseCreatedId(result.stdout, "membership");
@@ -476,9 +490,8 @@ export async function addMembership(
 }
 
 export async function createTag(harness: TestHarness, name: string): Promise<string> {
-  const result = await runCommand(
-    "cargo",
-    cargoRunArgs([
+  const result = await runWebsitesCommand(
+    [
       "--database-url",
       harness.dbPath,
       "--tls-cert-path",
@@ -494,7 +507,7 @@ export async function createTag(harness: TestHarness, name: string): Promise<str
       harness.siteId,
       "--name",
       name,
-    ]),
+    ],
     { cwd: harness.tempRoot, env: harness.env },
   );
   return parseCreatedId(result.stdout, "tag");
@@ -512,9 +525,8 @@ export async function createAssetWithThumbnail(
     thumbnailFilename: string;
   },
 ): Promise<string> {
-  const createResult = await runCommand(
-    "cargo",
-    cargoRunArgs([
+  const createResult = await runWebsitesCommand(
+    [
       "--database-url",
       harness.dbPath,
       "--tls-cert-path",
@@ -542,14 +554,13 @@ export async function createAssetWithThumbnail(
       "800",
       "--height",
       "600",
-    ]),
+    ],
     { cwd: harness.tempRoot, env: harness.env },
   );
   const assetId = parseCreatedId(createResult.stdout, "asset");
 
-  await runCommand(
-    "cargo",
-    cargoRunArgs([
+  await runWebsitesCommand(
+    [
       "--database-url",
       harness.dbPath,
       "--tls-cert-path",
@@ -575,7 +586,7 @@ export async function createAssetWithThumbnail(
       "320",
       "--height",
       "240",
-    ]),
+    ],
     { cwd: harness.tempRoot, env: harness.env },
   );
 
@@ -593,9 +604,8 @@ export async function createContent(
     draft = true,
   }: CreateContentInput,
 ): Promise<string> {
-  const result = await runCommand(
-    "cargo",
-    cargoRunArgs([
+  const result = await runWebsitesCommand(
+    [
       "--database-url",
       harness.dbPath,
       "--tls-cert-path",
@@ -620,7 +630,7 @@ export async function createContent(
       "--creator-sub",
       creatorSub,
       ...(draft ? ["--draft"] : []),
-    ]),
+    ],
     { cwd: harness.tempRoot, env: harness.env },
   );
   return parseCreatedId(result.stdout, "content");
@@ -638,9 +648,8 @@ export async function createAlias(
     kind?: "primary" | "alias";
   },
 ): Promise<string> {
-  const result = await runCommand(
-    "cargo",
-    cargoRunArgs([
+  const result = await runWebsitesCommand(
+    [
       "--database-url",
       harness.dbPath,
       "--tls-cert-path",
@@ -660,7 +669,7 @@ export async function createAlias(
       aliasPath,
       "--kind",
       kind,
-    ]),
+    ],
     { cwd: harness.tempRoot, env: harness.env },
   );
   return parseCreatedId(result.stdout, "alias");
@@ -679,9 +688,8 @@ export async function updateContent(
     editorSub,
   }: UpdateContentInput,
 ): Promise<void> {
-  await runCommand(
-    "cargo",
-    cargoRunArgs([
+  await runWebsitesCommand(
+    [
       "--database-url",
       harness.dbPath,
       "--tls-cert-path",
@@ -703,7 +711,7 @@ export async function updateContent(
       ...(publishedAt ? ["--published-at", publishedAt] : []),
       "--editor-sub",
       editorSub,
-    ]),
+    ],
     { cwd: harness.tempRoot, env: harness.env },
   );
 }
@@ -712,9 +720,8 @@ export async function listContentRevisions(
   harness: TestHarness,
   contentId: string,
 ): Promise<RevisionRow[]> {
-  const result = await runCommand(
-    "cargo",
-    cargoRunArgs([
+  const result = await runWebsitesCommand(
+    [
       "--database-url",
       harness.dbPath,
       "--tls-cert-path",
@@ -728,7 +735,7 @@ export async function listContentRevisions(
       "revisions",
       "--content-id",
       contentId,
-    ]),
+    ],
     { cwd: harness.tempRoot, env: harness.env },
   );
   return parseRevisions(result.stdout);
@@ -738,9 +745,8 @@ export async function listAuditEvents(
   harness: TestHarness,
   siteId?: string,
 ): Promise<AuditEventRow[]> {
-  const result = await runCommand(
-    "cargo",
-    cargoRunArgs([
+  const result = await runWebsitesCommand(
+    [
       "--database-url",
       harness.dbPath,
       "--tls-cert-path",
@@ -753,7 +759,7 @@ export async function listAuditEvents(
       "audit",
       "list",
       ...(siteId ? ["--site-id", siteId] : []),
-    ]),
+    ],
     { cwd: harness.tempRoot, env: harness.env },
   );
   return parseAuditEvents(result.stdout);
@@ -764,15 +770,14 @@ export async function seedSession(
   subject: string,
   setAdmin = false,
 ): Promise<string> {
-  const result = await runCommand(
-    "cargo",
-    cargoBinArgs("session_seed", [
+  const result = await runSessionSeedCommand(
+    [
       "--database-url",
       harness.databaseUrl,
       "--user-sub",
       subject,
       ...(setAdmin ? ["--set-admin"] : []),
-    ]),
+    ],
     {
       cwd: harness.tempRoot,
       env: harness.env,
