@@ -1,6 +1,13 @@
-use axum::{extract::Request, middleware::Next, response::Response};
+use axum::{
+    extract::Request,
+    middleware::Next,
+    response::{IntoResponse, Redirect, Response},
+};
 use reqwest::header;
+use tower_sessions::Session;
 use tracing::info;
+
+use crate::{constants::SESSION_USER, entities};
 
 /// Handles request/response logging for all requests. Should be the outermost middleware so that it can log all requests, including those that fail authentication.
 pub async fn log_requests(request: Request, next: Next) -> Response {
@@ -58,5 +65,19 @@ pub(crate) async fn set_cache(request: Request, next: Next) -> Response {
             );
         }
         response
+    }
+}
+
+/// Ensures that the user is authenticated before allowing access to the site. If not authenticated, redirects to the login page.
+pub async fn require_session(session: Session, request: Request, next: Next) -> Response {
+    let is_authenticated = session
+        .get::<entities::user::Model>(SESSION_USER)
+        .await
+        .unwrap_or(None)
+        .is_some();
+    if is_authenticated {
+        next.run(request).await
+    } else {
+        Redirect::to("/admin/login").into_response()
     }
 }

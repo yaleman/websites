@@ -1,25 +1,23 @@
 {% extends "base_template.html" %}
 {% block body %}
 <p class="inline-body">
-  Upload a new image for <strong>{{ site_short_name }}</strong>. Uploaded files can be inserted from the editor and will be published under <code>/media/images/...</code>.
+  Upload a new image for <strong>{{ site_short_name }}</strong>.
 </p>
 
 <form method="post" action enctype="multipart/form-data" class="stack-form">
-  <div class="form-grid">
-    <div class="form-field">
-      <label for="file">Upload File</label>
-      <input id="file" name="file" type="file" />
-      <p class="inline-body">Choose an image file. A thumbnail will be generated when possible.</p>
-    </div>
-    <div class="form-field">
-      <label for="source_url">Import From URL</label>
-      <input id="source_url" name="source_url" type="url" placeholder="https://example.com/image.png" />
-      <p class="inline-body">Use this when the image already exists elsewhere and you want to copy it into the site asset library.</p>
-    </div>
+  <div class="form-field">
+    <label for="file">Upload File</label>
+    <input id="file" name="file" type="file" />
+    <p class="inline-body">Choose an image file. A thumbnail will be generated automagically.</p>
+  </div>
+  <div class="form-field">
+    <label for="source_url">Import From URL</label>
+    <input id="source_url" name="source_url" type="url" placeholder="https://example.com/image.png" />
+    <p class="inline-body">Copy an image from a URL into the site asset library.</p>
   </div>
 
   <div class="form-actions">
-    <button type="submit" class="save">Upload asset</button>
+    <button type="submit" class="save">Upload</button>
   </div>
 </form>
 

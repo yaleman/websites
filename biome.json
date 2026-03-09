@@ -1,7 +1,14 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.4.5/schema.json",
 	"files": {
-		"includes": ["**"]
+		"includes": ["**"],
+		"ignoreUnknown": true,
+		"maxSize": 1000000
+	},
+	"html": {
+		"parser": {
+			"interpolation": true
+		}
 	},
 	"assist": {
 		"actions": {

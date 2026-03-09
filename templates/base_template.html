@@ -26,22 +26,21 @@
 
       {% if let Some(message) = template_shared.page_message %}
       <p
-        class="message{% if template_shared.page_message_is_toast %} message--toast{% endif %}"
-        {% if template_shared.page_message_is_toast %}data-auto-dismiss-ms="2000"{% endif %}
-        {% if let Some(clear_query_param) = template_shared.clear_query_param %}data-clear-query-param="{{ clear_query_param }}"{% endif %}
-      >{{ message }}</p>
+        id="message" class="message{% if template_shared.page_message_is_toast %} message--toast{% endif %}"
+        {% if template_shared.page_message_is_toast %}data-auto-dismiss-ms="2000" {% endif %}
+        {% if let Some(clear_query_param)=template_shared.clear_query_param %}data-clear-query-param="{{ clear_query_param }}" {% endif %}>{{ message }}</p>
       {% endif %}
 
-      {% block body %}{% endblock %}
-
       {% if !template_shared.links.is_empty() %}
-      <h2>Actions</h2>
-      <ul>
+      <!-- <h2>Actions</h2> -->
+      <ul class="shared-actions">
         {% for link in template_shared.links %}
         <li><a href="{{ link.href }}">{{ link.label }}</a></li>
         {% endfor %}
       </ul>
       {% endif %}
+
+      {% block body %}{% endblock %}
     </main>
   </body>
 </html>
