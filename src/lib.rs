@@ -1032,20 +1032,32 @@ pub async fn search_content(
     db: &DatabaseConnection,
     site_id: Uuid,
     query: &str,
-) -> Result<Vec<entities::content_item::Model>, String> {
-    let condition = Condition::any()
-        .add(entities::content_item::Column::Title.contains(query))
-        .add(entities::content_item::Column::Slug.contains(query))
-        .add(entities::content_item::Column::PageContent.contains(query));
+) -> Result<Vec<entities::content_item::Model>, SiteError> {
+    let query_like = format!("%{}%", query.replace(" ", "%"));
 
-    let items = entities::content_item::Entity::find()
+    let condition = Condition::any()
+        .add(
+            entities::content_item::Column::Title
+                .into_expr()
+                .like(&query_like),
+        )
+        .add(
+            entities::content_item::Column::Slug
+                .into_expr()
+                .like(&query_like),
+        )
+        .add(
+            entities::content_item::Column::PageContent
+                .into_expr()
+                .like(&query_like),
+        );
+
+    entities::content_item::Entity::find()
         .filter(entities::content_item::Column::SiteId.eq(site_id))
         .filter(condition)
         .all(db)
         .await
-        .map_err(|error| error.to_string())?;
-
-    Ok(items)
+        .map_err(SiteError::from)
 }
 
 #[derive(Default, Clone)]
@@ -2106,7 +2118,13 @@ mod tests {
             .expect("failed to list page content");
         assert_eq!(page_content.len(), 0);
 
+        // using case-insensitive search to verify that the search is normalized for consistent results
         let search = search_content(&db, site.id, "Hello")
+            .await
+            .expect("failed to search content");
+        assert_eq!(search.len(), 1);
+
+        let search = search_content(&db, site.id, "hello")
             .await
             .expect("failed to search content");
         assert_eq!(search.len(), 1);

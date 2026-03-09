@@ -19,125 +19,15 @@
     </div>
   </div>
 
-  <div class="editor-toolbar" data-editor-toolbar>
-    <div class="editor-toolbar__group">
-      <button type="button" class="editor-button" data-command="bold">Bold</button>
-      <button type="button" class="editor-button" data-command="italic">Italic</button>
-      <button type="button" class="editor-button" data-command="code">Code</button>
-      <button type="button" class="editor-button" data-command="link">Link</button>
-      <button type="button" class="editor-button" data-command="image">Image</button>
-    </div>
-    <div class="editor-toolbar__group">
-      <button type="button" class="editor-button" data-command="h2">H2</button>
-      <button type="button" class="editor-button" data-command="h3">H3</button>
-    </div>
-    <div class="editor-toolbar__group">
-      <button type="button" class="editor-button" data-command="ul">Bullets</button>
-      <button type="button" class="editor-button" data-command="ol">Numbered</button>
-      <button type="button" class="editor-button" data-command="quote">Quote</button>
-    </div>
-    <div class="editor-toolbar__group">
-      <button type="button" class="editor-button" data-command="preview" aria-pressed="false">
-        Preview
-      </button>
-      <button type="button" class="editor-button" data-command="source" aria-pressed="false">
-        Markdown
-      </button>
-    </div>
-  </div>
-  <div id="editor" class="editor-shell"></div>
-  <section class="editor-source-panel" data-editor-source-panel hidden>
-    <div class="editor-source-panel__header">
-      <h2>Markdown source</h2>
-    </div>
-    <textarea id="page_content" name="page_content" rows="14" class="editor-source"></textarea>
-  </section>
-  <section class="editor-preview" data-editor-preview hidden>
-    <div class="editor-preview__header">
-      <h2>Preview</h2>
-    </div>
-    <div class="editor-preview__body" data-editor-preview-body></div>
-  </section>
+  {% include "editor.html" %}
 
-  <label class="inline-checkbox">
+  <label class="inline-checkbox" for="draft">
     <input id="draft" name="draft" type="checkbox" value="true" />
     Save as draft
   </label>
-
-  <div class="form-field">
-    <label for="tags">Tags</label>
-    <div class="tag-editor" data-tag-editor>
-      <input type="hidden" name="tag_list" value="" data-tag-list />
-      <div class="tag-editor__chips" data-tag-chips></div>
-      <input
-        id="tags"
-        type="text"
-        list="tag-suggestions"
-        placeholder="Type a tag and press Enter"
-        data-tag-input
-        autocomplete="off"
-      />
-      <datalist id="tag-suggestions">
-        {% for tag in tags %}
-        <option value="{{ tag.name }}"></option>
-        {% endfor %}
-      </datalist>
-    </div>
-    <p class="inline-body">Type to autocomplete existing tags. Press Enter or comma to add a tag.</p>
-  </div>
-
   <div class="form-actions">
     <button type="submit" class="save">Create content</button>
   </div>
 
-  <div class="editor-modal" data-asset-modal hidden aria-hidden="true">
-    <div class="editor-modal__backdrop" data-asset-modal-close></div>
-    <div class="editor-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="asset-modal-title">
-      <header class="editor-modal__header">
-        <h2 id="asset-modal-title">Insert image</h2>
-        <button type="button" class="editor-button" data-asset-modal-close>Close</button>
-      </header>
-      <div class="editor-modal__body">
-        <div class="asset-controls">
-          <div class="form-field">
-            <label for="asset_search">Search images</label>
-            <input id="asset_search" type="search" placeholder="Search by filename" data-asset-search />
-          </div>
-          <div class="form-field">
-            <label for="asset_type">Type</label>
-            <select id="asset_type" data-asset-type>
-              <option value="all">All images</option>
-              <option value="jpeg">JPEG</option>
-              <option value="png">PNG</option>
-              <option value="gif">GIF</option>
-              <option value="svg">SVG</option>
-              <option value="webp">WebP</option>
-            </select>
-          </div>
-        </div>
-
-        <section class="asset-section" data-asset-recent-section>
-          <h3>Recent uploads</h3>
-          <div class="asset-grid" data-asset-recent></div>
-        </section>
-
-        <section class="asset-section" data-asset-results-section hidden>
-          <h3>Search results</h3>
-          <div class="asset-grid" data-asset-results></div>
-        </section>
-
-        <div class="asset-fields">
-          <div class="form-field">
-            <label for="asset_alt">Alt text</label>
-            <input id="asset_alt" type="text" placeholder="Describe the image" data-asset-alt />
-          </div>
-        </div>
-      </div>
-      <footer class="editor-modal__footer">
-        <button type="button" class="editor-button" data-asset-modal-close>Cancel</button>
-        <button type="button" class="editor-button save" data-asset-insert disabled>Insert image</button>
-      </footer>
-    </div>
-  </div>
 </form>
 {% endblock %}

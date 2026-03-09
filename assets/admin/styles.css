@@ -8,6 +8,7 @@
 	--dark-green: rgb(0, 101, 2);
 	--text-white: rgb(255, 255, 255);
 	--text-dark: #000;
+	--text-lessdark: #555;
 	--border-light: #aaa;
 }
 
@@ -30,6 +31,24 @@ input {
 	box-sizing: border-box;
 	background-color: white;
 	color: var(--text-dark);
+}
+
+input[type="checkbox"] {
+	transform: scale(1.5, 1.5);
+	margin-right: 0.5rem;
+}
+
+.inline-checkbox {
+	display: flex;
+	align-items: center;
+	gap: 1rem;
+	margin-top: 0.6rem;
+}
+
+.inline-checkbox input {
+	width: auto;
+	margin: 0;
+	flex: 0 0 auto;
 }
 
 select {
@@ -165,10 +184,11 @@ main {
 nav {
 	border: 1px solid var(--border-light);
 	border-radius: var(--small-border-radius);
-	padding: var(--small-border-radius);
+	padding: calc(var(--small-border-radius) * 1.5);
 	margin: 0.5rem 0;
 	width: 100%;
 	background-color: var(--light-purple);
+	font-size: 1.1rem;
 }
 
 nav a {
@@ -176,6 +196,35 @@ nav a {
 	margin-right: 1rem;
 	color: var(--text-dark);
 	font-weight: 600;
+}
+nav a:hover {
+	text-decoration: underline;
+	color: var(--text-lessdark);
+}
+
+ul.shared-actions {
+	padding: var(--small-border-radius);
+	margin-top: 0;
+	margin-bottom: 0.25rem;
+	width: 100%;
+	border: 0;
+	list-style: none;
+	display: flex;
+	gap: 1rem;
+}
+
+ul.shared-actions a {
+	text-decoration: none;
+	color: var(--text-dark);
+	font-weight: 600;
+}
+
+ul.shared-actions li {
+	background-color: var(--light-purple);
+	border: 1px solid var(--border-light);
+	border-radius: var(--small-border-radius);
+	padding: 0.25rem 0.5rem;
+	color: var(--text-dark);
 }
 
 .editor-source {

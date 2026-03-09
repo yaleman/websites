@@ -24,11 +24,11 @@ use crate::{
 use anyhow::Context;
 use askama::Template;
 use askama_web::WebTemplate;
-use axum::middleware::{Next, from_fn};
+use axum::middleware::from_fn;
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Form, Multipart, OriginalUri, Path, Query, Request, State},
+    extract::{Form, Multipart, OriginalUri, Path, Query, State},
     http::{StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
     routing::get,
@@ -65,10 +65,16 @@ use uuid::Uuid;
 /// Holds all the common template-shared data for admin pages.
 struct AdminTemplateData {
     page_title: String,
+
+    /// Feedback to the user
     page_message: Option<String>,
+    /// Render the page message as a toast notification instead of an inline banner.
     page_message_is_toast: bool,
+    /// Query parameter to clear after displaying a toast message.
     clear_query_param: Option<String>,
+    /// Used when you're in a site context, to link back to the site homepage, e.g. in the header.
     site_id: Option<Uuid>,
+    /// Extra "actions" links in a secondary navbar, e.g. "New site", "Back to sites", etc.
     links: Vec<AdminLink>,
 }
 
@@ -253,7 +259,7 @@ struct AdminSitesTemplate {
 struct AdminContentNewTemplate {
     template_shared: AdminTemplateData,
     tags: Vec<AdminTagOption>,
-
+    page_content: String,
     site_id: Uuid,
     allow_external_image: bool,
 }
@@ -683,8 +689,8 @@ pub async fn run_admin_server(
         .with_expiry(Expiry::OnSessionEnd);
 
     let protected_routes = Router::new()
-        .route("/admin", get(admin_index))
-        .route("/admin/sites", get(admin_sites))
+        .route("/admin", get(get_index))
+        .route("/admin/sites", get(get_sites))
         .route("/admin/users/me", get(admin_user_profile_redirect))
         .route("/admin/users/{user_id}", get(admin_user_profile))
         .route(
@@ -711,7 +717,7 @@ pub async fn run_admin_server(
             "/admin/site/{site_id}/memberships/{membership_id}/remove",
             axum::routing::post(admin_site_membership_remove),
         )
-        .route("/admin/site/{site_id}/search", get(admin_site_search))
+        .route("/admin/site/{site_id}/search", get(get_site_search))
         .route(
             "/admin/site/{site_id}/content/new",
             get(admin_site_content_new).post(admin_site_content_create),
@@ -777,7 +783,7 @@ pub async fn run_admin_server(
         .route("/admin/site/{site_id}/render", get(admin_site_render))
         .nest_service("/admin/assets", ServeDir::new(&assets_dir))
         .nest_service("/media/images", ServeDir::new(&upload_root))
-        .layer(from_fn(require_session));
+        .layer(from_fn(crate::middleware::require_session));
 
     info!(
         "admin server listening on http://{listen} / {}",
@@ -888,29 +894,15 @@ async fn not_found(OriginalUri(uri): OriginalUri) -> impl IntoResponse {
     )
 }
 
-async fn require_session(session: Session, request: Request, next: Next) -> Response {
-    let is_authenticated = session
-        .get::<entities::user::Model>(SESSION_USER)
-        .await
-        .unwrap_or(None)
-        .is_some();
-    if is_authenticated {
-        next.run(request).await
-    } else {
-        Redirect::to("/admin/login").into_response()
-    }
-}
-
-async fn admin_index(session: Session) -> Result<AdminIndexTemplate, SiteError> {
-    let user = current_user(&session).await?;
+/// The home page
+async fn get_index() -> Result<AdminIndexTemplate, SiteError> {
     Ok(AdminIndexTemplate {
-        template_shared: AdminTemplateData::new("Admin Dashboard").with_links(vec![
-            AdminLink::new(&format!("/admin/users/{}", user.id), "My profile"),
-        ]),
+        template_shared: AdminTemplateData::new("Admin Dashboard"),
     })
 }
 
-async fn admin_sites(State(state): State<AdminState>) -> Result<AdminSitesTemplate, SiteError> {
+/// Sites list
+async fn get_sites(State(state): State<AdminState>) -> Result<AdminSitesTemplate, SiteError> {
     let sites = list_sites(state.db.as_ref()).await?;
 
     Ok(AdminSitesTemplate {
@@ -1410,41 +1402,35 @@ async fn admin_site_membership_remove(
     Ok(Redirect::to(&format!("/admin/site/{site_id}/memberships")))
 }
 
-async fn admin_site_search(
+async fn get_site_search(
     State(state): State<AdminState>,
     session: Session,
     Path(site_id): Path<Uuid>,
     Query(query): Query<SearchQuery>,
 ) -> Result<AdminSearchTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
+    let site = entities::site::Entity::find_by_id(site_id)
+        .one(state.db.as_ref())
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?
+        .ok_or_else(|| SiteError::NotFound)?;
     let query_text = query.q.unwrap_or_default();
     let mut results = Vec::new();
-    let mut message = "Search content by title, slug, or body text.".to_string();
+    let mut message: String = "Search content by title, slug, or body text.".to_string();
 
     if !query_text.trim().is_empty() {
-        match search_content(state.db.as_ref(), site_id, query_text.trim()).await {
-            Ok(items) => {
-                message = format!("Found {} result(s) for \"{}\".", items.len(), query_text);
-                results = items.into_iter().collect();
-            }
-            Err(error) => {
-                return Err(SiteError::internal(format!(
-                    "failed to search content: {error}"
-                )));
-            }
-        }
+        let items = search_content(state.db.as_ref(), site_id, query_text.trim()).await?;
+        message = format!("Found {} result(s) for \"{}\".", items.len(), query_text);
+        results = items.into_iter().collect();
     }
 
     Ok(AdminSearchTemplate {
-        template_shared: AdminTemplateData::new("Search")
+        template_shared: AdminTemplateData::new(format!("Search {}", site.full_title))
             .with_message(message)
-            .with_links(vec![
-                AdminLink::new(
-                    &format!("/admin/site/{site_id}/content"),
-                    "Back to site dashboard",
-                ),
-                AdminLink::new(&format!("/admin/site/{site_id}/content/new"), "New content"),
-            ]),
+            .with_links(vec![AdminLink::new(
+                &format!("/admin/site/{site_id}/content"),
+                "Back to site dashboard",
+            )]),
         results,
         query: query_text.trim().to_string(),
     })
@@ -1470,7 +1456,7 @@ async fn admin_site_content_new(
     let site = get_by_id(state.db.as_ref(), site_id).await?;
     Ok(AdminContentNewTemplate {
         template_shared: AdminTemplateData::new(format!("{} - Create Content", &site.short_name)),
-
+        page_content: String::new(), // empty page content for the editor
         tags,
         site_id: site.id,
         allow_external_image: false,
@@ -1606,7 +1592,6 @@ async fn admin_site_content_detail(
     let route = content_primary_route(&content);
     Ok(AdminContentDetailTemplate {
         template_shared: AdminTemplateData::new(format!("Content: /{route}"))
-            .with_message(format!("Creator: {}", content.creator_sub))
             .with_site_id(content.site_id)
             .with_links(vec![
                 AdminLink::new(
@@ -1614,7 +1599,7 @@ async fn admin_site_content_detail(
                         "/admin/site/{}/content/{}/edit",
                         content.site_id, content.id
                     ),
-                    "Return to editor",
+                    "Open in editor",
                 ),
                 AdminLink::new(
                     &format!(
@@ -1635,6 +1620,7 @@ async fn admin_site_content_detail(
         revisions_summary: latest_revision_summary(&revisions),
         tags,
         aliases,
+        // TODO look up the creator by sub and display their name instead of sub
         creator_sub: content.creator_sub,
         content_id: content.id,
         site_id: content.site_id,
