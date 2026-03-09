@@ -78,7 +78,9 @@ const renderAssetGrid = (
 
 const createAssetModal = (editor: Editor) => {
 	const modal = document.querySelector<HTMLElement>("[data-asset-modal]");
-	const configRoot = document.querySelector<HTMLElement>("[data-editor-config]");
+	const configRoot = document.querySelector<HTMLElement>(
+		"[data-editor-config]",
+	);
 	const siteId = configRoot?.dataset.siteId;
 
 	if (!modal || !siteId) {
@@ -88,8 +90,11 @@ const createAssetModal = (editor: Editor) => {
 	const closeButtons = modal.querySelectorAll<HTMLElement>(
 		"[data-asset-modal-close]",
 	);
-	const searchInput = modal.querySelector<HTMLInputElement>("[data-asset-search]");
-	const typeSelect = modal.querySelector<HTMLSelectElement>("[data-asset-type]");
+	const searchInput = modal.querySelector<HTMLInputElement>(
+		"[data-asset-search]",
+	);
+	const typeSelect =
+		modal.querySelector<HTMLSelectElement>("[data-asset-type]");
 	const recentSection = modal.querySelector<HTMLElement>(
 		"[data-asset-recent-section]",
 	);
@@ -99,8 +104,9 @@ const createAssetModal = (editor: Editor) => {
 	const recentGrid = modal.querySelector<HTMLElement>("[data-asset-recent]");
 	const resultsGrid = modal.querySelector<HTMLElement>("[data-asset-results]");
 	const altInput = modal.querySelector<HTMLInputElement>("[data-asset-alt]");
-	const externalInput =
-		modal.querySelector<HTMLInputElement>("[data-asset-external]");
+	const externalInput = modal.querySelector<HTMLInputElement>(
+		"[data-asset-external]",
+	);
 	const insertButton = modal.querySelector<HTMLButtonElement>(
 		"[data-asset-insert]",
 	);
@@ -176,7 +182,9 @@ const createAssetModal = (editor: Editor) => {
 			url.searchParams.set("type", options.type);
 		}
 		url.searchParams.set("limit", options.limit.toString());
-		const response = await fetch(url.toString(), { credentials: "same-origin" });
+		const response = await fetch(url.toString(), {
+			credentials: "same-origin",
+		});
 		if (!response.ok) {
 			throw new Error("Failed to fetch assets.");
 		}
@@ -533,13 +541,12 @@ const bindToolbar = (
 };
 
 const initTransientMessages = () => {
-	const messages = document.querySelectorAll<HTMLElement>("[data-auto-dismiss-ms]");
+	const messages = document.querySelectorAll<HTMLElement>(
+		"[data-auto-dismiss-ms]",
+	);
 
 	for (const message of messages) {
-		const dismissMs = Number.parseInt(
-			message.dataset.autoDismissMs ?? "",
-			10,
-		);
+		const dismissMs = Number.parseInt(message.dataset.autoDismissMs ?? "", 10);
 		if (!Number.isFinite(dismissMs) || dismissMs <= 0) {
 			continue;
 		}
@@ -563,7 +570,8 @@ const initTransientMessages = () => {
 const initTagEditor = () => {
 	const form = document.querySelector<HTMLFormElement>("form.editor-form");
 	const input = document.querySelector<HTMLInputElement>("[data-tag-input]");
-	const hiddenInput = document.querySelector<HTMLInputElement>("[data-tag-list]");
+	const hiddenInput =
+		document.querySelector<HTMLInputElement>("[data-tag-list]");
 	const chipContainer = document.querySelector<HTMLElement>("[data-tag-chips]");
 	const datalist = document.getElementById("tag-suggestions");
 
@@ -580,7 +588,9 @@ const initTagEditor = () => {
 		existingTagMap.set(value.toLowerCase(), value);
 	}
 
-	const selectedTags = Array.from(chipContainer.querySelectorAll<HTMLElement>("[data-tag-chip]"))
+	const selectedTags = Array.from(
+		chipContainer.querySelectorAll<HTMLElement>("[data-tag-chip]"),
+	)
 		.map((chip) => chip.dataset.tagChip?.trim() ?? "")
 		.filter((tag) => tag.length > 0);
 
@@ -632,7 +642,11 @@ const initTagEditor = () => {
 		if (!tag) {
 			return;
 		}
-		if (selectedTags.some((existing) => existing.toLowerCase() === tag.toLowerCase())) {
+		if (
+			selectedTags.some(
+				(existing) => existing.toLowerCase() === tag.toLowerCase(),
+			)
+		) {
 			input.value = "";
 			return;
 		}
@@ -673,7 +687,9 @@ const initTagEditor = () => {
 };
 
 const initMembershipCreateForm = () => {
-	const form = document.querySelector<HTMLFormElement>("[data-membership-create]");
+	const form = document.querySelector<HTMLFormElement>(
+		"[data-membership-create]",
+	);
 	const autocomplete = form?.querySelector<HTMLElement>(
 		"[data-membership-autocomplete]",
 	);
@@ -686,14 +702,25 @@ const initMembershipCreateForm = () => {
 	const optionsContainer = form?.querySelector<HTMLElement>(
 		"[data-membership-user-options]",
 	);
-	const emptyState = form?.querySelector<HTMLElement>("[data-membership-empty]");
+	const emptyState = form?.querySelector<HTMLElement>(
+		"[data-membership-empty]",
+	);
 
-	if (!form || !autocomplete || !queryInput || !userIdInput || !optionsContainer || !emptyState) {
+	if (
+		!form ||
+		!autocomplete ||
+		!queryInput ||
+		!userIdInput ||
+		!optionsContainer ||
+		!emptyState
+	) {
 		return;
 	}
 
 	const candidates = Array.from(
-		optionsContainer.querySelectorAll<HTMLButtonElement>("[data-membership-option]"),
+		optionsContainer.querySelectorAll<HTMLButtonElement>(
+			"[data-membership-option]",
+		),
 	)
 		.map((option) => ({
 			element: option,
@@ -702,7 +729,9 @@ const initMembershipCreateForm = () => {
 			subject: option.dataset.userSubject?.trim() ?? "",
 			email: option.dataset.userEmail?.trim() ?? "",
 		}))
-		.filter((candidate) => candidate.value.length > 0 && candidate.userId.length > 0);
+		.filter(
+			(candidate) => candidate.value.length > 0 && candidate.userId.length > 0,
+		);
 
 	const normalize = (value: string) => value.trim().toLowerCase();
 
@@ -712,9 +741,15 @@ const initMembershipCreateForm = () => {
 			return null;
 		}
 		return (
-			candidates.find((candidate) => normalize(candidate.value) === normalized) ??
-			candidates.find((candidate) => normalize(candidate.subject) === normalized) ??
-			candidates.find((candidate) => normalize(candidate.email) === normalized) ??
+			candidates.find(
+				(candidate) => normalize(candidate.value) === normalized,
+			) ??
+			candidates.find(
+				(candidate) => normalize(candidate.subject) === normalized,
+			) ??
+			candidates.find(
+				(candidate) => normalize(candidate.email) === normalized,
+			) ??
 			null
 		);
 	};
@@ -824,7 +859,8 @@ const initMembershipCreateForm = () => {
 	});
 
 	form.addEventListener("submit", (event) => {
-		const match = syncSelection() ?? filterCandidates(queryInput.value)[0] ?? null;
+		const match =
+			syncSelection() ?? filterCandidates(queryInput.value)[0] ?? null;
 		if (!match) {
 			event.preventDefault();
 			queryInput.setCustomValidity("Choose an existing user.");

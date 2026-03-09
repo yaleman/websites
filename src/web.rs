@@ -2379,7 +2379,7 @@ async fn admin_site_assets(
     Ok(AdminAssetsTemplate {
         template_shared: AdminTemplateData::new(format!("Site Assets ({})", site.short_name))
             .with_links(vec![
-                AdminLink::new(&format!("/admin/site/{site_id}/assets/new"), "Upload asset"),
+                AdminLink::new(&format!("/admin/site/{site_id}/assets/new"), "Upload"),
                 AdminLink::new(
                     &format!("/admin/site/{site_id}/content"),
                     "Back to site dashboard",
