@@ -16,6 +16,7 @@ pub struct Model {
     pub created_at: ChronoDateTime<Utc>,
     pub last_login_at: Option<ChronoDateTime<Utc>>,
     pub email: Option<String>,
+    pub display_name: Option<String>,
     pub admin: bool,
 }
 
@@ -29,6 +30,7 @@ pub async fn create_user<C: ConnectionTrait>(
     db: &C,
     subject: &str,
     email: Option<&str>,
+    display_name: Option<&str>,
     admin: bool,
 ) -> Result<Model, SiteError> {
     let model = ActiveModel {
@@ -37,6 +39,7 @@ pub async fn create_user<C: ConnectionTrait>(
         created_at: Set(Utc::now()),
         last_login_at: Set(None),
         email: Set(email.map(|e| e.to_string())),
+        display_name: Set(display_name.map(|value| value.to_string())),
         admin: Set(admin),
     };
 
@@ -48,11 +51,12 @@ pub async fn upsert_user_login<C: ConnectionTrait>(
     db: &C,
     subject: &str,
     email: Option<&str>,
+    display_name: Option<&str>,
 ) -> Result<Model, SiteError> {
     if Entity::find().count(db).await? == 0 {
         // No users exist, create the first user as an admin
 
-        return create_user(db, subject, email, true).await;
+        return create_user(db, subject, email, display_name, true).await;
     }
 
     let existing = Entity::find()
@@ -66,9 +70,12 @@ pub async fn upsert_user_login<C: ConnectionTrait>(
         if let Some(email) = email {
             active.email = Set(Some(email.to_string()));
         }
+        if let Some(display_name) = display_name {
+            active.display_name = Set(Some(display_name.to_string()));
+        }
         active.update(db).await.map_err(SiteError::from)
     } else {
-        create_user(db, subject, email, false).await
+        create_user(db, subject, email, display_name, false).await
     }
 }
 
@@ -82,29 +89,41 @@ mod tests {
             .await
             .expect("failed to start db");
 
-        let user = upsert_user_login(db.as_ref(), "first-user", Some("first@example.com"))
-            .await
-            .expect("failed to upsert first user");
+        let user = upsert_user_login(
+            db.as_ref(),
+            "first-user",
+            Some("first@example.com"),
+            Some("First User"),
+        )
+        .await
+        .expect("failed to upsert first user");
 
         assert!(user.admin);
         assert_eq!(user.email.as_deref(), Some("first@example.com"));
+        assert_eq!(user.display_name.as_deref(), Some("First User"));
     }
 
     #[tokio::test]
-    async fn existing_login_refreshes_email_claim() {
+    async fn existing_login_refreshes_claims() {
         let db = crate::db::db_start("sqlite::memory:")
             .await
             .expect("failed to start db");
 
-        let created = create_user(db.as_ref(), "subject", None, false)
+        let created = create_user(db.as_ref(), "subject", None, None, false)
             .await
             .expect("failed to create user");
-        let updated = upsert_user_login(db.as_ref(), "subject", Some("subject@example.com"))
-            .await
-            .expect("failed to refresh user login");
+        let updated = upsert_user_login(
+            db.as_ref(),
+            "subject",
+            Some("subject@example.com"),
+            Some("Subject User"),
+        )
+        .await
+        .expect("failed to refresh user login");
 
         assert_eq!(updated.id, created.id);
         assert_eq!(updated.email.as_deref(), Some("subject@example.com"));
+        assert_eq!(updated.display_name.as_deref(), Some("Subject User"));
         assert!(updated.last_login_at.is_some());
     }
 }

@@ -163,12 +163,11 @@ pub(crate) async fn admin_login_callback(
 
     let subject = claims.subject().as_str().to_string();
     let email = claims.email().map(|e| e.as_str());
-    // TODO store the user's display name?
-    // let display_name: Option<&str> = claims
-    //     .name()
-    //     .map(|n| n.get(None).map(|v| v.as_str()))
-    //     .flatten();
-    let user = upsert_user_login(state.db.as_ref(), &subject, email).await?;
+    let display_name = claims
+        .name()
+        .and_then(|name| name.get(None))
+        .map(|value| value.as_str());
+    let user = upsert_user_login(state.db.as_ref(), &subject, email, display_name).await?;
 
     if let Err(err) = session.insert(SESSION_USER, user).await {
         return Err(SiteError::internal(format!(

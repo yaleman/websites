@@ -315,6 +315,7 @@ struct AdminUserProfileTemplate {
     template_shared: AdminTemplateData,
 
     user_id: Uuid,
+    display_name: String,
     subject: String,
     email: String,
     created_at: String,
@@ -919,7 +920,7 @@ async fn ensure_site_owner_membership<C: ConnectionTrait>(
     user_email: Option<&str>,
     site_id: Uuid,
 ) -> Result<Option<crate::entities::site_membership::Model>, SiteError> {
-    let user = upsert_user_login(db, user_sub, user_email)
+    let user = upsert_user_login(db, user_sub, user_email, None)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load user: {error}")))?;
     let existing = crate::get_membership_for_subject(db, site_id, user_sub)
@@ -1215,10 +1216,15 @@ async fn admin_user_profile(
     Ok(AdminUserProfileTemplate {
         template_shared: AdminTemplateData::new(format!(
             "User Profile: {}",
-            target.email.as_ref().unwrap_or(&target.subject)
+            target
+                .display_name
+                .as_deref()
+                .or(target.email.as_deref())
+                .unwrap_or(&target.subject)
         )),
 
         user_id: target.id,
+        display_name: target.display_name.unwrap_or_else(|| "n/a".to_string()),
         subject: target.subject,
         email: target.email.unwrap_or_else(|| "n/a".to_string()),
         created_at: target.created_at.to_rfc3339(),
@@ -3107,13 +3113,13 @@ mod tests {
         let db = crate::db::db_start("sqlite::memory:")
             .await
             .expect("failed to start db");
-        let viewer = crate::entities::user::create_user(db.as_ref(), "viewer", None, false)
+        let viewer = crate::entities::user::create_user(db.as_ref(), "viewer", None, None, false)
             .await
             .expect("failed to create viewer");
-        let target = crate::entities::user::create_user(db.as_ref(), "target", None, false)
+        let target = crate::entities::user::create_user(db.as_ref(), "target", None, None, false)
             .await
             .expect("failed to create target");
-        let admin = crate::entities::user::create_user(db.as_ref(), "admin", None, true)
+        let admin = crate::entities::user::create_user(db.as_ref(), "admin", None, None, true)
             .await
             .expect("failed to create admin");
 

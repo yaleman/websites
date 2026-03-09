@@ -1,12 +1,16 @@
 {% extends "base_template.html" %}
 
-{% block title %}User Profile - {{ email }}{% endblock title %}
+{% block title %}User Profile - {% if display_name != "n/a" %}{{ display_name }}{% else %}{{ subject }}{% endif %}{% endblock title %}
 
 {% block body %}
 <section>
   <h2>Details</h2>
   <table>
     <tbody>
+      <tr>
+        <th>Display Name</th>
+        <td>{{ display_name }}</td>
+      </tr>
       <tr>
         <th>Email</th>
         <td>{{ email }}</td>
