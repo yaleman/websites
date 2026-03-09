@@ -322,6 +322,17 @@ struct AdminSiteSettingsTemplate {
 
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
+#[template(path = "site_delete_confirm.html")]
+struct AdminSiteDeleteConfirmTemplate {
+    template_shared: AdminTemplateData,
+
+    site_id: Uuid,
+    site_full_title: String,
+    site_short_name: String,
+}
+
+#[allow(dead_code)]
+#[derive(Template, WebTemplate)]
 #[template(path = "site_template_editor.html")]
 struct AdminSiteTemplateEditorTemplate {
     template_shared: AdminTemplateData,
@@ -1118,7 +1129,7 @@ pub async fn run_admin_server(
         )
         .route(
             "/admin/site/{site_id}/delete",
-            axum::routing::post(admin_site_delete),
+            get(admin_site_delete_confirm).post(admin_site_delete),
         )
         .route("/admin/site/{site_id}/export.json", get(admin_site_export))
         .route(
@@ -3459,6 +3470,29 @@ async fn remove_deleted_site_files(
     }
 
     Ok(())
+}
+
+async fn admin_site_delete_confirm(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+) -> Result<AdminSiteDeleteConfirmTemplate, SiteError> {
+    require_global_admin(&session).await?;
+    let site = get_by_id(state.db.as_ref(), site_id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
+
+    Ok(AdminSiteDeleteConfirmTemplate {
+        template_shared: AdminTemplateData::new("Confirm Site Deletion")
+            .with_site_context(site.id, &site.full_title)
+            .with_links(vec![AdminLink::new(
+                &format!("/admin/site/{site_id}/settings"),
+                "Back to settings",
+            )]),
+        site_id: site.id,
+        site_full_title: site.full_title,
+        site_short_name: site.short_name,
+    })
 }
 
 async fn admin_site_delete(

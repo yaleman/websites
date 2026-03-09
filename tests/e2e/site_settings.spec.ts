@@ -32,7 +32,7 @@ test.describe("site settings", () => {
 					{ waitUntil: "domcontentloaded" },
 				);
 				await expect(
-					ownerSession.page.getByRole("button", { name: "Delete site" }),
+					ownerSession.page.getByRole("link", { name: "Delete site" }),
 				).toHaveCount(0);
 			} finally {
 				await ownerSession.context.close();
@@ -50,11 +50,20 @@ test.describe("site settings", () => {
 					{ waitUntil: "domcontentloaded" },
 				);
 				await expect(
-					adminSession.page.getByRole("button", { name: "Delete site" }),
+					adminSession.page.getByRole("link", { name: "Delete site" }),
 				).toBeVisible();
 
+				await adminSession.page.getByRole("link", { name: "Delete site" }).click();
+
+				await expect(adminSession.page).toHaveURL(
+					`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/delete`,
+				);
+				await expect(adminSession.page.locator("body")).toContainText(
+					"Delete Test Site?",
+				);
+
 				await adminSession.page
-					.getByRole("button", { name: "Delete site" })
+					.getByRole("button", { name: "Confirm site deletion" })
 					.click();
 
 				await expect(adminSession.page).toHaveURL(
