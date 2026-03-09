@@ -27,6 +27,11 @@
   <p>
     Short Name: {{ site_short_name }}
   </p>
+  {% if let Some(export_href) = export_href %}
+  <p>
+    <a href="{{ export_href }}">Download site export JSON</a>
+  </p>
+  {% endif %}
 </section>
 
 <section>
