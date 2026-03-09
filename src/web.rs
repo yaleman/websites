@@ -249,6 +249,8 @@ struct AdminContentListTemplate {
     template_shared: AdminTemplateData,
 
     site_id: Uuid,
+    page_type_options: Vec<AdminSelectOption>,
+    sort_options: Vec<AdminSelectOption>,
     content_items: Vec<entities::content_item::Model>,
 }
 
@@ -365,6 +367,13 @@ struct AdminTagOption {
 }
 
 #[derive(Debug)]
+struct AdminSelectOption {
+    label: &'static str,
+    value: &'static str,
+    selected: bool,
+}
+
+#[derive(Debug)]
 struct AdminSiteTagRow {
     id: Uuid,
     name: String,
@@ -454,6 +463,12 @@ struct DashboardQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct AdminContentListQuery {
+    page_type: Option<String>,
+    sort_by: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct UpdateSiteTemplateOverrideForm {
     source: String,
 }
@@ -504,6 +519,137 @@ struct SearchQuery {
 #[derive(Debug, Deserialize)]
 struct SourceEditorQuery {
     saved: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContentListPageTypeFilter {
+    All,
+    Page,
+    Post,
+}
+
+impl ContentListPageTypeFilter {
+    fn from_query(value: Option<&str>) -> Self {
+        match value {
+            Some("page") => Self::Page,
+            Some("post") => Self::Post,
+            _ => Self::All,
+        }
+    }
+
+    fn page_type(self) -> Option<PageType> {
+        match self {
+            Self::All => None,
+            Self::Page => Some(PageType::Page),
+            Self::Post => Some(PageType::Post),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Page => "page",
+            Self::Post => "post",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "All types",
+            Self::Page => "Pages",
+            Self::Post => "Posts",
+        }
+    }
+
+    fn options(self) -> Vec<AdminSelectOption> {
+        [Self::All, Self::Page, Self::Post]
+            .into_iter()
+            .map(|option| AdminSelectOption {
+                label: option.label(),
+                value: option.as_str(),
+                selected: option == self,
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContentListSortBy {
+    Newest,
+    Oldest,
+    TitleAsc,
+    TitleDesc,
+}
+
+impl ContentListSortBy {
+    fn from_query(value: Option<&str>) -> Self {
+        match value {
+            Some("oldest") => Self::Oldest,
+            Some("title_asc") => Self::TitleAsc,
+            Some("title_desc") => Self::TitleDesc,
+            _ => Self::Newest,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Newest => "newest",
+            Self::Oldest => "oldest",
+            Self::TitleAsc => "title_asc",
+            Self::TitleDesc => "title_desc",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Newest => "Newest first",
+            Self::Oldest => "Oldest first",
+            Self::TitleAsc => "Title A-Z",
+            Self::TitleDesc => "Title Z-A",
+        }
+    }
+
+    fn options(self) -> Vec<AdminSelectOption> {
+        [Self::Newest, Self::Oldest, Self::TitleAsc, Self::TitleDesc]
+            .into_iter()
+            .map(|option| AdminSelectOption {
+                label: option.label(),
+                value: option.as_str(),
+                selected: option == self,
+            })
+            .collect()
+    }
+}
+
+fn sort_content_items(
+    content_items: &mut [entities::content_item::Model],
+    sort_by: ContentListSortBy,
+) {
+    match sort_by {
+        ContentListSortBy::Newest => {
+            content_items.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        }
+        ContentListSortBy::Oldest => {
+            content_items.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+        }
+        ContentListSortBy::TitleAsc => {
+            content_items.sort_by(|left, right| {
+                left.title
+                    .to_lowercase()
+                    .cmp(&right.title.to_lowercase())
+                    .then_with(|| left.created_at.cmp(&right.created_at))
+            });
+        }
+        ContentListSortBy::TitleDesc => {
+            content_items.sort_by(|left, right| {
+                right
+                    .title
+                    .to_lowercase()
+                    .cmp(&left.title.to_lowercase())
+                    .then_with(|| right.created_at.cmp(&left.created_at))
+            });
+        }
+    }
 }
 
 fn parse_tag_list(raw: Option<String>) -> Vec<String> {
@@ -1168,29 +1314,45 @@ async fn admin_site_content_list(
     State(state): State<AdminState>,
     session: Session,
     Path(site_id): Path<Uuid>,
+    Query(query): Query<AdminContentListQuery>,
 ) -> Result<AdminContentListTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
     let site = get_by_id(state.db.as_ref(), site_id)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
 
-    match list_content(state.db.as_ref(), site_id, None).await {
-        Ok(pages) => Ok(AdminContentListTemplate {
-            template_shared: AdminTemplateData::new("Content")
-                .with_site_context(site.id, &site.full_title)
-                .with_links(vec![
-                    AdminLink::new(&format!("/admin/site/{site_id}/content/new"), "New content"),
-                    AdminLink::new(&format!("/admin/site/{site_id}/search"), "Search content"),
-                    AdminLink::new(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
-                    AdminLink::new(&format!("/admin/site/{site_id}/tags"), "Tags"),
-                    AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Assets"),
-                    AdminLink::new(&format!("/admin/site/{site_id}/render"), "Render"),
-                    AdminLink::new(&format!("/admin/site/{site_id}/settings"), "Site settings"),
-                ]),
+    let page_type_filter = ContentListPageTypeFilter::from_query(query.page_type.as_deref());
+    let sort_by = ContentListSortBy::from_query(query.sort_by.as_deref());
 
-            site_id,
-            content_items: pages,
-        }),
+    match list_content(state.db.as_ref(), site_id, page_type_filter.page_type()).await {
+        Ok(mut pages) => {
+            sort_content_items(&mut pages, sort_by);
+
+            Ok(AdminContentListTemplate {
+                template_shared: AdminTemplateData::new("Content")
+                    .with_site_context(site.id, &site.full_title)
+                    .with_links(vec![
+                        AdminLink::new(
+                            &format!("/admin/site/{site_id}/content/new"),
+                            "New content",
+                        ),
+                        AdminLink::new(&format!("/admin/site/{site_id}/search"), "Search content"),
+                        AdminLink::new(
+                            &format!("/admin/site/{site_id}/memberships"),
+                            "Memberships",
+                        ),
+                        AdminLink::new(&format!("/admin/site/{site_id}/tags"), "Tags"),
+                        AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Assets"),
+                        AdminLink::new(&format!("/admin/site/{site_id}/render"), "Render"),
+                        AdminLink::new(&format!("/admin/site/{site_id}/settings"), "Site settings"),
+                    ]),
+
+                site_id,
+                page_type_options: page_type_filter.options(),
+                sort_options: sort_by.options(),
+                content_items: pages,
+            })
+        }
         Err(error) => Err(SiteError::internal(format!(
             "failed to load content for site {site_id}: {error}"
         ))),
@@ -3293,6 +3455,38 @@ mod tests {
         assert!(!role_satisfies(SiteRole::Viewer, SiteRole::Author));
         assert!(!role_satisfies(SiteRole::Author, SiteRole::Editor));
         assert!(!role_satisfies(SiteRole::Editor, SiteRole::Owner));
+    }
+
+    #[test]
+    fn sort_content_items_orders_titles_descending_case_insensitively() {
+        fn content(title: &str, page_type: PageType) -> entities::content_item::Model {
+            entities::content_item::Model {
+                id: Uuid::now_v7(),
+                site_id: Uuid::now_v7(),
+                page_type,
+                title: title.to_string(),
+                slug: title.to_lowercase().replace(' ', "-"),
+                page_content: String::new(),
+                draft: true,
+                creator_sub: "tester".to_string(),
+                created_at: DateTime::parse_from_rfc3339("2026-03-09T00:00:00Z")
+                    .expect("invalid created_at")
+                    .with_timezone(&Utc),
+                last_updated: None,
+                published_at: None,
+            }
+        }
+
+        let mut items = vec![
+            content("alpha page", PageType::Page),
+            content("Zulu post", PageType::Post),
+            content("Beta page", PageType::Page),
+        ];
+
+        sort_content_items(&mut items, ContentListSortBy::TitleDesc);
+
+        let titles = items.into_iter().map(|item| item.title).collect::<Vec<_>>();
+        assert_eq!(titles, vec!["Zulu post", "Beta page", "alpha page"]);
     }
 
     #[tokio::test]

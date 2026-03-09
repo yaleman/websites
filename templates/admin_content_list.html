@@ -1,5 +1,23 @@
 {% extends "base_template.html" %}
 {% block body %}
+<form method="get" action>
+  <label for="page_type">Page Type</label>
+  <select id="page_type" name="page_type">
+    {% for option in page_type_options %}
+    <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
+    {% endfor %}
+  </select>
+
+  <label for="sort_by">Sort By</label>
+  <select id="sort_by" name="sort_by">
+    {% for option in sort_options %}
+    <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
+    {% endfor %}
+  </select>
+
+  <button type="submit">Apply</button>
+</form>
+
 {% if !content_items.is_empty() %}
 <table>
   <thead>
@@ -19,6 +37,8 @@
     {% endfor %}
   </tbody>
 </table>
+{% else %}
+<p>No content items match the current filters.</p>
 {% endif %}
 
 {% endblock %}
