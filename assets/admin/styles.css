@@ -16,9 +16,12 @@ button {
 	background-color: var(--dark-purple);
 	border-radius: var(--small-border-radius);
 	color: var(--text-white);
+	font-weight: 700;
+	padding: 0.45rem 0.8rem;
 }
 
 button.save {
+	font-size: 1.5em;
 	background-color: var(--dark-green);
 	color: var(--text-white);
 }
@@ -148,13 +151,14 @@ select {
 }
 
 .tag-chip {
+	font-size: 1rem;
 	display: inline-flex;
 	align-items: center;
 	gap: 0.35rem;
 	padding: 0.35rem 0.6rem;
 	border: 1px solid var(--dark-purple);
-	border-radius: 999px;
-	background: rgba(100, 0, 215, 0.12);
+	border-radius: var(--medium-border-radius);
+	background: var(--light-purple);
 	color: var(--text-dark);
 }
 
