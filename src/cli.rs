@@ -573,7 +573,7 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 let user = db_ref
                     .transaction::<_, _, String>(|txn| {
                         Box::pin(async move {
-                            let user = create_user(txn, &subject, email.as_deref(), admin)
+                            let user = create_user(txn, &subject, email.as_deref(), None, admin)
                                 .await
                                 .map_err(|error| error.to_string())?;
                             log_audit_event(

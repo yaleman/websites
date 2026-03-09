@@ -2375,19 +2375,25 @@ mod tests {
         let db = test_db_start().await;
         let site = create_site_fixture(&db).await;
 
-        let user = upsert_user_login(&db, "alice", None)
+        let user = upsert_user_login(&db, "alice", None, Some("Alice"))
             .await
             .expect("failed to create user");
 
-        let updated = upsert_user_login(&db, "alice", Some("alice@example.com"))
-            .await
-            .expect("failed to upsert user login");
+        let updated = upsert_user_login(
+            &db,
+            "alice",
+            Some("alice@example.com"),
+            Some("Alice Example"),
+        )
+        .await
+        .expect("failed to upsert user login");
         assert_eq!(updated.id, user.id);
         assert!(updated.admin);
 
         assert!(updated.last_login_at.is_some());
+        assert_eq!(updated.display_name.as_deref(), Some("Alice Example"));
 
-        let bob = upsert_user_login(&db, "bob", None)
+        let bob = upsert_user_login(&db, "bob", None, None)
             .await
             .expect("failed to insert user login");
 

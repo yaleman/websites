@@ -3,6 +3,7 @@ use sea_orm_migration::prelude::*;
 mod m0001_init;
 mod m0002_add_email;
 mod m0003_add_admin;
+mod m0004_add_display_name;
 
 pub struct Migrator;
 
@@ -13,6 +14,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0001_init::Migration),
             Box::new(m0002_add_email::Migration),
             Box::new(m0003_add_admin::Migration),
+            Box::new(m0004_add_display_name::Migration),
         ]
     }
 }

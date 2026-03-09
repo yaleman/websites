@@ -45,7 +45,7 @@ async fn main() {
             OffsetDateTime::now_utc().saturating_add(Duration::minutes(5)),
         )),
     );
-    let mut user = upsert_user_login(&*db, &args.user_sub, None)
+    let mut user = upsert_user_login(&*db, &args.user_sub, None, None)
         .await
         .expect("failed to create user");
     if args.set_admin {
