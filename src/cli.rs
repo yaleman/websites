@@ -194,6 +194,11 @@ pub enum SiteCommands {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// Import a site from a versioned JSON document.
+    Import {
+        #[arg(long, value_name = "FILE")]
+        input: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -580,6 +585,46 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 write_site_export_output(output.as_deref(), &json)
                     .await
                     .map_err(|error| format!("failed to write site export: {error}"))?;
+                Ok(())
+            }
+            SiteCommands::Import { input } => {
+                let json = fs::read(&input)
+                    .await
+                    .map_err(|error| format!("failed to read site import file: {error}"))?;
+                let result = db_ref
+                    .transaction::<_, _, String>(|txn| {
+                        Box::pin(async move {
+                            let result = import_site_json(txn, &json)
+                                .await
+                                .map_err(|error| format!("failed to import site: {error}"))?;
+                            log_audit_event(
+                                txn,
+                                "system",
+                                "import_site",
+                                "site",
+                                result.site_id,
+                                Some(result.site_id),
+                                Some(json!({
+                                    "site_short_name": &result.site_short_name,
+                                    "created_users": result.created_users,
+                                    "reused_users": result.reused_users,
+                                    "warnings": &result.warnings,
+                                })),
+                            )
+                            .await
+                            .map_err(|error| format!("Failed to create audit event: {error}"))?;
+                            Ok(result)
+                        })
+                    })
+                    .await
+                    .map_err(|error| format!("failed to import site: {error}"))?;
+                println!(
+                    "imported site: {} ({})",
+                    result.site_id, result.site_short_name
+                );
+                for warning in result.warnings {
+                    println!("warning: {warning}");
+                }
                 Ok(())
             }
         },
@@ -1256,5 +1301,34 @@ mod tests {
             .await
             .expect("failed to read export output");
         assert_eq!(written, payload);
+    }
+
+    #[test]
+    fn site_import_command_requires_input_path() {
+        let cli = Cli::try_parse_from([
+            "websites",
+            "--tls-cert-path",
+            "cert.pem",
+            "--tls-key-path",
+            "key.pem",
+            "--frontend-url",
+            "https://example.com",
+            "--client-id",
+            "client-id",
+            "--discovery-url",
+            "https://issuer.example.com",
+            "site",
+            "import",
+            "--input",
+            "site-export.json",
+        ])
+        .expect("failed to parse site import command");
+
+        match cli.command.expect("missing command") {
+            Commands::Site {
+                command: SiteCommands::Import { input },
+            } => assert_eq!(input, PathBuf::from("site-export.json")),
+            other => panic!("unexpected parsed command: {other:?}"),
+        }
     }
 }

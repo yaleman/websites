@@ -35,8 +35,8 @@ pub mod tls;
 pub mod web;
 
 pub use site_export::{
-    SITE_EXPORT_FORMAT_VERSION, SiteExport, export_site, export_site_with_roots,
-    serialize_site_export_pretty,
+    SITE_EXPORT_FORMAT_VERSION, SiteExport, SiteImportResult, deserialize_site_export, export_site,
+    export_site_with_roots, import_site_export, import_site_json, serialize_site_export_pretty,
 };
 
 pub struct NewContent {
