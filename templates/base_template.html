@@ -24,14 +24,18 @@
         <a href="/admin/site/{{ site_id }}/content">Site Content</a>
         <a href="/admin/site/{{ site_id }}/render">Render Site</a>
         {% endif %}
-        <form method="get" action="{{ template_shared.nav_search_action }}">
-          <label for="nav-search-query">Search</label>
-          <input id="nav-search-query" name="q" value="{{ template_shared.nav_search_value }}" />
-          <button type="submit">Go</button>
-        </form>
         <a href="/admin/users/me">My Profile</a>
         <a href="/admin/logout">Logout</a>
         {% block nav_links %}{% endblock %}
+        <form class="nav-search" method="get" action="{{ template_shared.nav_search_action }}">
+          <input
+            id="nav-search-query"
+            name="q"
+            value="{{ template_shared.nav_search_value }}"
+            placeholder="Search"
+            aria-label="Search"
+          />
+        </form>
       </nav>
 
       {% if let Some(message) = template_shared.page_message %}
