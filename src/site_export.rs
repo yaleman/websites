@@ -3,15 +3,19 @@ use crate::{
     entities, list_asset_variants, list_audit_events, list_memberships, list_users_by_ids,
 };
 use chrono::{DateTime, Utc};
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
-use serde::Serialize;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    Set,
+};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use tokio::fs;
 use uuid::Uuid;
 
 pub const SITE_EXPORT_FORMAT_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SiteExport {
     pub format_version: u32,
     pub exported_at: DateTime<Utc>,
@@ -24,7 +28,7 @@ pub struct SiteExport {
     pub template_overrides: Vec<ExportTemplateOverride>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportSite {
     pub id: Uuid,
     pub short_name: String,
@@ -34,7 +38,7 @@ pub struct ExportSite {
     pub updated_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportUser {
     pub id: Uuid,
     pub subject: String,
@@ -45,7 +49,7 @@ pub struct ExportUser {
     pub admin: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportMembership {
     pub id: Uuid,
     pub site_id: Uuid,
@@ -54,20 +58,20 @@ pub struct ExportMembership {
     pub user: ExportUser,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportTag {
     pub id: Uuid,
     pub site_id: Uuid,
     pub name: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportTagReference {
     pub id: Uuid,
     pub name: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportContentTag {
     pub id: Uuid,
     pub content_id: Uuid,
@@ -75,7 +79,7 @@ pub struct ExportContentTag {
     pub tag: ExportTagReference,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportContentAlias {
     pub id: Uuid,
     pub content_id: Uuid,
@@ -84,7 +88,7 @@ pub struct ExportContentAlias {
     pub kind: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportRevisionAlias {
     pub id: Uuid,
     pub revision_id: Uuid,
@@ -93,7 +97,7 @@ pub struct ExportRevisionAlias {
     pub kind: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportRevisionTag {
     pub id: Uuid,
     pub revision_id: Uuid,
@@ -102,7 +106,7 @@ pub struct ExportRevisionTag {
     pub tag: ExportTagReference,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportContentRevision {
     pub id: Uuid,
     pub content_id: Uuid,
@@ -119,7 +123,7 @@ pub struct ExportContentRevision {
     pub tags: Vec<ExportRevisionTag>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportContentItem {
     pub id: Uuid,
     pub site_id: Uuid,
@@ -137,7 +141,7 @@ pub struct ExportContentItem {
     pub revisions: Vec<ExportContentRevision>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportFileMetadata {
     pub relative_path: String,
     pub exists: bool,
@@ -145,7 +149,7 @@ pub struct ExportFileMetadata {
     pub modified_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportAssetVariant {
     pub id: Uuid,
     pub asset_id: Uuid,
@@ -158,7 +162,7 @@ pub struct ExportAssetVariant {
     pub file: ExportFileMetadata,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportAsset {
     pub id: Uuid,
     pub site_id: Uuid,
@@ -174,7 +178,7 @@ pub struct ExportAsset {
     pub variants: Vec<ExportAssetVariant>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportAuditEvent {
     pub id: Uuid,
     pub site_id: Option<Uuid>,
@@ -186,10 +190,19 @@ pub struct ExportAuditEvent {
     pub payload_json: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportTemplateOverride {
     pub file_name: String,
     pub file: ExportFileMetadata,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SiteImportResult {
+    pub site_id: Uuid,
+    pub site_short_name: String,
+    pub created_users: usize,
+    pub reused_users: usize,
+    pub warnings: Vec<String>,
 }
 
 pub async fn export_site(db: &DatabaseConnection, site_id: Uuid) -> Result<SiteExport, SiteError> {
@@ -223,7 +236,7 @@ pub async fn export_site_with_roots(
     let mut user_map = users
         .into_iter()
         .map(|user| (user.id, user))
-        .collect::<std::collections::HashMap<_, _>>();
+        .collect::<HashMap<_, _>>();
 
     let mut exported_memberships = memberships
         .into_iter()
@@ -273,7 +286,7 @@ pub async fn export_site_with_roots(
                 },
             )
         })
-        .collect::<std::collections::HashMap<_, _>>();
+        .collect::<HashMap<_, _>>();
     let exported_tags = tags
         .into_iter()
         .map(|tag| ExportTag {
@@ -531,6 +544,295 @@ pub fn serialize_site_export_pretty(export: &SiteExport) -> Result<String, SiteE
         .map_err(|error| SiteError::internal(format!("failed to serialize site export: {error}")))
 }
 
+pub fn deserialize_site_export(json: &[u8]) -> Result<SiteExport, SiteError> {
+    let export = serde_json::from_slice::<SiteExport>(json)
+        .map_err(|error| SiteError::BadRequest(format!("invalid site export json: {error}")))?;
+    validate_site_export(&export)?;
+    Ok(export)
+}
+
+pub async fn import_site_json<C: ConnectionTrait>(
+    db: &C,
+    json: &[u8],
+) -> Result<SiteImportResult, SiteError> {
+    let export = deserialize_site_export(json)?;
+    import_site_export(db, &export).await
+}
+
+pub async fn import_site_export<C: ConnectionTrait>(
+    db: &C,
+    export: &SiteExport,
+) -> Result<SiteImportResult, SiteError> {
+    validate_site_export(export)?;
+
+    let existing_site = entities::site::Entity::find()
+        .filter(entities::site::Column::ShortName.eq(export.site.short_name.clone()))
+        .one(db)
+        .await?;
+    if existing_site.is_some() {
+        return Err(SiteError::BadRequest(format!(
+            "site short_name already exists: {}",
+            export.site.short_name
+        )));
+    }
+
+    let site_id = if entities::site::Entity::find_by_id(export.site.id)
+        .one(db)
+        .await?
+        .is_some()
+    {
+        Uuid::now_v7()
+    } else {
+        export.site.id
+    };
+
+    entities::site::ActiveModel {
+        id: Set(site_id),
+        short_name: Set(export.site.short_name.clone()),
+        full_title: Set(export.site.full_title.clone()),
+        template_name: Set(export.site.template_name.clone()),
+        created_at: Set(export.site.created_at),
+        updated_at: Set(export.site.updated_at),
+    }
+    .insert(db)
+    .await?;
+
+    let mut created_users = 0usize;
+    let mut reused_users = 0usize;
+    let mut user_id_map = HashMap::new();
+
+    for membership in &export.memberships {
+        if membership.role.is_admin() {
+            return Err(SiteError::BadRequest(
+                "site membership exports cannot contain admin roles".to_string(),
+            ));
+        }
+        if membership.user_id != membership.user.id {
+            return Err(SiteError::BadRequest(format!(
+                "membership {} has mismatched embedded user id",
+                membership.id
+            )));
+        }
+        if user_id_map.contains_key(&membership.user.id) {
+            continue;
+        }
+
+        let existing_user = entities::user::Entity::find()
+            .filter(entities::user::Column::Subject.eq(membership.user.subject.clone()))
+            .one(db)
+            .await?;
+        let resolved_user_id = if let Some(existing_user) = existing_user {
+            reused_users = reused_users.saturating_add(1);
+            existing_user.id
+        } else {
+            let user_id = if entities::user::Entity::find_by_id(membership.user.id)
+                .one(db)
+                .await?
+                .is_some()
+            {
+                Uuid::now_v7()
+            } else {
+                membership.user.id
+            };
+            entities::user::ActiveModel {
+                id: Set(user_id),
+                subject: Set(membership.user.subject.clone()),
+                created_at: Set(membership.user.created_at),
+                last_login_at: Set(membership.user.last_login_at),
+                email: Set(membership.user.email.clone()),
+                display_name: Set(membership.user.display_name.clone()),
+                admin: Set(membership.user.admin),
+            }
+            .insert(db)
+            .await?;
+            created_users = created_users.saturating_add(1);
+            user_id
+        };
+        user_id_map.insert(membership.user.id, resolved_user_id);
+    }
+
+    for membership in &export.memberships {
+        entities::site_membership::ActiveModel {
+            id: Set(membership.id),
+            site_id: Set(site_id),
+            user_id: Set(*user_id_map.get(&membership.user.id).ok_or_else(|| {
+                SiteError::internal(format!(
+                    "missing imported user mapping for {}",
+                    membership.id
+                ))
+            })?),
+            role: Set(membership.role),
+        }
+        .insert(db)
+        .await?;
+    }
+
+    let mut tag_id_map = HashMap::new();
+    for tag in &export.tags {
+        entities::tag::ActiveModel {
+            id: Set(tag.id),
+            site_id: Set(site_id),
+            name: Set(tag.name.clone()),
+        }
+        .insert(db)
+        .await?;
+        tag_id_map.insert(tag.id, tag.id);
+    }
+
+    for content in &export.content_items {
+        entities::content_item::ActiveModel {
+            id: Set(content.id),
+            site_id: Set(site_id),
+            page_type: Set(content.page_type),
+            title: Set(content.title.clone()),
+            slug: Set(content.slug.clone()),
+            page_content: Set(content.page_content.clone()),
+            draft: Set(content.draft),
+            creator_sub: Set(content.creator_sub.clone()),
+            created_at: Set(content.created_at),
+            last_updated: Set(content.last_updated),
+            published_at: Set(content.published_at),
+        }
+        .insert(db)
+        .await?;
+
+        for alias in &content.aliases {
+            entities::content_alias::ActiveModel {
+                id: Set(alias.id),
+                content_id: Set(content.id),
+                site_id: Set(site_id),
+                alias_path: Set(alias.alias_path.clone()),
+                kind: Set(alias.kind.clone()),
+            }
+            .insert(db)
+            .await?;
+        }
+
+        for tag in &content.tags {
+            entities::content_tag::ActiveModel {
+                id: Set(tag.id),
+                content_id: Set(content.id),
+                tag_id: Set(*tag_id_map.get(&tag.tag_id).ok_or_else(|| {
+                    SiteError::BadRequest(format!(
+                        "missing tag {} referenced by content {}",
+                        tag.tag_id, content.id
+                    ))
+                })?),
+            }
+            .insert(db)
+            .await?;
+        }
+
+        for revision in &content.revisions {
+            entities::content_revision::ActiveModel {
+                id: Set(revision.id),
+                content_id: Set(content.id),
+                site_id: Set(site_id),
+                revision_number: Set(revision.revision_number),
+                title: Set(revision.title.clone()),
+                slug: Set(revision.slug.clone()),
+                page_content: Set(revision.page_content.clone()),
+                draft: Set(revision.draft),
+                page_type: Set(revision.page_type),
+                editor_sub: Set(revision.editor_sub.clone()),
+                created_at: Set(revision.created_at),
+            }
+            .insert(db)
+            .await?;
+
+            for alias in &revision.aliases {
+                entities::content_revision_alias::ActiveModel {
+                    id: Set(alias.id),
+                    revision_id: Set(revision.id),
+                    content_id: Set(content.id),
+                    alias_path: Set(alias.alias_path.clone()),
+                    kind: Set(alias.kind.clone()),
+                }
+                .insert(db)
+                .await?;
+            }
+
+            for tag in &revision.tags {
+                entities::content_revision_tag::ActiveModel {
+                    id: Set(tag.id),
+                    revision_id: Set(revision.id),
+                    content_id: Set(content.id),
+                    tag_id: Set(*tag_id_map.get(&tag.tag_id).ok_or_else(|| {
+                        SiteError::BadRequest(format!(
+                            "missing tag {} referenced by revision {}",
+                            tag.tag_id, revision.id
+                        ))
+                    })?),
+                }
+                .insert(db)
+                .await?;
+            }
+        }
+    }
+
+    for asset in &export.assets {
+        entities::asset::ActiveModel {
+            id: Set(asset.id),
+            site_id: Set(site_id),
+            uploader_sub: Set(asset.uploader_sub.clone()),
+            original_filename: Set(asset.original_filename.clone()),
+            storage_basename: Set(asset.storage_basename.clone()),
+            mime_type: Set(asset.mime_type.clone()),
+            byte_length: Set(asset.byte_length),
+            width: Set(asset.width),
+            height: Set(asset.height),
+            created_at: Set(asset.created_at),
+        }
+        .insert(db)
+        .await?;
+
+        for variant in &asset.variants {
+            entities::asset_variant::ActiveModel {
+                id: Set(variant.id),
+                asset_id: Set(asset.id),
+                variant_kind: Set(variant.variant_kind.clone()),
+                filename: Set(variant.filename.clone()),
+                mime_type: Set(variant.mime_type.clone()),
+                byte_length: Set(variant.byte_length),
+                width: Set(variant.width),
+                height: Set(variant.height),
+            }
+            .insert(db)
+            .await?;
+        }
+    }
+
+    let old_site_id = export.site.id.to_string();
+    for event in &export.audit_events {
+        let entity_id = if event.entity_type == "site" && event.entity_id == old_site_id {
+            site_id.to_string()
+        } else {
+            event.entity_id.clone()
+        };
+
+        entities::audit_event::ActiveModel {
+            id: Set(event.id),
+            site_id: Set(event.site_id.map(|_| site_id)),
+            actor_sub: Set(event.actor_sub.clone()),
+            event_type: Set(event.event_type.clone()),
+            entity_type: Set(event.entity_type.clone()),
+            entity_id: Set(entity_id),
+            created_at: Set(event.created_at),
+            payload_json: Set(event.payload_json.clone()),
+        }
+        .insert(db)
+        .await?;
+    }
+
+    Ok(SiteImportResult {
+        site_id,
+        site_short_name: export.site.short_name.clone(),
+        created_users,
+        reused_users,
+        warnings: build_import_warnings(export),
+    })
+}
+
 async fn export_template_overrides(
     override_root: &Path,
 ) -> Result<Vec<ExportTemplateOverride>, SiteError> {
@@ -581,6 +883,44 @@ async fn file_metadata(root: &Path, relative_path: &Path) -> Result<ExportFileMe
     }
 }
 
+fn validate_site_export(export: &SiteExport) -> Result<(), SiteError> {
+    if export.format_version != SITE_EXPORT_FORMAT_VERSION {
+        return Err(SiteError::BadRequest(format!(
+            "unsupported site export format version: {}",
+            export.format_version
+        )));
+    }
+
+    if export.site.short_name.trim().is_empty() {
+        return Err(SiteError::BadRequest(
+            "site export is missing short_name".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn build_import_warnings(export: &SiteExport) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let asset_file_count = export
+        .assets
+        .iter()
+        .map(|asset| 1usize.saturating_add(asset.variants.len()))
+        .sum::<usize>();
+    if asset_file_count > 0 {
+        warnings.push(format!(
+            "{asset_file_count} asset file reference(s) were not restored because site exports contain file metadata only."
+        ));
+    }
+    if !export.template_overrides.is_empty() {
+        warnings.push(format!(
+            "{} template override file(s) were not restored because site exports contain file metadata only.",
+            export.template_overrides.len()
+        ));
+    }
+    warnings
+}
+
 fn normalize_relative_path(path: &Path) -> String {
     path.components()
         .map(|component| component.as_os_str().to_string_lossy().to_string())
@@ -597,7 +937,8 @@ mod tests {
     use crate::{
         NewAlias, NewAsset, NewAssetVariant, NewContent, NewContentTag, NewMembership, NewTag,
         add_content_tag, create_alias, create_asset, create_asset_variant, create_content,
-        create_membership, create_site, create_tag, update_content,
+        create_membership, create_site, create_tag, list_assets, list_memberships, list_revisions,
+        update_content,
     };
     use tempfile::TempDir;
 
@@ -806,6 +1147,332 @@ mod tests {
         assert_eq!(export.template_overrides.len(), 1);
         assert_eq!(export.template_overrides[0].file_name, "page.html");
         assert!(export.template_overrides[0].file.exists);
+    }
+
+    #[tokio::test]
+    async fn import_site_export_restores_database_records_and_reports_file_warnings() {
+        let source_db = test_db_start().await;
+        let upload_root = TempDir::new().expect("failed to create upload root");
+        let override_root = TempDir::new().expect("failed to create override root");
+
+        let site = create_site(
+            &source_db,
+            "roundtrip".to_string(),
+            "Roundtrip Site".to_string(),
+            "default".to_string(),
+        )
+        .await
+        .expect("failed to create source site");
+        let reused_user = crate::entities::user::create_user(
+            &source_db,
+            "existing-owner",
+            Some("existing-owner@example.com"),
+            Some("Existing Owner"),
+            false,
+        )
+        .await
+        .expect("failed to create existing source user");
+        let new_user = crate::entities::user::create_user(
+            &source_db,
+            "new-editor",
+            Some("new-editor@example.com"),
+            Some("New Editor"),
+            false,
+        )
+        .await
+        .expect("failed to create new source user");
+        create_membership(
+            &source_db,
+            NewMembership {
+                site_id: site.id,
+                user_id: reused_user.id,
+                role: SiteRole::Owner,
+            },
+        )
+        .await
+        .expect("failed to create owner membership");
+        create_membership(
+            &source_db,
+            NewMembership {
+                site_id: site.id,
+                user_id: new_user.id,
+                role: SiteRole::Editor,
+            },
+        )
+        .await
+        .expect("failed to create editor membership");
+
+        let tag = create_tag(
+            &source_db,
+            NewTag {
+                site_id: site.id,
+                name: "Roundtrip".to_string(),
+            },
+        )
+        .await
+        .expect("failed to create source tag");
+        let content = create_content(
+            &source_db,
+            NewContent {
+                site_id: site.id,
+                page_type: entities::PageType::Page,
+                title: "Landing".to_string(),
+                slug: "landing".to_string(),
+                page_content: "Source body".to_string(),
+                draft: true,
+                creator_sub: "existing-owner".to_string(),
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create source content");
+        create_alias(
+            &source_db,
+            NewAlias {
+                content_id: content.id,
+                site_id: site.id,
+                alias_path: "/home".to_string(),
+                kind: "alias".to_string(),
+            },
+        )
+        .await
+        .expect("failed to create source alias");
+        add_content_tag(
+            &source_db,
+            NewContentTag {
+                content_id: content.id,
+                site_id: site.id,
+                tag_name: tag.name.clone(),
+            },
+        )
+        .await
+        .expect("failed to tag source content");
+        update_content(
+            &source_db,
+            crate::UpdateContent {
+                content_id: content.id,
+                page_type: None,
+                title: Some("Landing Updated".to_string()),
+                slug: Some("landing".to_string()),
+                page_content: Some("Updated source body".to_string()),
+                draft: Some(false),
+                published_at: None,
+                editor_sub: "new-editor".to_string(),
+            },
+        )
+        .await
+        .expect("failed to update source content");
+
+        let asset = create_asset(
+            &source_db,
+            NewAsset {
+                site_id: site.id,
+                uploader_sub: "existing-owner".to_string(),
+                original_filename: "banner.png".to_string(),
+                storage_basename: "banner.png".to_string(),
+                mime_type: "image/png".to_string(),
+                byte_length: 100,
+                width: Some(400),
+                height: Some(200),
+            },
+        )
+        .await
+        .expect("failed to create source asset");
+        create_asset_variant(
+            &source_db,
+            NewAssetVariant {
+                asset_id: asset.id,
+                variant_kind: "thumbnail".to_string(),
+                filename: "banner-thumb.png".to_string(),
+                mime_type: "image/png".to_string(),
+                byte_length: 40,
+                width: Some(100),
+                height: Some(50),
+            },
+        )
+        .await
+        .expect("failed to create source asset variant");
+
+        fs::write(upload_root.path().join("banner.png"), b"banner-bytes")
+            .await
+            .expect("failed to write source asset");
+        fs::write(
+            override_root.path().join("page.html"),
+            b"<html>override</html>",
+        )
+        .await
+        .expect("failed to write source template override");
+
+        log_audit_event(
+            &source_db,
+            "existing-owner",
+            "update_site",
+            "site",
+            site.id,
+            Some(site.id),
+            Some(serde_json::json!({ "full_title": "Roundtrip Site" })),
+        )
+        .await
+        .expect("failed to write source audit event");
+
+        let export = export_site_with_roots(
+            &source_db,
+            site.id,
+            upload_root.path(),
+            override_root.path(),
+        )
+        .await
+        .expect("failed to export source site");
+
+        let target_db = test_db_start().await;
+        crate::entities::user::create_user(
+            &target_db,
+            "existing-owner",
+            Some("target-existing@example.com"),
+            Some("Target Existing Owner"),
+            false,
+        )
+        .await
+        .expect("failed to seed target existing user");
+
+        let import = import_site_export(&target_db, &export)
+            .await
+            .expect("failed to import site export");
+
+        assert_eq!(import.site_short_name, "roundtrip");
+        assert_eq!(import.created_users, 1);
+        assert_eq!(import.reused_users, 1);
+        assert_eq!(import.warnings.len(), 2);
+        assert!(import.warnings[0].contains("asset file reference"));
+        assert!(import.warnings[1].contains("template override file"));
+
+        let imported_site = entities::site::Entity::find_by_id(import.site_id)
+            .one(&target_db)
+            .await
+            .expect("failed to fetch imported site")
+            .expect("missing imported site");
+        assert_eq!(imported_site.full_title, "Roundtrip Site");
+
+        let imported_memberships = list_memberships(&target_db, imported_site.id)
+            .await
+            .expect("failed to list imported memberships");
+        assert_eq!(imported_memberships.len(), 2);
+
+        let imported_content = entities::content_item::Entity::find()
+            .filter(entities::content_item::Column::SiteId.eq(imported_site.id))
+            .all(&target_db)
+            .await
+            .expect("failed to list imported content");
+        assert_eq!(imported_content.len(), 1);
+        assert_eq!(imported_content[0].title, "Landing Updated");
+
+        let imported_revisions = list_revisions(&target_db, imported_content[0].id)
+            .await
+            .expect("failed to list imported revisions");
+        assert_eq!(imported_revisions.len(), 2);
+
+        let imported_assets = list_assets(&target_db, imported_site.id)
+            .await
+            .expect("failed to list imported assets");
+        assert_eq!(imported_assets.len(), 1);
+        assert_eq!(imported_assets[0].original_filename, "banner.png");
+
+        let imported_audit_events = list_audit_events(&target_db, Some(imported_site.id))
+            .await
+            .expect("failed to list imported audit events");
+        assert_eq!(imported_audit_events.len(), 1);
+
+        let imported_tags = entities::tag::Entity::find()
+            .filter(entities::tag::Column::SiteId.eq(imported_site.id))
+            .all(&target_db)
+            .await
+            .expect("failed to list imported tags");
+        assert_eq!(imported_tags.len(), 1);
+        assert_eq!(imported_tags[0].name, "Roundtrip");
+
+        let imported_new_user = entities::user::Entity::find()
+            .filter(entities::user::Column::Subject.eq("new-editor"))
+            .one(&target_db)
+            .await
+            .expect("failed to fetch imported new user")
+            .expect("missing imported new user");
+        assert_eq!(
+            imported_new_user.email.as_deref(),
+            Some("new-editor@example.com")
+        );
+    }
+
+    #[tokio::test]
+    async fn import_site_export_rejects_duplicate_short_name() {
+        let db = test_db_start().await;
+        let export = SiteExport {
+            format_version: SITE_EXPORT_FORMAT_VERSION,
+            exported_at: Utc::now(),
+            site: ExportSite {
+                id: Uuid::now_v7(),
+                short_name: "duplicate".to_string(),
+                full_title: "Duplicate".to_string(),
+                template_name: "default".to_string(),
+                created_at: Utc::now(),
+                updated_at: None,
+            },
+            memberships: Vec::new(),
+            tags: Vec::new(),
+            content_items: Vec::new(),
+            assets: Vec::new(),
+            audit_events: Vec::new(),
+            template_overrides: Vec::new(),
+        };
+
+        create_site(
+            &db,
+            "duplicate".to_string(),
+            "Existing".to_string(),
+            "default".to_string(),
+        )
+        .await
+        .expect("failed to create existing site");
+
+        let error = import_site_export(&db, &export)
+            .await
+            .expect_err("expected import to fail");
+        match error {
+            SiteError::BadRequest(message) => {
+                assert!(message.contains("site short_name already exists"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[test]
+    fn deserialize_site_export_rejects_unsupported_versions() {
+        let payload = serde_json::json!({
+            "format_version": SITE_EXPORT_FORMAT_VERSION + 1,
+            "exported_at": Utc::now(),
+            "site": {
+                "id": Uuid::now_v7(),
+                "short_name": "bad-version",
+                "full_title": "Bad Version",
+                "template_name": "default",
+                "created_at": Utc::now(),
+                "updated_at": serde_json::Value::Null
+            },
+            "memberships": [],
+            "tags": [],
+            "content_items": [],
+            "assets": [],
+            "audit_events": [],
+            "template_overrides": []
+        });
+
+        let error = deserialize_site_export(payload.to_string().as_bytes())
+            .expect_err("expected unsupported version");
+        match error {
+            SiteError::BadRequest(message) => {
+                assert!(message.contains("unsupported site export format version"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
     }
 
     #[tokio::test]

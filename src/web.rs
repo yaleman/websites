@@ -15,12 +15,12 @@ use crate::{
     NewAsset, NewAssetVariant, NewContent, cli::OidcConfig, content_primary_route, create_asset,
     create_asset_variant, create_content, create_membership, create_site, create_tag,
     delete_membership, delete_tag, export_site, get_membership_by_id, get_membership_for_subject,
-    get_revision, get_revision_by_number, get_user_by_id, list_aliases, list_assets, list_content,
-    list_content_tags, list_memberships, list_memberships_for_user_id, list_revisions, list_sites,
-    list_sites_for_subject, list_tags, list_users, list_users_by_ids, render_content_preview,
-    render_site, resolve_site_template_override_root, resolve_upload_root, search_content,
-    serialize_site_export_pretty, sync_tags_to_content, update_content, update_membership_role,
-    update_site_settings,
+    get_revision, get_revision_by_number, get_user_by_id, import_site_json, list_aliases,
+    list_assets, list_content, list_content_tags, list_memberships, list_memberships_for_user_id,
+    list_revisions, list_sites, list_sites_for_subject, list_tags, list_users, list_users_by_ids,
+    render_content_preview, render_site, resolve_site_template_override_root, resolve_upload_root,
+    search_content, serialize_site_export_pretty, sync_tags_to_content, update_content,
+    update_membership_role, update_site_settings,
 };
 use anyhow::Context;
 use askama::Template;
@@ -162,6 +162,12 @@ struct AdminSitesNewTemplate {
     template_shared: AdminTemplateData,
 
     templates: Vec<String>,
+}
+#[allow(dead_code)]
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_sites_import.html")]
+struct AdminSitesImportTemplate {
+    template_shared: AdminTemplateData,
 }
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
@@ -451,6 +457,11 @@ struct UpdateSiteSettingsForm {
 }
 
 #[derive(Debug, Deserialize)]
+struct SitesIndexQuery {
+    imported: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct UpdateSiteTemplateOverrideForm {
     source: String,
 }
@@ -622,6 +633,17 @@ async fn current_user(session: &Session) -> Result<entities::user::Model, SiteEr
         .ok_or_else(|| SiteError::UnAuthorized("missing user session".to_string()))
 }
 
+async fn require_global_admin(session: &Session) -> Result<entities::user::Model, SiteError> {
+    let user = current_user(session).await?;
+    if user.admin {
+        Ok(user)
+    } else {
+        Err(SiteError::UnAuthorized(
+            "global admin access is required".to_string(),
+        ))
+    }
+}
+
 fn role_satisfies(actual: SiteRole, required: SiteRole) -> bool {
     let rank = |role: SiteRole| match role {
         SiteRole::Viewer => 0_u8,
@@ -707,6 +729,10 @@ pub async fn run_admin_server(
         .route(
             "/admin/sites/new",
             get(admin_sites_new).post(admin_sites_create),
+        )
+        .route(
+            "/admin/sites/import",
+            get(admin_sites_import).post(admin_sites_import_create),
         )
         .route(
             "/admin/site/{site_id}/content",
@@ -914,13 +940,27 @@ async fn get_index() -> Result<AdminIndexTemplate, SiteError> {
 }
 
 /// Sites list
-async fn get_sites(State(state): State<AdminState>) -> Result<AdminSitesTemplate, SiteError> {
+async fn get_sites(
+    State(state): State<AdminState>,
+    session: Session,
+    Query(query): Query<SitesIndexQuery>,
+) -> Result<AdminSitesTemplate, SiteError> {
+    let viewer = current_user(&session).await?;
     let sites = list_sites(state.db.as_ref()).await?;
+    let mut links = vec![AdminLink::new("/admin/sites/new", "New site")];
+    if viewer.admin {
+        links.push(AdminLink::new("/admin/sites/import", "Import site"));
+    }
+
+    let template_shared = AdminTemplateData::new("Sites").with_links(links);
+    let template_shared = if query.imported.is_some() {
+        template_shared.with_toast_message("Site import complete.", "imported")
+    } else {
+        template_shared
+    };
 
     Ok(AdminSitesTemplate {
-        template_shared: AdminTemplateData::new("Sites")
-            .with_links(vec![AdminLink::new("/admin/sites/new", "New site")]),
-
+        template_shared,
         sites,
     })
 }
@@ -933,6 +973,65 @@ async fn admin_sites_new() -> Response {
         templates: get_template_names().await,
     }
     .into_response()
+}
+
+async fn admin_sites_import(session: Session) -> Result<AdminSitesImportTemplate, SiteError> {
+    require_global_admin(&session).await?;
+    Ok(AdminSitesImportTemplate {
+        template_shared: AdminTemplateData::new("Import Site")
+            .with_links(vec![AdminLink::new("/admin/sites", "Back to sites")]),
+    })
+}
+
+async fn admin_sites_import_create(
+    State(state): State<AdminState>,
+    session: Session,
+    mut multipart: Multipart,
+) -> Result<Redirect, SiteError> {
+    let actor = require_global_admin(&session).await?;
+    let mut upload_bytes: Option<Vec<u8>> = None;
+
+    loop {
+        let field = multipart.next_field().await.map_err(|error| {
+            SiteError::internal(format!("failed to parse site import: {error}"))
+        })?;
+        let Some(field) = field else { break };
+        if field.name() != Some("file") {
+            continue;
+        }
+        let bytes = field.bytes().await.map_err(|error| {
+            SiteError::internal(format!("failed to read site import upload: {error}"))
+        })?;
+        if bytes.is_empty() {
+            continue;
+        }
+        upload_bytes = Some(bytes.to_vec());
+    }
+
+    let upload_bytes = upload_bytes
+        .ok_or_else(|| SiteError::BadRequest("provide a site export JSON file".to_string()))?;
+
+    let txn = state.db.begin().await?;
+    let result = import_site_json(&txn, &upload_bytes).await?;
+    log_audit_event(
+        &txn,
+        &actor.subject,
+        "import_site",
+        "site",
+        result.site_id,
+        Some(result.site_id),
+        Some(json!({
+            "site_short_name": &result.site_short_name,
+            "created_users": result.created_users,
+            "reused_users": result.reused_users,
+            "warnings": &result.warnings,
+        })),
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to log import audit: {error}")))?;
+    txn.commit().await?;
+
+    Ok(Redirect::to("/admin/sites?imported=1"))
 }
 
 async fn ensure_site_owner_membership<C: ConnectionTrait>(
@@ -3277,11 +3376,15 @@ mod tests {
         }
     }
 
-    fn export_test_router(state: AdminState) -> Router {
+    fn site_transfer_test_router(state: AdminState) -> Router {
         let session_layer = SessionManagerLayer::new(MemoryStore::default())
             .with_secure(false)
             .with_expiry(Expiry::OnSessionEnd);
         let protected = Router::new()
+            .route(
+                "/admin/sites/import",
+                get(admin_sites_import).post(admin_sites_import_create),
+            )
             .route("/admin/site/{site_id}/export.json", get(admin_site_export))
             .layer(from_fn(crate::middleware::require_session));
 
@@ -3290,6 +3393,14 @@ mod tests {
             .merge(protected)
             .layer(session_layer)
             .with_state(state)
+    }
+
+    fn multipart_json_request_body(json: &str) -> (String, Vec<u8>) {
+        let boundary = "site-import-boundary";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"site-export.json\"\r\nContent-Type: application/json\r\n\r\n{json}\r\n--{boundary}--\r\n"
+        );
+        (boundary.to_string(), body.into_bytes())
     }
 
     #[tokio::test]
@@ -3325,7 +3436,7 @@ mod tests {
         .await
         .expect("failed to create owner membership");
 
-        let router = export_test_router(test_admin_state(db.clone()));
+        let router = site_transfer_test_router(test_admin_state(db.clone()));
         let cookie = seed_session_cookie(router.clone(), owner.id).await;
         let response = router
             .oneshot(
@@ -3392,7 +3503,7 @@ mod tests {
         .await
         .expect("failed to create viewer membership");
 
-        let router = export_test_router(test_admin_state(db.clone()));
+        let router = site_transfer_test_router(test_admin_state(db.clone()));
         let cookie = seed_session_cookie(router.clone(), viewer.id).await;
         let response = router
             .oneshot(
@@ -3404,6 +3515,136 @@ mod tests {
             )
             .await
             .expect("failed to call export route");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn admin_site_import_allows_global_admin_and_creates_site() {
+        let db = crate::db::db_start("sqlite::memory:")
+            .await
+            .expect("failed to start db");
+        let admin = crate::entities::user::create_user(
+            db.as_ref(),
+            "admin",
+            Some("admin@example.com"),
+            Some("Admin"),
+            true,
+        )
+        .await
+        .expect("failed to create admin");
+        let export = crate::SiteExport {
+            format_version: crate::SITE_EXPORT_FORMAT_VERSION,
+            exported_at: Utc::now(),
+            site: crate::site_export::ExportSite {
+                id: Uuid::now_v7(),
+                short_name: "imported-site".to_string(),
+                full_title: "Imported Site".to_string(),
+                template_name: DEFAULT_TEMPLATE_NAME.to_string(),
+                created_at: Utc::now(),
+                updated_at: None,
+            },
+            memberships: Vec::new(),
+            tags: Vec::new(),
+            content_items: Vec::new(),
+            assets: Vec::new(),
+            audit_events: Vec::new(),
+            template_overrides: Vec::new(),
+        };
+        let json =
+            crate::serialize_site_export_pretty(&export).expect("failed to serialize import json");
+        let (boundary, body) = multipart_json_request_body(&json);
+
+        let router = site_transfer_test_router(test_admin_state(db.clone()));
+        let cookie = seed_session_cookie(router.clone(), admin.id).await;
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/sites/import")
+                    .header(header::COOKIE, cookie)
+                    .header(
+                        header::CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .expect("failed to build import request"),
+            )
+            .await
+            .expect("failed to call import route");
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::LOCATION)
+                .expect("missing location header")
+                .to_str()
+                .expect("invalid location header"),
+            "/admin/sites?imported=1"
+        );
+
+        let imported_site = crate::entities::site::Entity::find()
+            .filter(crate::entities::site::Column::ShortName.eq("imported-site"))
+            .one(db.as_ref())
+            .await
+            .expect("failed to query imported site");
+        assert!(imported_site.is_some(), "expected imported site to exist");
+    }
+
+    #[tokio::test]
+    async fn admin_site_import_rejects_non_admin_users() {
+        let db = crate::db::db_start("sqlite::memory:")
+            .await
+            .expect("failed to start db");
+        let user = crate::entities::user::create_user(
+            db.as_ref(),
+            "viewer",
+            Some("viewer@example.com"),
+            Some("Viewer"),
+            false,
+        )
+        .await
+        .expect("failed to create user");
+        let export = crate::SiteExport {
+            format_version: crate::SITE_EXPORT_FORMAT_VERSION,
+            exported_at: Utc::now(),
+            site: crate::site_export::ExportSite {
+                id: Uuid::now_v7(),
+                short_name: "blocked-import".to_string(),
+                full_title: "Blocked Import".to_string(),
+                template_name: DEFAULT_TEMPLATE_NAME.to_string(),
+                created_at: Utc::now(),
+                updated_at: None,
+            },
+            memberships: Vec::new(),
+            tags: Vec::new(),
+            content_items: Vec::new(),
+            assets: Vec::new(),
+            audit_events: Vec::new(),
+            template_overrides: Vec::new(),
+        };
+        let json =
+            crate::serialize_site_export_pretty(&export).expect("failed to serialize import json");
+        let (boundary, body) = multipart_json_request_body(&json);
+
+        let router = site_transfer_test_router(test_admin_state(db.clone()));
+        let cookie = seed_session_cookie(router.clone(), user.id).await;
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/sites/import")
+                    .header(header::COOKIE, cookie)
+                    .header(
+                        header::CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .expect("failed to build import request"),
+            )
+            .await
+            .expect("failed to call import route");
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
