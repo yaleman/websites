@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 pub mod cli;
 pub mod constants;
+pub mod csrf;
 pub mod db;
 pub mod entities;
 pub mod errors;

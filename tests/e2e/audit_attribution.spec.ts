@@ -6,6 +6,7 @@ import {
 	createContent,
 	createMembership,
 	createUser,
+	extractCsrfToken,
 	listAuditEvents,
 	listContentRevisions,
 	setupHarness,
@@ -412,10 +413,24 @@ test.describe("web audit attribution", () => {
 		try {
 			const context = await createAuthenticatedApiContext(harness, actor, true);
 			try {
+				const confirmResponse = await context.api.fetch(
+					`/admin/site/${harness.siteId}/delete`,
+					{
+						method: "GET",
+						failOnStatusCode: false,
+						maxRedirects: 0,
+					},
+				);
+				expect(confirmResponse.status()).toBe(200);
+				const csrfToken = extractCsrfToken(await confirmResponse.text());
+
 				const response = await context.api.fetch(
 					`/admin/site/${harness.siteId}/delete`,
 					{
 						method: "POST",
+						form: {
+							csrf_token: csrfToken,
+						},
 						failOnStatusCode: false,
 						maxRedirects: 0,
 					},

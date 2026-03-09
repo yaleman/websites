@@ -2,6 +2,7 @@ use crate::constants::{
     CUSTOMIZABLE_TEMPLATE_FILES, DEFAULT_TEMPLATE_NAME, SESSION_OIDC_NONCE_KEY,
     SESSION_OIDC_PKCE_KEY, SESSION_OIDC_STATE_KEY, SESSION_USER,
 };
+use crate::csrf::SessionCsrfExt;
 use crate::entities::audit_event::log_audit_event;
 use crate::entities::site::get_by_id;
 use crate::entities::user::upsert_user_login;
@@ -329,6 +330,7 @@ struct AdminSiteDeleteConfirmTemplate {
     site_id: Uuid,
     site_full_title: String,
     site_short_name: String,
+    csrf_token: String,
 }
 
 #[allow(dead_code)]
@@ -505,6 +507,11 @@ struct CreateSiteForm {
 struct UpdateSiteSettingsForm {
     full_title: String,
     template_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CsrfTokenForm {
+    csrf_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -829,6 +836,10 @@ fn build_search_rows(
             created_at: row.created_at.to_rfc3339(),
         })
         .collect()
+}
+
+fn site_delete_csrf_scope(site_id: Uuid) -> String {
+    format!("delete-site:{site_id}")
 }
 
 fn parse_tag_list(raw: Option<String>) -> Vec<String> {
@@ -3481,6 +3492,9 @@ async fn admin_site_delete_confirm(
     let site = get_by_id(state.db.as_ref(), site_id)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
+    let csrf_token = session
+        .issue_csrf_token(&site_delete_csrf_scope(site_id))
+        .await?;
 
     Ok(AdminSiteDeleteConfirmTemplate {
         template_shared: AdminTemplateData::new("Confirm Site Deletion")
@@ -3492,6 +3506,7 @@ async fn admin_site_delete_confirm(
         site_id: site.id,
         site_full_title: site.full_title,
         site_short_name: site.short_name,
+        csrf_token,
     })
 }
 
@@ -3499,8 +3514,12 @@ async fn admin_site_delete(
     State(state): State<AdminState>,
     session: Session,
     Path(site_id): Path<Uuid>,
+    Form(form): Form<CsrfTokenForm>,
 ) -> Result<Redirect, SiteError> {
     let actor = require_global_admin(&session).await?.subject;
+    session
+        .validate_csrf_token(&site_delete_csrf_scope(site_id), &form.csrf_token)
+        .await?;
     let site = get_by_id(state.db.as_ref(), site_id)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
