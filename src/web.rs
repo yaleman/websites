@@ -65,6 +65,7 @@ use uuid::Uuid;
 /// Holds all the common template-shared data for admin pages.
 struct AdminTemplateData {
     page_title: String,
+    document_title: String,
 
     /// Feedback to the user
     page_message: Option<String>,
@@ -74,18 +75,23 @@ struct AdminTemplateData {
     clear_query_param: Option<String>,
     /// Used when you're in a site context, to link back to the site homepage, e.g. in the header.
     site_id: Option<Uuid>,
+    /// Full site title shown in shared admin chrome for site-scoped pages.
+    site_full_title: Option<String>,
     /// Extra "actions" links in a secondary navbar, e.g. "New site", "Back to sites", etc.
     links: Vec<AdminLink>,
 }
 
 impl AdminTemplateData {
     pub fn new(title: impl ToString) -> Self {
+        let page_title = title.to_string();
         Self {
-            page_title: title.to_string(),
+            document_title: page_title.clone(),
+            page_title,
             page_message: None,
             page_message_is_toast: false,
             clear_query_param: None,
             site_id: None,
+            site_full_title: None,
             links: vec![],
         }
     }
@@ -111,9 +117,12 @@ impl AdminTemplateData {
         }
     }
 
-    pub fn with_site_id(self, site_id: Uuid) -> Self {
+    pub fn with_site_context(self, site_id: Uuid, site_full_title: impl ToString) -> Self {
+        let site_full_title = site_full_title.to_string();
         Self {
+            document_title: format!("{} - {}", self.page_title, site_full_title),
             site_id: Some(site_id),
+            site_full_title: Some(site_full_title),
             ..self
         }
     }
@@ -206,7 +215,7 @@ struct AdminRevisionDiffTemplate {
 struct AdminAssetsTemplate {
     template_shared: AdminTemplateData,
     site_id: Uuid,
-    site_short_name: String,
+    site_full_title: String,
     assets: Vec<AdminAssetRow>,
 }
 #[allow(dead_code)]
@@ -215,7 +224,7 @@ struct AdminAssetsTemplate {
 struct AdminAssetsNewTemplate {
     template_shared: AdminTemplateData,
     site_id: Uuid,
-    site_short_name: String,
+    site_full_title: String,
     recent_assets: Vec<AdminAssetRow>,
 }
 #[allow(dead_code)]
@@ -300,7 +309,7 @@ struct AdminSiteSettingsTemplate {
 struct AdminSiteTemplateEditorTemplate {
     template_shared: AdminTemplateData,
     site_id: Uuid,
-    site_short_name: String,
+    site_full_title: String,
     template_name: String,
     file_name: String,
     source: String,
@@ -1072,15 +1081,17 @@ async fn admin_site_content_list(
 
     match list_content(state.db.as_ref(), site_id, None).await {
         Ok(pages) => Ok(AdminContentListTemplate {
-            template_shared: AdminTemplateData::new(site.full_title).with_links(vec![
-                AdminLink::new(&format!("/admin/site/{site_id}/content/new"), "New content"),
-                AdminLink::new(&format!("/admin/site/{site_id}/search"), "Search content"),
-                AdminLink::new(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
-                AdminLink::new(&format!("/admin/site/{site_id}/tags"), "Tags"),
-                AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Assets"),
-                AdminLink::new(&format!("/admin/site/{site_id}/render"), "Render"),
-                AdminLink::new(&format!("/admin/site/{site_id}/settings"), "Site settings"),
-            ]),
+            template_shared: AdminTemplateData::new("Content")
+                .with_site_context(site.id, &site.full_title)
+                .with_links(vec![
+                    AdminLink::new(&format!("/admin/site/{site_id}/content/new"), "New content"),
+                    AdminLink::new(&format!("/admin/site/{site_id}/search"), "Search content"),
+                    AdminLink::new(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
+                    AdminLink::new(&format!("/admin/site/{site_id}/tags"), "Tags"),
+                    AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Assets"),
+                    AdminLink::new(&format!("/admin/site/{site_id}/render"), "Render"),
+                    AdminLink::new(&format!("/admin/site/{site_id}/settings"), "Site settings"),
+                ]),
 
             site_id,
             content_items: pages,
@@ -1160,13 +1171,15 @@ async fn admin_site_memberships(
         .collect();
 
     Ok(AdminMembershipsTemplate {
-        template_shared: AdminTemplateData::new("Memberships").with_links(vec![
-            AdminLink::new(
-                &format!("/admin/site/{site_id}/content"),
-                "Back to site dashboard",
-            ),
-            AdminLink::new(&format!("/admin/site/{site_id}/settings"), "Site settings"),
-        ]),
+        template_shared: AdminTemplateData::new("Memberships")
+            .with_site_context(site.id, &site.full_title)
+            .with_links(vec![
+                AdminLink::new(
+                    &format!("/admin/site/{site_id}/content"),
+                    "Back to site dashboard",
+                ),
+                AdminLink::new(&format!("/admin/site/{site_id}/settings"), "Site settings"),
+            ]),
         site_id: site.id,
         site_full_title: site.full_title,
         memberships: membership_rows,
@@ -1425,7 +1438,8 @@ async fn get_site_search(
     }
 
     Ok(AdminSearchTemplate {
-        template_shared: AdminTemplateData::new(format!("Search {}", site.full_title))
+        template_shared: AdminTemplateData::new("Search Content")
+            .with_site_context(site.id, &site.full_title)
             .with_message(message)
             .with_links(vec![AdminLink::new(
                 &format!("/admin/site/{site_id}/content"),
@@ -1455,7 +1469,8 @@ async fn admin_site_content_new(
 
     let site = get_by_id(state.db.as_ref(), site_id).await?;
     Ok(AdminContentNewTemplate {
-        template_shared: AdminTemplateData::new(format!("{} - Create Content", &site.short_name)),
+        template_shared: AdminTemplateData::new("Create Content")
+            .with_site_context(site.id, &site.full_title),
         page_content: String::new(), // empty page content for the editor
         tags,
         site_id: site.id,
@@ -1588,11 +1603,19 @@ async fn admin_site_content_detail(
                 "failed to load revisions for content {content_id}: {error}"
             ))
         })?;
+    let site = get_by_id(state.db.as_ref(), content.site_id)
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!(
+                "failed to load site {} for content {content_id}: {error}",
+                content.site_id
+            ))
+        })?;
 
     let route = content_primary_route(&content);
     Ok(AdminContentDetailTemplate {
         template_shared: AdminTemplateData::new(format!("Content: /{route}"))
-            .with_site_id(content.site_id)
+            .with_site_context(site.id, &site.full_title)
             .with_links(vec![
                 AdminLink::new(
                     &format!(
@@ -1675,13 +1698,21 @@ async fn admin_site_content_source(
     let title = content.title;
     let slug = content.slug;
     let page_content = content.page_content;
+    let site = get_by_id(state.db.as_ref(), content.site_id)
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!(
+                "failed to load site {} for content {content_id}: {error}",
+                content.site_id
+            ))
+        })?;
 
     let template_shared = AdminTemplateData::new(format!("Editing: {}", title))
         .with_links(vec![
             AdminLink::new(&preview_href, "Preview"),
             AdminLink::new(&back_href, "Back to site dashboard"),
         ])
-        .with_site_id(content.site_id);
+        .with_site_context(site.id, &site.full_title);
     let template_shared = if query.saved.is_some() {
         template_shared.with_toast_message("Content saved.", "saved")
     } else {
@@ -1858,6 +1889,9 @@ async fn admin_site_content_revisions(
     Path((site_id, content_id)): Path<(Uuid, Uuid)>,
 ) -> Result<AdminContentRevisionsTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
+    let site = get_by_id(state.db.as_ref(), site_id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
 
     let revisions = list_revisions(state.db.as_ref(), content_id)
         .await
@@ -1890,12 +1924,12 @@ async fn admin_site_content_revisions(
         .collect();
 
     Ok(AdminContentRevisionsTemplate {
-        template_shared: AdminTemplateData::new(format!("Revisions for {content_id}")).with_links(
-            vec![AdminLink::new(
+        template_shared: AdminTemplateData::new(format!("Revisions for {content_id}"))
+            .with_site_context(site.id, &site.full_title)
+            .with_links(vec![AdminLink::new(
                 &format!("/admin/site/{site_id}/content/{content_id}"),
                 "Back to site dashboard",
-            )],
-        ),
+            )]),
         rows,
         inline_body: if diff_links.is_empty() {
             "<p>No diffs available for the first revision.</p>".to_string()
@@ -1914,6 +1948,9 @@ async fn admin_site_revision_diff(
     Path((site_id, content_id, revision_id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> Result<AdminRevisionDiffTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
+    let site = get_by_id(state.db.as_ref(), site_id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
     let revision = get_revision(state.db.as_ref(), revision_id)
         .await
         .map_err(|error| {
@@ -1960,6 +1997,7 @@ async fn admin_site_revision_diff(
             "Diff for rev-{}",
             revision.revision_number
         ))
+        .with_site_context(site.id, &site.full_title)
         .with_message(format!(
             "Comparing revision {} for content {}.",
             revision.revision_number, revision.content_id
@@ -2000,6 +2038,9 @@ async fn admin_site_tags(
     Path(site_id): Path<Uuid>,
 ) -> Result<AdminTagsTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
+    let site = get_by_id(state.db.as_ref(), site_id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
     match list_tags(state.db.as_ref(), site_id).await {
         Ok(tags) => {
             let tags = tags
@@ -2012,7 +2053,8 @@ async fn admin_site_tags(
                 .collect();
 
             Ok(AdminTagsTemplate {
-                template_shared: AdminTemplateData::new(format!("Site Tags ({site_id})"))
+                template_shared: AdminTemplateData::new("Tags")
+                    .with_site_context(site.id, &site.full_title)
                     .with_links(vec![AdminLink::new(
                         &format!("/admin/site/{site_id}/content"),
                         "Back to site dashboard",
@@ -2377,7 +2419,8 @@ async fn admin_site_assets(
     let asset_rows = build_admin_asset_rows(state.db.as_ref(), assets).await?;
 
     Ok(AdminAssetsTemplate {
-        template_shared: AdminTemplateData::new(format!("Site Assets ({})", site.short_name))
+        template_shared: AdminTemplateData::new("Assets")
+            .with_site_context(site.id, &site.full_title)
             .with_links(vec![
                 AdminLink::new(&format!("/admin/site/{site_id}/assets/new"), "Upload"),
                 AdminLink::new(
@@ -2386,7 +2429,7 @@ async fn admin_site_assets(
                 ),
             ]),
         site_id,
-        site_short_name: site.short_name,
+        site_full_title: site.full_title,
         assets: asset_rows,
     })
 }
@@ -2405,19 +2448,17 @@ async fn admin_site_assets_new(
             let recent_assets = build_admin_asset_rows(state.db.as_ref(), recent_assets).await?;
 
             Ok(AdminAssetsNewTemplate {
-                template_shared: AdminTemplateData::new(format!(
-                    "Upload Asset {}",
-                    site.short_name
-                ))
-                .with_links(vec![
-                    AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Back to assets"),
-                    AdminLink::new(
-                        &format!("/admin/site/{site_id}/content"),
-                        "Back to site dashboard",
-                    ),
-                ]),
+                template_shared: AdminTemplateData::new("Upload Asset")
+                    .with_site_context(site.id, &site.full_title)
+                    .with_links(vec![
+                        AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Back to assets"),
+                        AdminLink::new(
+                            &format!("/admin/site/{site_id}/content"),
+                            "Back to site dashboard",
+                        ),
+                    ]),
                 site_id: site.id,
-                site_short_name: site.short_name,
+                site_full_title: site.full_title,
                 recent_assets,
             })
         }
@@ -2801,13 +2842,15 @@ async fn admin_site_settings(
     let template_files = build_site_template_file_rows(site.id, &site.template_name).await?;
 
     Ok(AdminSiteSettingsTemplate {
-        template_shared: AdminTemplateData::new("Site Settings").with_links(vec![
-            AdminLink::new(
-                &format!("/admin/site/{site_id}/content"),
-                "Back to site dashboard",
-            ),
-            AdminLink::new(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
-        ]),
+        template_shared: AdminTemplateData::new("Site Settings")
+            .with_site_context(site.id, &site.full_title)
+            .with_links(vec![
+                AdminLink::new(
+                    &format!("/admin/site/{site_id}/content"),
+                    "Back to site dashboard",
+                ),
+                AdminLink::new(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
+            ]),
 
         site_id: site.id,
         site_short_name: site.short_name,
@@ -2877,7 +2920,7 @@ async fn admin_site_template_editor(
         load_editable_template_source(site.id, &site.template_name, file_name).await?;
 
     let template_shared = AdminTemplateData::new(format!("Template Override: {file_name}"))
-        .with_site_id(site.id)
+        .with_site_context(site.id, &site.full_title)
         .with_links(vec![
             AdminLink::new(
                 &format!("/admin/site/{site_id}/settings"),
@@ -2896,7 +2939,7 @@ async fn admin_site_template_editor(
     Ok(AdminSiteTemplateEditorTemplate {
         template_shared,
         site_id: site.id,
-        site_short_name: site.short_name,
+        site_full_title: site.full_title,
         template_name: site.template_name,
         file_name: file_name.to_string(),
         source,
@@ -3011,7 +3054,8 @@ async fn admin_site_render(
     .await
     .map_err(|error| SiteError::internal(format!("failed to render site {site_id}: {error}")))
     .map(|files_written| AdminRenderTemplate {
-        template_shared: AdminTemplateData::new(format!("Rendered site '{}'", site.full_title))
+        template_shared: AdminTemplateData::new("Render Site")
+            .with_site_context(site.id, &site.full_title)
             .with_message(format!(
                 "Site rendered with {} file(s) written.",
                 files_written

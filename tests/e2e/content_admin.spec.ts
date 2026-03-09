@@ -94,9 +94,11 @@ test.describe("content admin", () => {
 				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}`,
 				{ waitUntil: "domcontentloaded" },
 			);
+			await expect(page).toHaveTitle("Content: /guide-to-testing - Test Site");
 			await expect(
 				page.getByRole("heading", { name: "Content: /guide-to-testing" }),
 			).toBeVisible();
+			await expect(page.locator(".page-site-indicator")).toHaveText("Test Site");
 			await expect(page.locator("body")).toContainText("Primary Route");
 			await expect(page.locator("body")).toContainText("/guide-to-testing");
 			await expect(page.locator("body")).toContainText("/legacy/testing-guide");
@@ -114,6 +116,35 @@ test.describe("content admin", () => {
 				page.getByRole("heading", { name: "Content: /guide-to-testing" }),
 			).toBeVisible();
 			await expect(page.getByRole("heading", { name: "Routes" })).toBeVisible();
+
+			await context.close();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
+	test("does not show a site indicator on global admin pages", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const userId = await createUser(harness, "global-admin-page");
+			await addMembership(harness, userId, "owner");
+
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				"global-admin-page",
+			);
+
+			await page.goto(`https://127.0.0.1:${harness.port}/admin/sites`, {
+				waitUntil: "domcontentloaded",
+			});
+
+			await expect(page).toHaveTitle("Sites");
+			await expect(page.getByRole("heading", { name: "Sites" })).toBeVisible();
+			await expect(page.locator(".page-site-indicator")).toHaveCount(0);
 
 			await context.close();
 		} finally {

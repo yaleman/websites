@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{% block title %}{{ template_shared.page_title }}{% endblock title %}</title>
+    <title>{{ template_shared.document_title }}</title>
     <link rel="stylesheet" href="/admin/assets/admin.css" />
     <link rel="stylesheet" href="/admin/assets/editor.css" />
     <script src="/admin/assets/editor.js" defer></script>
@@ -12,7 +12,12 @@
   </head>
   <body>
     <main>
-      <h1 class="page-title">{{ template_shared.page_title }}</h1>
+      <header class="page-header">
+        <h1 class="page-title">{{ template_shared.page_title }}</h1>
+        {% if let Some(site_full_title) = template_shared.site_full_title %}
+        <p class="page-site-indicator" aria-label="Active site">{{ site_full_title }}</p>
+        {% endif %}
+      </header>
       <nav>
         <a href="/admin">Dashboard</a>
         <a href="/admin/sites">Sites </a>

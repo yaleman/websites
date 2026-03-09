@@ -172,6 +172,26 @@ h1.page-title {
 	margin: 0;
 }
 
+.page-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 1rem;
+}
+
+.page-site-indicator {
+	margin: 0;
+	padding: 0.45rem 0.75rem;
+	border: 1px solid var(--border-light);
+	border-radius: var(--medium-border-radius);
+	background: white;
+	color: var(--text-lessdark);
+	font-size: 0.95rem;
+	font-weight: 600;
+	text-align: right;
+	white-space: nowrap;
+}
+
 h2 {
 	margin: 0.5rem 0;
 }
@@ -252,4 +272,14 @@ ul.shared-actions li {
 	background: #ebfaec;
 	color: #163d17;
 	box-shadow: 0 12px 28px rgba(16, 28, 18, 0.18);
+}
+
+@media (max-width: 48rem) {
+	.page-header {
+		display: block;
+	}
+
+	.page-site-indicator {
+		display: none;
+	}
 }

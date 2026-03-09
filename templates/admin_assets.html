@@ -1,7 +1,7 @@
 {% extends "base_template.html" %}
 {% block body %}
 <p class="inline-body">
-  Uploaded assets for <strong>{{ site_short_name }}</strong>. Files are served from the runtime upload root and are available under <code>/media/images/...</code>.
+  Uploaded assets for <strong>{{ site_full_title }}</strong>. Files are served from the runtime upload root and are available under <code>/media/images/...</code>.
 </p>
 
 {% if assets.is_empty() %}
