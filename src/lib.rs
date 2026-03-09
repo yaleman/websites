@@ -1128,6 +1128,7 @@ struct WordpressItem {
     post_modified: Option<String>,
     post_modified_gmt: Option<String>,
     link: Option<String>,
+    tags: Vec<String>,
 }
 
 pub async fn import_wordpress<C: ConnectionTrait>(
@@ -1159,6 +1160,7 @@ pub async fn import_wordpress<C: ConnectionTrait>(
         let content = item.content.unwrap_or_default();
         let status = item.status.unwrap_or_else(|| "draft".to_string());
         let draft = status != "publish";
+        let tag_names = item.tags;
         let created_at =
             resolve_wordpress_timestamp(item.post_date_gmt.as_deref(), item.post_date.as_deref());
         let updated_at = resolve_wordpress_timestamp(
@@ -1206,6 +1208,20 @@ pub async fn import_wordpress<C: ConnectionTrait>(
         .await?;
         let content_model =
             apply_imported_content_timestamps(db, imported_content, created_at, updated_at).await?;
+        if !tag_names.is_empty() {
+            let revision = get_revision_by_number(db, content_model.id, 1)
+                .await
+                .map_err(SiteError::internal)?
+                .ok_or_else(|| {
+                    SiteError::internal(format!(
+                        "missing initial revision for imported content {}",
+                        content_model.id
+                    ))
+                })?;
+            assign_tags_to_content(db, site_id, content_model.id, revision.id, tag_names)
+                .await
+                .map_err(SiteError::internal)?;
+        }
 
         let mut alias_paths = HashSet::new();
         for alias_path in known_aliases {
@@ -1313,6 +1329,7 @@ fn parse_wordpress_wxr(xml: &str) -> Result<Vec<WordpressItem>, SiteError> {
     let mut items = Vec::new();
     let mut current = WordpressItem::default();
     let mut current_tag = String::new();
+    let mut current_category_domain = None;
     let mut in_item = false;
 
     loop {
@@ -1322,7 +1339,13 @@ fn parse_wordpress_wxr(xml: &str) -> Result<Vec<WordpressItem>, SiteError> {
                 if name == "item" {
                     in_item = true;
                     current = WordpressItem::default();
+                    current_category_domain = None;
                 } else if in_item {
+                    current_category_domain = if name == "category" {
+                        wordpress_category_domain(&event)
+                    } else {
+                        None
+                    };
                     current_tag = name;
                 }
             }
@@ -1332,6 +1355,9 @@ fn parse_wordpress_wxr(xml: &str) -> Result<Vec<WordpressItem>, SiteError> {
                     in_item = false;
                     items.push(current.clone());
                     current = WordpressItem::default();
+                    current_category_domain = None;
+                } else if name == "category" {
+                    current_category_domain = None;
                 }
                 current_tag.clear();
             }
@@ -1341,7 +1367,12 @@ fn parse_wordpress_wxr(xml: &str) -> Result<Vec<WordpressItem>, SiteError> {
                     continue;
                 }
                 let text = String::from_utf8_lossy(event.as_ref()).to_string();
-                assign_wordpress_field(&mut current, current_tag.as_str(), text.trim());
+                assign_wordpress_field(
+                    &mut current,
+                    current_tag.as_str(),
+                    current_category_domain.as_deref(),
+                    text.trim(),
+                );
             }
             Ok(Event::CData(event)) => {
                 if !in_item {
@@ -1349,7 +1380,12 @@ fn parse_wordpress_wxr(xml: &str) -> Result<Vec<WordpressItem>, SiteError> {
                     continue;
                 }
                 let text = String::from_utf8_lossy(event.as_ref()).to_string();
-                assign_wordpress_field(&mut current, current_tag.as_str(), text.as_str());
+                assign_wordpress_field(
+                    &mut current,
+                    current_tag.as_str(),
+                    current_category_domain.as_deref(),
+                    text.as_str(),
+                );
             }
             Ok(Event::Eof) => break,
             Err(error) => return Err(SiteError::from(error)),
@@ -1361,7 +1397,20 @@ fn parse_wordpress_wxr(xml: &str) -> Result<Vec<WordpressItem>, SiteError> {
     Ok(items)
 }
 
-fn assign_wordpress_field(item: &mut WordpressItem, tag: &str, value: &str) {
+fn wordpress_category_domain(event: &quick_xml::events::BytesStart<'_>) -> Option<String> {
+    event
+        .attributes()
+        .flatten()
+        .find(|attribute| attribute.key.as_ref() == b"domain")
+        .map(|attribute| String::from_utf8_lossy(attribute.value.as_ref()).to_string())
+}
+
+fn assign_wordpress_field(
+    item: &mut WordpressItem,
+    tag: &str,
+    category_domain: Option<&str>,
+    value: &str,
+) {
     match tag {
         "title" => item.title = Some(value.to_string()),
         "link" => item.link = Some(value.to_string()),
@@ -1374,6 +1423,7 @@ fn assign_wordpress_field(item: &mut WordpressItem, tag: &str, value: &str) {
         "wp:post_modified" => item.post_modified = Some(value.to_string()),
         "wp:post_modified_gmt" => item.post_modified_gmt = Some(value.to_string()),
         "content:encoded" => item.content = Some(value.to_string()),
+        "category" if category_domain == Some("post_tag") => item.tags.push(value.to_string()),
         _ => {}
     }
 }
@@ -3042,6 +3092,80 @@ mod tests {
             .await
             .expect("failed to list aliases");
         assert_eq!(aliases.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn import_wordpress_creates_tags_from_post_tag_categories() {
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let file_path = temp_dir.path().join("import.xml");
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:wp="http://wordpress.org/export/1.2/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <item>
+      <title>Tagged Post</title>
+      <link>https://example.com/tagged-post/</link>
+      <wp:post_id>125</wp:post_id>
+      <wp:post_name>tagged-post</wp:post_name>
+      <wp:post_type>post</wp:post_type>
+      <wp:status>publish</wp:status>
+      <category domain="category" nicename="news"><![CDATA[News]]></category>
+      <category domain="post_tag" nicename="ivf"><![CDATA[ivf]]></category>
+      <category domain="post_tag" nicename="fertility"><![CDATA[Fertility]]></category>
+      <category domain="post_tag" nicename="ivf"><![CDATA[ivf]]></category>
+      <content:encoded><![CDATA[Tagged content]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"#;
+
+        fs::write(&file_path, xml.as_bytes())
+            .await
+            .expect("failed to write import file");
+
+        let imported = import_wordpress(
+            &db,
+            site.id,
+            file_path.to_str().expect("invalid path"),
+            "creator",
+        )
+        .await
+        .expect("failed to import wordpress data");
+        assert_eq!(imported, 1);
+
+        let content = list_content(&db, site.id, Some(PageType::Post))
+            .await
+            .expect("failed to list imported content");
+        assert_eq!(content.len(), 1);
+
+        let mut content_tag_names = list_content_tags(&db, content[0].id)
+            .await
+            .expect("failed to list content tags")
+            .into_iter()
+            .map(|tag| tag.name)
+            .collect::<Vec<_>>();
+        content_tag_names.sort();
+        assert_eq!(
+            content_tag_names,
+            vec!["Fertility".to_string(), "ivf".to_string()]
+        );
+
+        let revision = get_revision_by_number(&db, content[0].id, 1)
+            .await
+            .expect("failed to fetch initial revision")
+            .expect("missing initial revision");
+        let mut revision_tag_names = list_revision_tags(&db, revision.id)
+            .await
+            .expect("failed to list revision tags")
+            .into_iter()
+            .map(|tag| tag.name)
+            .collect::<Vec<_>>();
+        revision_tag_names.sort();
+        assert_eq!(
+            revision_tag_names,
+            vec!["Fertility".to_string(), "ivf".to_string()]
+        );
     }
 
     #[tokio::test]
