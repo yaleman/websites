@@ -42,6 +42,63 @@ select {
 	color: var(--text-dark);
 }
 
+.membership-autocomplete {
+	position: relative;
+}
+
+.membership-autocomplete__menu[hidden] {
+	display: none;
+}
+
+.membership-autocomplete__menu {
+	position: absolute;
+	top: calc(100% + 0.25rem);
+	left: 0;
+	right: 0;
+	z-index: 40;
+	display: grid;
+	gap: 0.25rem;
+	padding: 0.35rem;
+	border: 1px solid var(--border-light);
+	border-radius: var(--medium-border-radius);
+	background: white;
+	box-shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
+	max-height: 16rem;
+	overflow-y: auto;
+}
+
+.membership-autocomplete__option {
+	display: grid;
+	gap: 0.1rem;
+	padding: 0.45rem 0.55rem;
+	text-align: left;
+	border: 1px solid transparent;
+	background: white;
+	color: var(--text-dark);
+}
+
+.membership-autocomplete__option:hover,
+.membership-autocomplete__option:focus {
+	border-color: var(--dark-purple);
+	background: rgba(100, 0, 215, 0.08);
+	outline: none;
+}
+
+.membership-autocomplete__option strong {
+	font-size: 0.95rem;
+}
+
+.membership-autocomplete__option span {
+	font-size: 0.85rem;
+	color: #555;
+}
+
+.membership-autocomplete__empty {
+	margin: 0;
+	padding: 0.45rem 0.55rem;
+	color: #555;
+}
+
 .tag-editor {
 	display: flex;
 	flex-direction: column;
