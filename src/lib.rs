@@ -29,9 +29,15 @@ pub mod images;
 pub mod middleware;
 pub mod migration;
 pub mod oidc;
+pub mod site_export;
 pub mod telemetry;
 pub mod tls;
 pub mod web;
+
+pub use site_export::{
+    SITE_EXPORT_FORMAT_VERSION, SiteExport, export_site, export_site_with_roots,
+    serialize_site_export_pretty,
+};
 
 pub struct NewContent {
     pub site_id: Uuid,
