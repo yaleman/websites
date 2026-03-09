@@ -37,19 +37,23 @@ test.describe("assets admin", () => {
 				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/assets`,
 				{ waitUntil: "domcontentloaded" },
 			);
-			await expect(
-				page.getByRole("heading", { name: "Site Assets (test)" }),
-			).toBeVisible();
+			await expect(page).toHaveTitle("Assets - Test Site");
+			await expect(page.getByRole("heading", { name: "Assets" })).toBeVisible();
+			await expect(page.locator(".page-site-indicator")).toHaveText("Test Site");
 			await expect(page.getByRole("img", { name: "banner.png" })).toBeVisible();
 			await expect(page.locator("body")).toContainText("banner.png");
 			await expect(page.locator("body")).toContainText("image/png");
 			await expect(page.locator("body")).toContainText("800 x 600");
 			await expect(page.locator("body")).toContainText("test-user");
 
+			await page.setViewportSize({ width: 640, height: 960 });
+			await expect(page.locator(".page-site-indicator")).toBeHidden();
+
 			await page.goto(
 				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/assets/new`,
 				{ waitUntil: "domcontentloaded" },
 			);
+			await expect(page).toHaveTitle("Upload Asset - Test Site");
 			await expect(
 				page.getByRole("button", { name: "Upload", exact: true }),
 			).toBeVisible();
