@@ -2,6 +2,7 @@ use crate::constants::{CUSTOMIZABLE_TEMPLATE_FILES, REQUIRED_TEMPLATES, SITE_TEM
 use crate::web::SiteRole;
 use crate::{entities::PageType, errors::SiteError};
 use chrono::{DateTime, Datelike, Utc};
+use markdown::{CompileOptions, Options};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use sea_orm::{
@@ -300,7 +301,7 @@ async fn render_site_with_overrides(
             routes.insert(alias.alias_path);
         }
 
-        let html = markdown::to_html(&item.page_content);
+        let html = render_markdown(&item.page_content);
 
         let tags = load_tag_names(db, item.id).await?;
         let tag_links = render_tag_links(&tags);
@@ -451,7 +452,7 @@ async fn render_content_preview_with_overrides(
     let template_root = Path::new(templates_dir).join(site.template_name.clone());
     let tera = load_site_templates(&template_root, override_root).await?;
 
-    let html = markdown::to_html(&content.page_content);
+    let html = render_markdown(&content.page_content);
 
     let tags = load_tag_names(db, content.id).await?;
     let tag_links = render_tag_links(&tags);
@@ -474,6 +475,20 @@ async fn render_content_preview_with_overrides(
 
     tera.render(content.page_type.template(), &context)
         .map_err(SiteError::from)
+}
+
+fn render_markdown(value: &str) -> String {
+    markdown::to_html_with_options(
+        value,
+        &Options {
+            compile: CompileOptions {
+                allow_dangerous_html: true,
+                ..CompileOptions::default()
+            },
+            ..Options::default()
+        },
+    )
+    .expect("markdown rendering should not fail without MDX support")
 }
 
 async fn load_template(
@@ -2986,6 +3001,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn render_content_preview_renders_raw_html_from_markdown() {
+        let db = test_db_start().await;
+        let site = create_site_with_template_fixture(&db, "html-preview", "html-preview").await;
+        let templates_dir = TempDir::new().expect("failed to create templates dir");
+        let template_root = templates_dir.path().join("html-preview");
+        fs::create_dir_all(&template_root)
+            .await
+            .expect("failed to create template root");
+        fs::write(
+            template_root.join("base_template.html"),
+            r#"<!doctype html><html><body>{% block content %}{% endblock %}</body></html>"#,
+        )
+        .await
+        .expect("failed to write base template");
+        fs::write(
+            template_root.join("page.html"),
+            r#"{% extends "base_template.html" %}{% block content %}<article>{{content}}</article>{% endblock %}"#,
+        )
+        .await
+        .expect("failed to write page template");
+
+        let content = create_content(
+            &db,
+            NewContent {
+                site_id: site.id,
+                page_type: PageType::Page,
+                title: "HTML Preview".to_string(),
+                slug: "html-preview".to_string(),
+                page_content: r#"Before <span class="inline-html">inline html</span> after"#
+                    .to_string(),
+                draft: true,
+                creator_sub: "creator".to_string(),
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create content");
+
+        let rendered = render_content_preview(
+            &db,
+            site.id,
+            content.id,
+            templates_dir
+                .path()
+                .to_str()
+                .expect("invalid templates path"),
+        )
+        .await
+        .expect("failed to render preview");
+
+        assert!(rendered.contains(r#"<span class="inline-html">inline html</span>"#));
+        assert!(!rendered.contains("&lt;span"));
+    }
+
+    #[tokio::test]
     async fn render_site_supports_template_inheritance() {
         let db = test_db_start().await;
         let site = create_site_with_template_fixture(&db, "render-site", "custom-render").await;
@@ -3041,6 +3111,67 @@ mod tests {
         assert!(index_output.contains("index-template"));
         assert!(index_output.contains("hello"));
         assert!(index_output.contains("shell"));
+    }
+
+    #[tokio::test]
+    async fn render_site_renders_raw_html_from_markdown() {
+        let db = test_db_start().await;
+        let site = create_site_with_template_fixture(&db, "html-site", "html-site").await;
+        let templates_dir = TempDir::new().expect("failed to create templates dir");
+        let rendered_dir = TempDir::new().expect("failed to create rendered dir");
+        let upload_root = TempDir::new().expect("failed to create upload dir");
+        let template_root = templates_dir.path().join("html-site");
+        fs::create_dir_all(&template_root)
+            .await
+            .expect("failed to create template root");
+        fs::write(
+            template_root.join("base_template.html"),
+            r#"<!doctype html><html><body>{% block content %}{% endblock %}</body></html>"#,
+        )
+        .await
+        .expect("failed to write base template");
+        fs::write(
+            template_root.join("post.html"),
+            r#"{% extends "base_template.html" %}{% block content %}<article>{{content}}</article>{% endblock %}"#,
+        )
+        .await
+        .expect("failed to write post template");
+
+        let content = create_content(
+            &db,
+            NewContent {
+                site_id: site.id,
+                page_type: PageType::Post,
+                title: "HTML Post".to_string(),
+                slug: "html-post".to_string(),
+                page_content: r#"Before <span class="inline-html">inline html</span> after"#
+                    .to_string(),
+                draft: false,
+                creator_sub: "creator".to_string(),
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create content");
+        let content_route = content_primary_route(&content);
+
+        render_site(
+            &db,
+            site.id,
+            templates_dir.path(),
+            rendered_dir.path(),
+            upload_root.path(),
+        )
+        .await
+        .expect("failed to render site");
+
+        let rendered_root = rendered_dir.path().join(site.short_name);
+        let page_output = fs::read_to_string(rendered_root.join(content_route).join("index.html"))
+            .await
+            .expect("failed to read page output");
+
+        assert!(page_output.contains(r#"<span class="inline-html">inline html</span>"#));
+        assert!(!page_output.contains("&lt;span"));
     }
 
     #[tokio::test]
