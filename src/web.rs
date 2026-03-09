@@ -28,7 +28,7 @@ use axum::middleware::{Next, from_fn};
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Form, Multipart, Path, Query, Request, State},
+    extract::{Form, Multipart, OriginalUri, Path, Query, Request, State},
     http::{StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
     routing::get,
@@ -131,6 +131,13 @@ pub(crate) struct AdminState {
 #[template(path = "admin_index.html")]
 struct AdminIndexTemplate {
     template_shared: AdminTemplateData,
+}
+
+#[allow(dead_code)]
+#[derive(Template, WebTemplate)]
+#[template(path = "not_found.html")]
+struct NotFoundTemplate {
+    requested_path: String,
 }
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
@@ -790,6 +797,7 @@ pub async fn run_admin_server(
         .route("/oauth2/callback", get(admin_login_callback))
         .route("/admin/logout", get(admin_logout))
         .merge(protected_routes)
+        .fallback(not_found)
         .layer(session_layer)
         .layer(from_fn(log_requests))
         .layer(from_fn(crate::middleware::dont_cache_me))
@@ -869,6 +877,15 @@ fn sanitize_preview_asset_path(asset_path: &str) -> Result<PathBuf, SiteError> {
 
 async fn admin_root() -> Redirect {
     Redirect::to("/admin")
+}
+
+async fn not_found(OriginalUri(uri): OriginalUri) -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        NotFoundTemplate {
+            requested_path: uri.path().to_string(),
+        },
+    )
 }
 
 async fn require_session(session: Session, request: Request, next: Next) -> Response {
