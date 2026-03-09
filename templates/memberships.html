@@ -86,16 +86,14 @@
         aria-autocomplete="list"
         aria-controls="membership-user-options"
         aria-expanded="false"
-        required
-      />
+        required />
       <input type="hidden" name="user_id" data-membership-user-id />
       <div
         id="membership-user-options"
         class="membership-autocomplete__menu"
         data-membership-user-options
         role="listbox"
-        hidden
-      >
+        hidden>
         {% for candidate in membership_candidates %}
         <button
           type="button"
@@ -105,8 +103,7 @@
           data-user-id="{{ candidate.user_id }}"
           data-user-subject="{{ candidate.subject }}"
           data-search-value="{{ candidate.search_value }}"
-          {% if let Some(email) = candidate.email %}data-user-email="{{ email }}"{% endif %}
-        >
+          {% if let Some(email)=candidate.email %}data-user-email="{{ email }}" {% endif %}>
           <strong>{{ candidate.subject }}</strong>
           {% if let Some(email) = candidate.email %}
           <span>{{ email }}</span>
