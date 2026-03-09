@@ -182,6 +182,7 @@ test.describe("content new editor", () => {
       await candidate.click();
       await page.getByRole("button", { name: "Add member" }).click();
       await expect(page.locator('[aria-label="membership-target"]')).toBeVisible();
+      await expect(page.getByText("membership-target@example.com")).toBeVisible();
 
       await context.close();
     } finally {

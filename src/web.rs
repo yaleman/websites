@@ -352,7 +352,7 @@ struct AdminSiteTagRow {
 #[derive(Debug)]
 struct AdminMembershipRow {
     subject: String,
-    email: String,
+    email: Option<String>,
     role: SiteRole,
     profile_href: Option<String>,
     update_href: String,
@@ -1119,7 +1119,7 @@ async fn admin_site_memberships(
                 .unwrap_or_else(|| ("unknown".to_string(), None));
             AdminMembershipRow {
                 subject,
-                email: email.unwrap_or_else(|| "unknown@unknown.com".to_string()),
+                email,
                 role: membership.role,
                 profile_href: if viewer.admin || viewer.id == membership.user_id {
                     Some(format!("/admin/users/{}", membership.user_id))
