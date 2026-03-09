@@ -231,7 +231,7 @@ test.describe("content admin", () => {
 				{ waitUntil: "domcontentloaded" },
 			);
 			await page.locator("#nav-search-query").fill("cross-site-needle");
-			await page.getByRole("button", { name: "Go" }).click();
+			await page.locator("#nav-search-query").press("Enter");
 
 			await expect(page).toHaveURL(
 				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/search?q=cross-site-needle`,
@@ -243,7 +243,7 @@ test.describe("content admin", () => {
 				waitUntil: "domcontentloaded",
 			});
 			await page.locator("#nav-search-query").fill("cross-site-needle");
-			await page.getByRole("button", { name: "Go" }).click();
+			await page.locator("#nav-search-query").press("Enter");
 
 			await expect(page).toHaveURL(
 				`https://127.0.0.1:${harness.port}/admin/search?q=cross-site-needle`,
