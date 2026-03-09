@@ -368,8 +368,8 @@ pub enum ContentCommands {
     ImportWordpress {
         #[arg(long)]
         site_id: Uuid,
-        #[arg(long, value_name = "FILE")]
-        file_path: String,
+        #[arg(long, value_name = "FILE", required = true)]
+        file_path: Vec<String>,
         #[arg(long)]
         creator_sub: String,
     },
@@ -1180,9 +1180,14 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 let imported = db_ref
                     .transaction::<_, _, String>(|txn| {
                         Box::pin(async move {
-                            let imported = import_wordpress(txn, site_id, &file_path, &creator_sub)
-                                .await
-                                .map_err(|err| err.to_string())?;
+                            let mut imported = 0usize;
+                            for current_file in &file_path {
+                                imported = imported.saturating_add(
+                                    import_wordpress(txn, site_id, current_file, &creator_sub)
+                                        .await
+                                        .map_err(|err| err.to_string())?,
+                                );
+                            }
                             log_audit_event(
                                 txn,
                                 &creator_sub,
@@ -1190,7 +1195,7 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                 "content_item",
                                 &site_id,
                                 Some(site_id),
-                                Some(json!({"imported": imported})),
+                                Some(json!({"imported": imported, "files": file_path})),
                             )
                             .await
                             .map_err(|err| format!("Failed to create audit event: {}", err))?;
