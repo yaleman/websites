@@ -123,6 +123,67 @@ test.describe("content admin", () => {
 		}
 	});
 
+	test("filters and sorts the content overview list", async ({ browser }) => {
+		const harness = await setupHarness();
+
+		try {
+			const subject = "content-list-filters";
+			const userId = await createUser(harness, subject);
+			await addMembership(harness, userId, "owner");
+
+			await createContent(harness, {
+				pageType: "page",
+				title: "Alpha Page",
+				slug: "alpha-page",
+				pageContent: "Alpha body",
+				creatorSub: subject,
+			});
+			await createContent(harness, {
+				pageType: "post",
+				title: "Zulu Post",
+				slug: "zulu-post",
+				pageContent: "Zulu body",
+				creatorSub: subject,
+			});
+			await createContent(harness, {
+				pageType: "page",
+				title: "Beta Page",
+				slug: "beta-page",
+				pageContent: "Beta body",
+				creatorSub: subject,
+			});
+
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				subject,
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content`,
+				{ waitUntil: "domcontentloaded" },
+			);
+
+			await page.selectOption("#page_type", "page");
+			await page.selectOption("#sort_by", "title_desc");
+			await page.getByRole("button", { name: "Apply" }).click();
+
+			await expect(page).toHaveURL(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content?page_type=page&sort_by=title_desc`,
+			);
+
+			const rows = page.locator("tbody tr");
+			await expect(rows).toHaveCount(2);
+			await expect(rows.nth(0)).toContainText("Beta Page");
+			await expect(rows.nth(1)).toContainText("Alpha Page");
+			await expect(page.locator("body")).not.toContainText("Zulu Post");
+
+			await context.close();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
 	test("does not show a site indicator on global admin pages", async ({
 		browser,
 	}) => {
