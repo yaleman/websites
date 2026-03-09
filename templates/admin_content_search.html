@@ -1,25 +1,23 @@
 {% extends "base_template.html" %}
 {% block body %}
-
-<form method="get" action>
-  <label for="q">Search Query</label>
-  <input id="q" name="q" value="{{ query }}" />
-
-  <button type="submit">Search</button>
-</form>
-
-{% if !results.is_empty() %}
+{% if !rows.is_empty() %}
 <table>
   <thead>
     <tr>
+      {% if show_site_column %}
+      <th>Site</th>
+      {% endif %}
       <th>Title</th>
       <th>Created Date</th>
     </tr>
   </thead>
   <tbody>
-    {% for row in results %}
+    {% for row in rows %}
     <tr>
-      <td><a href="/admin/site/{{ row.site_id }}/content/{{ row.id }}">{{ row.title }}</a></td>
+      {% if show_site_column %}
+      <td>{{ row.site_title }}</td>
+      {% endif %}
+      <td><a href="{{ row.edit_href }}">{{ row.title }}</a></td>
       <td>{{ row.created_at }}</td>
     </tr>
     {% endfor %}

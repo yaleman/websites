@@ -404,4 +404,35 @@ test.describe("web audit attribution", () => {
 			await cleanupHarness(harness);
 		}
 	});
+
+	test("site deletion records the acting user in audit events", async () => {
+		const harness = await setupHarness();
+		const actor = `settings-admin-${Date.now()}`;
+
+		try {
+			const context = await createAuthenticatedApiContext(harness, actor, true);
+			try {
+				const response = await context.api.fetch(
+					`/admin/site/${harness.siteId}/delete`,
+					{
+						method: "POST",
+						failOnStatusCode: false,
+						maxRedirects: 0,
+					},
+				);
+				expect(response.status()).toBe(303);
+
+				findAuditEvent(await listAuditEvents(harness), {
+					actorSub: actor,
+					eventType: "delete_site",
+					entityId: harness.siteId,
+					entityType: "site",
+				});
+			} finally {
+				await context.api.dispose();
+			}
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
 });

@@ -14,13 +14,14 @@ use crate::tls::build_tls_config;
 use crate::{
     NewAsset, NewAssetVariant, NewContent, cli::OidcConfig, content_primary_route, create_asset,
     create_asset_variant, create_content, create_membership, create_site, create_tag,
-    delete_membership, delete_tag, export_site, get_membership_by_id, get_membership_for_subject,
-    get_revision, get_revision_by_number, get_user_by_id, import_site_json, list_aliases,
-    list_assets, list_content, list_content_tags, list_memberships, list_memberships_for_user_id,
-    list_revisions, list_sites, list_sites_for_subject, list_tags, list_users, list_users_by_ids,
-    render_content_preview, render_site, resolve_site_template_override_root, resolve_upload_root,
-    search_content, serialize_site_export_pretty, sync_tags_to_content, update_content,
-    update_membership_role, update_site_settings,
+    delete_membership, delete_site, delete_tag, export_site, get_membership_by_id,
+    get_membership_for_subject, get_revision, get_revision_by_number, get_user_by_id,
+    import_site_json, list_aliases, list_assets, list_content, list_content_tags, list_memberships,
+    list_memberships_for_user_id, list_revisions, list_sites, list_sites_for_subject, list_tags,
+    list_users, list_users_by_ids, render_content_preview, render_site,
+    resolve_site_template_override_root, resolve_upload_root, search_all_content, search_content,
+    serialize_site_export_pretty, sync_tags_to_content, update_content, update_membership_role,
+    update_site_settings,
 };
 use anyhow::Context;
 use askama::Template;
@@ -80,6 +81,8 @@ struct AdminTemplateData {
     site_full_title: Option<String>,
     /// Extra "actions" links in a secondary navbar, e.g. "New site", "Back to sites", etc.
     links: Vec<AdminLink>,
+    nav_search_action: String,
+    nav_search_value: String,
 }
 
 impl AdminTemplateData {
@@ -94,6 +97,8 @@ impl AdminTemplateData {
             site_id: None,
             site_full_title: None,
             links: vec![],
+            nav_search_action: "/admin/search".to_string(),
+            nav_search_value: String::new(),
         }
     }
 
@@ -124,12 +129,20 @@ impl AdminTemplateData {
             document_title: format!("{} - {}", self.page_title, site_full_title),
             site_id: Some(site_id),
             site_full_title: Some(site_full_title),
+            nav_search_action: format!("/admin/site/{site_id}/search"),
             ..self
         }
     }
 
     pub fn with_links(self, links: Vec<AdminLink>) -> Self {
         Self { links, ..self }
+    }
+
+    pub fn with_nav_search_value(self, value: impl ToString) -> Self {
+        Self {
+            nav_search_value: value.to_string(),
+            ..self
+        }
     }
 }
 
@@ -175,8 +188,8 @@ struct AdminSitesImportTemplate {
 #[template(path = "admin_content_search.html")]
 struct AdminSearchTemplate {
     template_shared: AdminTemplateData,
-    results: Vec<entities::content_item::Model>,
-    query: String,
+    rows: Vec<AdminSearchRow>,
+    show_site_column: bool,
 }
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
@@ -250,8 +263,9 @@ struct AdminContentListTemplate {
 
     site_id: Uuid,
     page_type_options: Vec<AdminSelectOption>,
-    sort_options: Vec<AdminSelectOption>,
-    content_items: Vec<entities::content_item::Model>,
+    current_sort_by: &'static str,
+    sort_headers: Vec<AdminContentListSortHeader>,
+    content_rows: Vec<AdminContentListRow>,
 }
 
 #[allow(dead_code)]
@@ -300,6 +314,7 @@ struct AdminSiteSettingsTemplate {
     site_short_name: String,
     full_title: String,
     template_name: String,
+    can_delete_site: bool,
     export_href: Option<String>,
     templates: Vec<String>,
     template_files: Vec<AdminSiteTemplateFileRow>,
@@ -371,6 +386,30 @@ struct AdminSelectOption {
     label: &'static str,
     value: &'static str,
     selected: bool,
+}
+
+#[derive(Debug)]
+struct AdminSearchRow {
+    site_title: String,
+    edit_href: String,
+    title: String,
+    created_at: String,
+}
+
+#[derive(Debug)]
+struct AdminContentListRow {
+    edit_href: String,
+    title: String,
+    page_type: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug)]
+struct AdminContentListSortHeader {
+    label: &'static str,
+    href: String,
+    indicator: &'static str,
 }
 
 #[derive(Debug)]
@@ -460,6 +499,7 @@ struct UpdateSiteSettingsForm {
 #[derive(Debug, Deserialize)]
 struct DashboardQuery {
     imported: Option<String>,
+    deleted: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -575,49 +615,89 @@ impl ContentListPageTypeFilter {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ContentListSortBy {
-    Newest,
-    Oldest,
     TitleAsc,
     TitleDesc,
+    TypeAsc,
+    TypeDesc,
+    CreatedDesc,
+    CreatedAsc,
+    UpdatedDesc,
+    UpdatedAsc,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContentListSortColumn {
+    Title,
+    Type,
+    Created,
+    Updated,
 }
 
 impl ContentListSortBy {
     fn from_query(value: Option<&str>) -> Self {
         match value {
-            Some("oldest") => Self::Oldest,
             Some("title_asc") => Self::TitleAsc,
             Some("title_desc") => Self::TitleDesc,
-            _ => Self::Newest,
+            Some("type_asc") => Self::TypeAsc,
+            Some("type_desc") => Self::TypeDesc,
+            Some("created_asc") | Some("oldest") => Self::CreatedAsc,
+            Some("updated_desc") => Self::UpdatedDesc,
+            Some("updated_asc") => Self::UpdatedAsc,
+            Some("created_desc") | Some("newest") | None => Self::CreatedDesc,
+            Some(_) => Self::CreatedDesc,
         }
     }
 
     fn as_str(self) -> &'static str {
         match self {
-            Self::Newest => "newest",
-            Self::Oldest => "oldest",
             Self::TitleAsc => "title_asc",
             Self::TitleDesc => "title_desc",
+            Self::TypeAsc => "type_asc",
+            Self::TypeDesc => "type_desc",
+            Self::CreatedDesc => "created_desc",
+            Self::CreatedAsc => "created_asc",
+            Self::UpdatedDesc => "updated_desc",
+            Self::UpdatedAsc => "updated_asc",
         }
     }
 
-    fn label(self) -> &'static str {
-        match self {
-            Self::Newest => "Newest first",
-            Self::Oldest => "Oldest first",
-            Self::TitleAsc => "Title A-Z",
-            Self::TitleDesc => "Title Z-A",
+    fn next_for_column(self, column: ContentListSortColumn) -> Self {
+        match column {
+            ContentListSortColumn::Title => match self {
+                Self::TitleAsc => Self::TitleDesc,
+                Self::TitleDesc => Self::TitleAsc,
+                _ => Self::TitleAsc,
+            },
+            ContentListSortColumn::Type => match self {
+                Self::TypeAsc => Self::TypeDesc,
+                Self::TypeDesc => Self::TypeAsc,
+                _ => Self::TypeAsc,
+            },
+            ContentListSortColumn::Created => match self {
+                Self::CreatedDesc => Self::CreatedAsc,
+                Self::CreatedAsc => Self::CreatedDesc,
+                _ => Self::CreatedDesc,
+            },
+            ContentListSortColumn::Updated => match self {
+                Self::UpdatedDesc => Self::UpdatedAsc,
+                Self::UpdatedAsc => Self::UpdatedDesc,
+                _ => Self::UpdatedDesc,
+            },
         }
     }
 
-    fn options(self) -> Vec<AdminSelectOption> {
-        [Self::Newest, Self::Oldest, Self::TitleAsc, Self::TitleDesc]
-            .into_iter()
-            .map(|option| AdminSelectOption {
-                label: option.label(),
-                value: option.as_str(),
-                selected: option == self,
-            })
-            .collect()
+    fn indicator_for(self, column: ContentListSortColumn) -> &'static str {
+        match (column, self) {
+            (ContentListSortColumn::Title, Self::TitleAsc)
+            | (ContentListSortColumn::Type, Self::TypeAsc)
+            | (ContentListSortColumn::Created, Self::CreatedAsc)
+            | (ContentListSortColumn::Updated, Self::UpdatedAsc) => " (asc)",
+            (ContentListSortColumn::Title, Self::TitleDesc)
+            | (ContentListSortColumn::Type, Self::TypeDesc)
+            | (ContentListSortColumn::Created, Self::CreatedDesc)
+            | (ContentListSortColumn::Updated, Self::UpdatedDesc) => " (desc)",
+            _ => "",
+        }
     }
 }
 
@@ -626,12 +706,6 @@ fn sort_content_items(
     sort_by: ContentListSortBy,
 ) {
     match sort_by {
-        ContentListSortBy::Newest => {
-            content_items.sort_by(|left, right| right.created_at.cmp(&left.created_at));
-        }
-        ContentListSortBy::Oldest => {
-            content_items.sort_by(|left, right| left.created_at.cmp(&right.created_at));
-        }
         ContentListSortBy::TitleAsc => {
             content_items.sort_by(|left, right| {
                 left.title
@@ -649,7 +723,101 @@ fn sort_content_items(
                     .then_with(|| right.created_at.cmp(&left.created_at))
             });
         }
+        ContentListSortBy::TypeAsc => {
+            content_items.sort_by(|left, right| {
+                left.page_type
+                    .as_ref()
+                    .cmp(right.page_type.as_ref())
+                    .then_with(|| left.title.to_lowercase().cmp(&right.title.to_lowercase()))
+            });
+        }
+        ContentListSortBy::TypeDesc => {
+            content_items.sort_by(|left, right| {
+                right
+                    .page_type
+                    .as_ref()
+                    .cmp(left.page_type.as_ref())
+                    .then_with(|| left.title.to_lowercase().cmp(&right.title.to_lowercase()))
+            });
+        }
+        ContentListSortBy::CreatedDesc => {
+            content_items.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        }
+        ContentListSortBy::CreatedAsc => {
+            content_items.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+        }
+        ContentListSortBy::UpdatedDesc => {
+            content_items.sort_by(
+                |left, right| match (left.last_updated, right.last_updated) {
+                    (Some(left_updated), Some(right_updated)) => right_updated.cmp(&left_updated),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => right.created_at.cmp(&left.created_at),
+                },
+            );
+        }
+        ContentListSortBy::UpdatedAsc => {
+            content_items.sort_by(
+                |left, right| match (left.last_updated, right.last_updated) {
+                    (Some(left_updated), Some(right_updated)) => left_updated.cmp(&right_updated),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => left.created_at.cmp(&right.created_at),
+                },
+            );
+        }
     }
+}
+
+fn content_list_href(
+    site_id: Uuid,
+    page_type_filter: ContentListPageTypeFilter,
+    sort_by: ContentListSortBy,
+) -> String {
+    let mut href = format!("/admin/site/{site_id}/content?sort_by={}", sort_by.as_str());
+    if page_type_filter != ContentListPageTypeFilter::All {
+        href.push_str("&page_type=");
+        href.push_str(page_type_filter.as_str());
+    }
+    href
+}
+
+fn build_content_list_sort_headers(
+    site_id: Uuid,
+    page_type_filter: ContentListPageTypeFilter,
+    sort_by: ContentListSortBy,
+) -> Vec<AdminContentListSortHeader> {
+    [
+        (ContentListSortColumn::Title, "Title"),
+        (ContentListSortColumn::Type, "Type"),
+        (ContentListSortColumn::Created, "Created"),
+        (ContentListSortColumn::Updated, "Updated"),
+    ]
+    .into_iter()
+    .map(|(column, label)| AdminContentListSortHeader {
+        label,
+        href: content_list_href(site_id, page_type_filter, sort_by.next_for_column(column)),
+        indicator: sort_by.indicator_for(column),
+    })
+    .collect()
+}
+
+fn build_search_rows(
+    items: Vec<entities::content_item::Model>,
+    site_title_by_id: &HashMap<Uuid, String>,
+) -> Vec<AdminSearchRow> {
+    items
+        .into_iter()
+        .map(|row| AdminSearchRow {
+            site_title: site_title_by_id
+                .get(&row.site_id)
+                .cloned()
+                .unwrap_or_else(|| "Unknown site".to_string()),
+            edit_href: format!("/admin/site/{}/content/{}", row.site_id, row.id),
+            title: row.title,
+            created_at: row.created_at.to_rfc3339(),
+        })
+        .collect()
 }
 
 fn parse_tag_list(raw: Option<String>) -> Vec<String> {
@@ -862,6 +1030,7 @@ pub async fn run_admin_server(
     let protected_routes = Router::new()
         .route("/admin", get(get_index))
         .route("/admin/sites", get(get_sites))
+        .route("/admin/search", get(get_global_search))
         .route("/admin/users/me", get(admin_user_profile_redirect))
         .route("/admin/users/{user_id}", get(admin_user_profile))
         .route(
@@ -946,6 +1115,10 @@ pub async fn run_admin_server(
         .route(
             "/admin/site/{site_id}/settings",
             get(admin_site_settings).post(admin_site_settings_update),
+        )
+        .route(
+            "/admin/site/{site_id}/delete",
+            axum::routing::post(admin_site_delete),
         )
         .route("/admin/site/{site_id}/export.json", get(admin_site_export))
         .route(
@@ -1073,6 +1246,8 @@ async fn not_found(OriginalUri(uri): OriginalUri) -> impl IntoResponse {
 async fn get_sites(Query(query): Query<DashboardQuery>) -> Redirect {
     if query.imported.is_some() {
         Redirect::to("/admin?imported=1")
+    } else if query.deleted.is_some() {
+        Redirect::to("/admin?deleted=1")
     } else {
         Redirect::to("/admin")
     }
@@ -1094,6 +1269,8 @@ async fn get_index(
     let template_shared = AdminTemplateData::new("Admin Dashboard").with_links(links);
     let template_shared = if query.imported.is_some() {
         template_shared.with_toast_message("Site import complete.", "imported")
+    } else if query.deleted.is_some() {
+        template_shared.with_toast_message("Site deleted.", "deleted")
     } else {
         template_shared
     };
@@ -1349,8 +1526,21 @@ async fn admin_site_content_list(
 
                 site_id,
                 page_type_options: page_type_filter.options(),
-                sort_options: sort_by.options(),
-                content_items: pages,
+                current_sort_by: sort_by.as_str(),
+                sort_headers: build_content_list_sort_headers(site_id, page_type_filter, sort_by),
+                content_rows: pages
+                    .into_iter()
+                    .map(|item| AdminContentListRow {
+                        edit_href: format!("/admin/site/{}/content/{}/edit", site_id, item.id),
+                        title: item.title,
+                        page_type: item.page_type.to_string(),
+                        created_at: item.created_at.to_rfc3339(),
+                        updated_at: item
+                            .last_updated
+                            .map(|value| value.to_rfc3339())
+                            .unwrap_or_else(|| "-".to_string()),
+                    })
+                    .collect(),
             })
         }
         Err(error) => Err(SiteError::internal(format!(
@@ -1672,6 +1862,39 @@ async fn admin_site_membership_remove(
     Ok(Redirect::to(&format!("/admin/site/{site_id}/memberships")))
 }
 
+async fn get_global_search(
+    State(state): State<AdminState>,
+    session: Session,
+    Query(query): Query<SearchQuery>,
+) -> Result<AdminSearchTemplate, SiteError> {
+    let query_text = query.q.unwrap_or_default();
+    let query_text = query_text.trim().to_string();
+    let mut rows = Vec::new();
+    let mut message = "Search content across all sites.".to_string();
+
+    if !query_text.is_empty() {
+        let items = search_all_content(state.db.as_ref(), &query_text).await?;
+        let site_title_by_id = list_sites(state.db.as_ref())
+            .await?
+            .into_iter()
+            .map(|site| (site.id, site.full_title))
+            .collect::<HashMap<_, _>>();
+        message = format!("Found {} result(s) for \"{}\".", items.len(), query_text);
+        rows = build_search_rows(items, &site_title_by_id);
+    }
+
+    current_user(&session).await?;
+
+    Ok(AdminSearchTemplate {
+        template_shared: AdminTemplateData::new("Search Content")
+            .with_message(message)
+            .with_nav_search_value(&query_text)
+            .with_links(vec![AdminLink::new("/admin", "Back to dashboard")]),
+        rows,
+        show_site_column: true,
+    })
+}
+
 async fn get_site_search(
     State(state): State<AdminState>,
     session: Session,
@@ -1685,25 +1908,28 @@ async fn get_site_search(
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?
         .ok_or_else(|| SiteError::NotFound)?;
     let query_text = query.q.unwrap_or_default();
-    let mut results = Vec::new();
+    let query_text = query_text.trim().to_string();
+    let mut rows = Vec::new();
     let mut message: String = "Search content by title, slug, or body text.".to_string();
 
-    if !query_text.trim().is_empty() {
-        let items = search_content(state.db.as_ref(), site_id, query_text.trim()).await?;
+    if !query_text.is_empty() {
+        let items = search_content(state.db.as_ref(), site_id, &query_text).await?;
+        let site_title_by_id = HashMap::from_iter([(site.id, site.full_title.clone())]);
         message = format!("Found {} result(s) for \"{}\".", items.len(), query_text);
-        results = items.into_iter().collect();
+        rows = build_search_rows(items, &site_title_by_id);
     }
 
     Ok(AdminSearchTemplate {
         template_shared: AdminTemplateData::new("Search Content")
             .with_site_context(site.id, &site.full_title)
             .with_message(message)
+            .with_nav_search_value(&query_text)
             .with_links(vec![AdminLink::new(
                 &format!("/admin/site/{site_id}/content"),
                 "Back to site dashboard",
             )]),
-        results,
-        query: query_text.trim().to_string(),
+        rows,
+        show_site_column: false,
     })
 }
 
@@ -3126,6 +3352,7 @@ async fn admin_site_settings(
         site_short_name: site.short_name,
         full_title: site.full_title,
         template_name: site.template_name,
+        can_delete_site: viewer.admin,
         export_href,
         templates: get_template_names().await,
         template_files,
@@ -3174,6 +3401,101 @@ async fn admin_site_settings_update(
     txn.commit().await?;
 
     Ok(Redirect::to(&format!("/admin/site/{site_id}/settings")))
+}
+
+async fn collect_site_media_filenames(
+    db: &DatabaseConnection,
+    site_id: Uuid,
+) -> Result<Vec<String>, SiteError> {
+    let assets = list_assets(db, site_id).await?;
+    let asset_ids = assets.iter().map(|asset| asset.id).collect::<Vec<_>>();
+    let mut filenames = assets
+        .into_iter()
+        .map(|asset| asset.storage_basename)
+        .collect::<Vec<_>>();
+
+    if !asset_ids.is_empty() {
+        let variants = entities::asset_variant::Entity::find()
+            .filter(entities::asset_variant::Column::AssetId.is_in(asset_ids))
+            .all(db)
+            .await
+            .map_err(SiteError::from)?;
+        filenames.extend(variants.into_iter().map(|variant| variant.filename));
+    }
+
+    filenames.sort();
+    filenames.dedup();
+    Ok(filenames)
+}
+
+async fn remove_deleted_site_files(
+    site_id: Uuid,
+    media_filenames: &[String],
+) -> Result<(), SiteError> {
+    for filename in media_filenames {
+        let path = resolve_upload_root().join(filename);
+        match fs::remove_file(&path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(SiteError::internal(format!(
+                    "failed to remove deleted site media file {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+
+    let override_root = resolve_site_template_override_root(site_id);
+    match fs::remove_dir_all(&override_root).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(SiteError::internal(format!(
+                "failed to remove deleted site template overrides {}: {error}",
+                override_root.display()
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+async fn admin_site_delete(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+) -> Result<Redirect, SiteError> {
+    let actor = require_global_admin(&session).await?.subject;
+    let site = get_by_id(state.db.as_ref(), site_id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
+    let media_filenames = collect_site_media_filenames(state.db.as_ref(), site_id).await?;
+
+    let txn = state.db.begin().await?;
+    log_audit_event(
+        &txn,
+        &actor,
+        "delete_site",
+        "site",
+        &site.id.to_string(),
+        Some(site.id),
+        Some(json!({
+            "short_name": site.short_name,
+            "full_title": site.full_title,
+            "template_name": site.template_name
+        })),
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to log site delete audit: {error}")))?;
+    delete_site(&txn, site_id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to delete site: {error}")))?;
+    txn.commit().await?;
+
+    remove_deleted_site_files(site_id, &media_filenames).await?;
+
+    Ok(Redirect::to("/admin?deleted=1"))
 }
 
 async fn admin_site_template_editor(
