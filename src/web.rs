@@ -800,7 +800,7 @@ pub async fn run_admin_server(
         .fallback(not_found)
         .layer(session_layer)
         .layer(from_fn(log_requests))
-        .layer(from_fn(crate::middleware::dont_cache_me))
+        .layer(from_fn(crate::middleware::set_cache))
         .with_state(state);
 
     let tls_config = build_tls_config(&oidc.tls_cert_path, &oidc.tls_key_path).await?;
