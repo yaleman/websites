@@ -23,6 +23,7 @@ pub static CUSTOMIZABLE_TEMPLATE_FILES: &[&str] = &[
 ];
 
 pub static SESSION_USER: &str = "user";
+pub(crate) static SESSION_CSRF_TOKENS_KEY: &str = "csrf_tokens";
 
 pub(crate) static SESSION_OIDC_PKCE_KEY: &str = "oidc_pkce";
 pub(crate) static SESSION_OIDC_STATE_KEY: &str = "oidc_state";

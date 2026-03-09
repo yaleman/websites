@@ -339,6 +339,14 @@ function parseAuditEvents(stdout: string): AuditEventRow[] {
 		});
 }
 
+export function extractCsrfToken(html: string): string {
+	const match = html.match(/name="csrf_token"\s+value="([^"]+)"/);
+	if (!match) {
+		throw new Error(`failed to find csrf token: ${html}`);
+	}
+	return match[1];
+}
+
 export async function setupHarness(): Promise<TestHarness> {
 	const tempRoot = await mkdtemp(path.join(tmpdir(), "websites-e2e-"));
 	const uploadRoot = path.join(tempRoot, "uploads");

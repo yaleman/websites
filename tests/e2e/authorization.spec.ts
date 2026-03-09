@@ -6,6 +6,7 @@ import {
 	createMembership,
 	createTag,
 	createUser,
+	extractCsrfToken,
 	seedAuthorizationFixtures,
 	setupHarness,
 	tinyPngBytes,
@@ -722,6 +723,9 @@ test("site delete confirmation and deletion require a global admin session", asy
 				`/admin/site/${harness.siteId}/delete`,
 				{
 					method: "POST",
+					form: {
+						csrf_token: "invalid",
+					},
 					failOnStatusCode: false,
 					maxRedirects: 0,
 				},
@@ -749,14 +753,31 @@ test("site delete confirmation and deletion require a global admin session", asy
 				},
 			);
 			expect(confirmResponse.status()).toBe(200);
-			expect(await confirmResponse.text()).toContain(
-				"Confirm Site Deletion",
+			const confirmBody = await confirmResponse.text();
+			expect(confirmBody).toContain("Confirm Site Deletion");
+			const csrfToken = extractCsrfToken(confirmBody);
+
+			const missingTokenResponse = await adminContext.api.fetch(
+				`/admin/site/${harness.siteId}/delete`,
+				{
+					method: "POST",
+					form: {
+						csrf_token: "",
+					},
+					failOnStatusCode: false,
+					maxRedirects: 0,
+				},
 			);
+			expect(missingTokenResponse.status()).toBe(400);
+			expect(await missingTokenResponse.text()).toContain("csrf token");
 
 			const response = await adminContext.api.fetch(
 				`/admin/site/${harness.siteId}/delete`,
 				{
 					method: "POST",
+					form: {
+						csrf_token: csrfToken,
+					},
 					failOnStatusCode: false,
 					maxRedirects: 0,
 				},

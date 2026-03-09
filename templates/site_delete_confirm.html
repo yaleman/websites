@@ -12,6 +12,7 @@
     Short Name: {{ site_short_name }}
   </p>
   <form method="post" action="/admin/site/{{ site_id }}/delete">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
     <button type="submit">Confirm site deletion</button>
   </form>
 </section>

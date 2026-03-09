@@ -41,3 +41,4 @@ The system manages site metadata, content, tags, assets, and memberships in a SQ
 - 2026-03-09: Site transfer uses one versioned JSON document for export and import. CLI and admin UI can import/export site-scoped database records, but v1 only records filesystem metadata for uploaded media and template overrides, not file bytes.
 - 2026-03-09: Site exports are available through the CLI and an owner-only admin download endpoint as a versioned JSON document containing site-scoped database records plus uploaded media/template-override file metadata, but not file bytes.
 - 2026-03-09: Site settings now expose a delete-site action only to global admins; deletion removes the site row plus site-owned uploaded media files and template override files.
+- 2026-03-09: Admin destructive POST flows can use session-backed CSRF tokens issued and validated through a reusable `Session` extension; site deletion confirmation uses this token check.
