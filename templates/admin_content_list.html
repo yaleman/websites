@@ -7,32 +7,26 @@
     <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
     {% endfor %}
   </select>
-
-  <label for="sort_by">Sort By</label>
-  <select id="sort_by" name="sort_by">
-    {% for option in sort_options %}
-    <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
-    {% endfor %}
-  </select>
-
-  <button type="submit">Apply</button>
+  <input type="hidden" name="sort_by" value="{{ current_sort_by }}" />
+  <button type="submit">Filter</button>
 </form>
 
-{% if !content_items.is_empty() %}
+{% if !content_rows.is_empty() %}
 <table>
   <thead>
     <tr>
-      <th>Title</th>
-      <th>Type</th>
-      <th>Created</th>
+      {% for header in sort_headers %}
+      <th><a href="{{ header.href }}">{{ header.label }}{{ header.indicator }}</a></th>
+      {% endfor %}
     </tr>
   </thead>
   <tbody>
-    {% for item in content_items %}
+    {% for item in content_rows %}
     <tr>
-      <td><a href="/admin/site/{{ site_id }}/content/{{ item.id }}/edit">{{ item.title }}</a></td>
+      <td><a href="{{ item.edit_href }}">{{ item.title }}</a></td>
       <td>{{ item.page_type }}</td>
       <td>{{ item.created_at }}</td>
+      <td>{{ item.updated_at }}</td>
     </tr>
     {% endfor %}
   </tbody>

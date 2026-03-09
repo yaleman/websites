@@ -692,3 +692,55 @@ test.describe("admin authorization coverage", () => {
 		});
 	}
 });
+
+test("POST site delete requires a global admin session", async () => {
+	const harness = await setupHarness();
+
+	try {
+		const ownerId = await createUser(harness, "delete-site-owner");
+		await createMembership(harness, ownerId, "owner");
+
+		const ownerContext = await createAuthenticatedApiContext(
+			harness,
+			"delete-site-owner",
+		);
+		try {
+			const response = await ownerContext.api.fetch(
+				`/admin/site/${harness.siteId}/delete`,
+				{
+					method: "POST",
+					failOnStatusCode: false,
+					maxRedirects: 0,
+				},
+			);
+			expect(response.status()).toBe(401);
+			expect(await response.text()).toContain(
+				"global admin access is required",
+			);
+		} finally {
+			await ownerContext.api.dispose();
+		}
+
+		const adminContext = await createAuthenticatedApiContext(
+			harness,
+			`delete-site-admin-${Date.now()}`,
+			true,
+		);
+		try {
+			const response = await adminContext.api.fetch(
+				`/admin/site/${harness.siteId}/delete`,
+				{
+					method: "POST",
+					failOnStatusCode: false,
+					maxRedirects: 0,
+				},
+			);
+			expect(response.status()).toBe(303);
+			expect(response.headers()["location"]).toBe("/admin?deleted=1");
+		} finally {
+			await adminContext.api.dispose();
+		}
+	} finally {
+		await cleanupHarness(harness);
+	}
+});

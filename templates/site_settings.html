@@ -34,6 +34,18 @@
   {% endif %}
 </section>
 
+{% if can_delete_site %}
+<section>
+  <h2>Danger Zone</h2>
+  <p class="inline-body">
+    Deleting a site removes its content, memberships, tags, assets, and template overrides.
+  </p>
+  <form method="post" action="/admin/site/{{ site_id }}/delete">
+    <button type="submit">Delete site</button>
+  </form>
+</section>
+{% endif %}
+
 <section>
   <h2>Template Overrides</h2>
   <p class="inline-body">

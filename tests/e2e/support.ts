@@ -40,6 +40,7 @@ export type AuditEventRow = {
 };
 
 type CreateContentInput = {
+	siteId?: string;
 	pageType: string;
 	title: string;
 	slug: string;
@@ -621,6 +622,7 @@ export async function createAssetWithThumbnail(
 export async function createContent(
 	harness: TestHarness,
 	{
+		siteId,
 		pageType,
 		title,
 		slug,
@@ -643,7 +645,7 @@ export async function createContent(
 			"content",
 			"create",
 			"--site-id",
-			harness.siteId,
+			siteId ?? harness.siteId,
 			"--page-type",
 			pageType,
 			"--title",
@@ -659,6 +661,43 @@ export async function createContent(
 		{ cwd: harness.tempRoot, env: harness.env },
 	);
 	return parseCreatedId(result.stdout, "content");
+}
+
+export async function createSite(
+	harness: TestHarness,
+	{
+		shortName,
+		fullTitle,
+		templateName = "default",
+	}: {
+		shortName: string;
+		fullTitle: string;
+		templateName?: string;
+	},
+): Promise<string> {
+	const result = await runWebsitesCommand(
+		[
+			"--database-url",
+			harness.dbPath,
+			"--tls-cert-path",
+			harness.tlsCertPath,
+			"--tls-key-path",
+			harness.tlsKeyPath,
+			"--frontend-url",
+			"https://127.0.0.1",
+			...oidcTestArgs,
+			"site",
+			"create",
+			"--short-name",
+			shortName,
+			"--full-title",
+			fullTitle,
+			"--template-name",
+			templateName,
+		],
+		{ cwd: harness.tempRoot, env: harness.env },
+	);
+	return parseCreatedId(result.stdout, "site");
 }
 
 export async function createAlias(

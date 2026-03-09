@@ -852,6 +852,20 @@ pub async fn update_site_settings<C: ConnectionTrait>(
     model.update(db).await.map_err(SiteError::from)
 }
 
+/// Deletes a site row by id.
+pub async fn delete_site<C: ConnectionTrait>(db: &C, site_id: Uuid) -> Result<(), SiteError> {
+    let existing = entities::site::Entity::find_by_id(site_id).one(db).await?;
+    let Some(_) = existing else {
+        return Err(SiteError::SiteNotFound(site_id.to_string()));
+    };
+
+    entities::site::Entity::delete_by_id(site_id)
+        .exec(db)
+        .await
+        .map_err(SiteError::from)?;
+    Ok(())
+}
+
 /// Returns all sites ordered by short name.
 pub async fn list_sites(db: &DatabaseConnection) -> Result<Vec<entities::site::Model>, SiteError> {
     entities::site::Entity::find()
@@ -1056,9 +1070,33 @@ pub async fn search_content(
     site_id: Uuid,
     query: &str,
 ) -> Result<Vec<entities::content_item::Model>, SiteError> {
+    let condition = content_search_condition(query);
+
+    entities::content_item::Entity::find()
+        .filter(entities::content_item::Column::SiteId.eq(site_id))
+        .filter(condition)
+        .order_by_desc(entities::content_item::Column::CreatedAt)
+        .all(db)
+        .await
+        .map_err(SiteError::from)
+}
+
+pub async fn search_all_content(
+    db: &DatabaseConnection,
+    query: &str,
+) -> Result<Vec<entities::content_item::Model>, SiteError> {
+    entities::content_item::Entity::find()
+        .filter(content_search_condition(query))
+        .order_by_desc(entities::content_item::Column::CreatedAt)
+        .all(db)
+        .await
+        .map_err(SiteError::from)
+}
+
+fn content_search_condition(query: &str) -> Condition {
     let query_like = format!("%{}%", query.replace(" ", "%"));
 
-    let condition = Condition::any()
+    Condition::any()
         .add(
             entities::content_item::Column::Title
                 .into_expr()
@@ -1073,14 +1111,7 @@ pub async fn search_content(
             entities::content_item::Column::PageContent
                 .into_expr()
                 .like(&query_like),
-        );
-
-    entities::content_item::Entity::find()
-        .filter(entities::content_item::Column::SiteId.eq(site_id))
-        .filter(condition)
-        .all(db)
-        .await
-        .map_err(SiteError::from)
+        )
 }
 
 #[derive(Default, Clone)]
@@ -2206,6 +2237,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_site_removes_row() {
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+
+        delete_site(&db, site.id)
+            .await
+            .expect("failed to delete site");
+
+        let deleted = entities::site::Entity::find_by_id(site.id)
+            .one(&db)
+            .await
+            .expect("failed to reload deleted site");
+        assert!(deleted.is_none());
+    }
+
+    #[tokio::test]
     async fn transaction_rolls_back_on_error() {
         let db = test_db_start().await;
         let txn = db.begin().await.expect("failed to start transaction");
@@ -2370,6 +2417,52 @@ mod tests {
             .expect("failed to load revision tag links");
         assert_eq!(revision_tag_links.len(), 1);
         assert_eq!(revision_tag_links[0].content_id, content.id);
+    }
+
+    #[tokio::test]
+    async fn search_all_content_returns_matches_from_multiple_sites() {
+        let db = test_db_start().await;
+        let site_one = create_site_fixture(&db).await;
+        let site_two = create_site_with_template_fixture(&db, "beta", "default").await;
+
+        create_content(
+            &db,
+            NewContent {
+                site_id: site_one.id,
+                page_type: PageType::Page,
+                title: "Alpha Match".to_string(),
+                slug: "alpha-match".to_string(),
+                page_content: "shared needle".to_string(),
+                draft: true,
+                creator_sub: "creator".to_string(),
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create site one content");
+        create_content(
+            &db,
+            NewContent {
+                site_id: site_two.id,
+                page_type: PageType::Page,
+                title: "Beta Match".to_string(),
+                slug: "beta-match".to_string(),
+                page_content: "shared needle".to_string(),
+                draft: true,
+                creator_sub: "creator".to_string(),
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create site two content");
+
+        let results = search_all_content(&db, "shared needle")
+            .await
+            .expect("failed to search across all content");
+
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().any(|item| item.site_id == site_one.id));
+        assert!(results.iter().any(|item| item.site_id == site_two.id));
     }
 
     #[test]

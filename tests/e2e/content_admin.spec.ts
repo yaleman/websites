@@ -7,6 +7,7 @@ import {
 	createAuthenticatedApiContext,
 	createAuthenticatedPage,
 	createContent,
+	createSite,
 	createTag,
 	createUser,
 	setupHarness,
@@ -165,18 +166,92 @@ test.describe("content admin", () => {
 			);
 
 			await page.selectOption("#page_type", "page");
-			await page.selectOption("#sort_by", "title_desc");
-			await page.getByRole("button", { name: "Apply" }).click();
+			await page.getByRole("button", { name: "Filter" }).click();
+			await page.getByRole("columnheader", { name: "Title" }).getByRole("link").click();
+			await page.getByRole("columnheader", { name: "Title (asc)" }).getByRole("link").click();
 
 			await expect(page).toHaveURL(
-				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content?page_type=page&sort_by=title_desc`,
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content?sort_by=title_desc&page_type=page`,
 			);
 
+			await expect(
+				page.getByRole("columnheader", { name: "Updated" }),
+			).toBeVisible();
 			const rows = page.locator("tbody tr");
 			await expect(rows).toHaveCount(2);
 			await expect(rows.nth(0)).toContainText("Beta Page");
 			await expect(rows.nth(1)).toContainText("Alpha Page");
 			await expect(page.locator("body")).not.toContainText("Zulu Post");
+
+			await context.close();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
+	test("uses the nav search for site and global content search", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const subject = "nav-search";
+			const userId = await createUser(harness, subject);
+			await addMembership(harness, userId, "owner");
+
+			const otherSiteId = await createSite(harness, {
+				shortName: "other-search-site",
+				fullTitle: "Other Search Site",
+			});
+
+			await createContent(harness, {
+				pageType: "page",
+				title: "Current Site Match",
+				slug: "current-site-match",
+				pageContent: "cross-site-needle",
+				creatorSub: subject,
+			});
+			await createContent(harness, {
+				siteId: otherSiteId,
+				pageType: "page",
+				title: "Other Site Match",
+				slug: "other-site-match",
+				pageContent: "cross-site-needle",
+				creatorSub: subject,
+			});
+
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				subject,
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content`,
+				{ waitUntil: "domcontentloaded" },
+			);
+			await page.locator("#nav-search-query").fill("cross-site-needle");
+			await page.getByRole("button", { name: "Go" }).click();
+
+			await expect(page).toHaveURL(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/search?q=cross-site-needle`,
+			);
+			await expect(page.locator("body")).toContainText("Current Site Match");
+			await expect(page.locator("body")).not.toContainText("Other Site Match");
+
+			await page.goto(`https://127.0.0.1:${harness.port}/admin`, {
+				waitUntil: "domcontentloaded",
+			});
+			await page.locator("#nav-search-query").fill("cross-site-needle");
+			await page.getByRole("button", { name: "Go" }).click();
+
+			await expect(page).toHaveURL(
+				`https://127.0.0.1:${harness.port}/admin/search?q=cross-site-needle`,
+			);
+			await expect(page.locator("body")).toContainText("Current Site Match");
+			await expect(page.locator("body")).toContainText("Other Site Match");
+			await expect(page.locator("body")).toContainText("Test Site");
+			await expect(page.locator("body")).toContainText("Other Search Site");
 
 			await context.close();
 		} finally {
