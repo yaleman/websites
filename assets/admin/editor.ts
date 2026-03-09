@@ -304,10 +304,13 @@ const createAssetModal = (editor: Editor) => {
 		close();
 	};
 
-	const open = () => {
-		clearSelection();
+	const resetModalState = () => {
 		if (searchInput) {
 			searchInput.value = "";
+		}
+		if (searchTimeout) {
+			window.clearTimeout(searchTimeout);
+			searchTimeout = null;
 		}
 		if (altInput) {
 			altInput.value = "";
@@ -316,13 +319,18 @@ const createAssetModal = (editor: Editor) => {
 			externalInput.value = "";
 		}
 		setSectionVisibility(false);
+		clearSelection();
+	};
+
+	const open = () => {
+		resetModalState();
 		setModalOpen(true);
 		loadRecent();
 	};
 
 	const close = () => {
 		setModalOpen(false);
-		clearSelection();
+		resetModalState();
 	};
 
 	closeButtons.forEach((button) => {
