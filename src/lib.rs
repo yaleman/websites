@@ -986,6 +986,7 @@ pub async fn update_content<C: ConnectionTrait>(
         entities::content_revision_tag::ActiveModel {
             id: Set(Uuid::now_v7()),
             revision_id: Set(revision.id),
+            content_id: Set(content.id),
             tag_id: Set(content_tag.tag_id),
         }
         .insert(db)
@@ -1003,6 +1004,7 @@ pub async fn update_content<C: ConnectionTrait>(
         let _revision_alias = entities::content_revision_alias::ActiveModel {
             id: Set(Uuid::now_v7()),
             revision_id: Set(revision.id),
+            content_id: Set(content.id),
             alias_path: Set(alias.alias_path),
             kind: Set(alias.kind),
         }
@@ -1089,8 +1091,15 @@ pub async fn import_wordpress<C: ConnectionTrait>(
     let mut imported = 0usize;
 
     for item in items {
-        let post_type = PageType::from_str(&item.post_type.unwrap_or_else(|| "post".to_string()))
-            .unwrap_or(PageType::Post);
+        let Some(post_type) = item
+            .post_type
+            .as_deref()
+            .map(str::trim)
+            .filter(|post_type| !post_type.is_empty())
+            .and_then(|post_type| PageType::from_str(post_type).ok())
+        else {
+            continue;
+        };
 
         let title = item.title.unwrap_or_else(|| "Untitled".to_string());
         let slug = item
@@ -1104,6 +1113,29 @@ pub async fn import_wordpress<C: ConnectionTrait>(
             .post_date_gmt
             .as_deref()
             .and_then(wordpress_date_to_rfc3339);
+        let mut known_aliases = Vec::new();
+        if let Some(post_id) = item.post_id.as_deref().map(str::trim)
+            && !post_id.is_empty()
+        {
+            known_aliases.push(format!("/?p={post_id}"));
+        }
+        if let Some(link) = item.link.as_deref()
+            && let Some(alias_path) = wordpress_link_to_alias(link)
+        {
+            known_aliases.push(alias_path);
+        }
+
+        if wordpress_item_exists(
+            db,
+            site_id,
+            post_type,
+            slug.as_str(),
+            known_aliases.as_slice(),
+        )
+        .await?
+        {
+            continue;
+        }
 
         let content_model = create_content(
             db,
@@ -1120,24 +1152,12 @@ pub async fn import_wordpress<C: ConnectionTrait>(
         )
         .await?;
 
-        if let Some(post_id) = item.post_id {
-            let alias_path = format!("/?p={post_id}");
-            create_alias(
-                db,
-                NewAlias {
-                    content_id: content_model.id,
-                    site_id,
-                    alias_path,
-                    kind: "alias".to_string(),
-                },
-            )
-            .await?;
-        }
-
-        if let Some(link) = item.link
-            && let Some(alias_path) = wordpress_link_to_alias(&link)
-        {
-            create_alias(
+        let mut alias_paths = HashSet::new();
+        for alias_path in known_aliases {
+            if !alias_paths.insert(alias_path.clone()) {
+                continue;
+            }
+            create_alias_if_missing(
                 db,
                 NewAlias {
                     content_id: content_model.id,
@@ -1153,6 +1173,50 @@ pub async fn import_wordpress<C: ConnectionTrait>(
     }
 
     Ok(imported)
+}
+
+async fn wordpress_item_exists<C: ConnectionTrait>(
+    db: &C,
+    site_id: Uuid,
+    page_type: PageType,
+    slug: &str,
+    alias_paths: &[String],
+) -> Result<bool, SiteError> {
+    for alias_path in alias_paths {
+        let existing_alias = entities::content_alias::Entity::find()
+            .filter(entities::content_alias::Column::SiteId.eq(site_id))
+            .filter(entities::content_alias::Column::AliasPath.eq(alias_path.as_str()))
+            .one(db)
+            .await?;
+        if existing_alias.is_some() {
+            return Ok(true);
+        }
+    }
+
+    let existing_content = entities::content_item::Entity::find()
+        .filter(entities::content_item::Column::SiteId.eq(site_id))
+        .filter(entities::content_item::Column::PageType.eq(page_type))
+        .filter(entities::content_item::Column::Slug.eq(slug))
+        .one(db)
+        .await?;
+
+    Ok(existing_content.is_some())
+}
+
+async fn create_alias_if_missing<C: ConnectionTrait>(
+    db: &C,
+    input: NewAlias,
+) -> Result<Option<entities::content_alias::Model>, SiteError> {
+    let existing_alias = entities::content_alias::Entity::find()
+        .filter(entities::content_alias::Column::SiteId.eq(input.site_id))
+        .filter(entities::content_alias::Column::AliasPath.eq(input.alias_path.as_str()))
+        .one(db)
+        .await?;
+    if existing_alias.is_some() {
+        return Ok(None);
+    }
+
+    create_alias(db, input).await.map(Some)
 }
 
 fn parse_wordpress_wxr(xml: &str) -> Result<Vec<WordpressItem>, SiteError> {
@@ -1792,6 +1856,7 @@ pub async fn assign_tags_to_content<C: ConnectionTrait>(
             let revision_tag = entities::content_revision_tag::ActiveModel {
                 id: Set(Uuid::now_v7()),
                 revision_id: Set(revision_id),
+                content_id: Set(content_id),
                 tag_id: Set(tag.id),
             };
             revision_tag
@@ -2224,11 +2289,19 @@ mod tests {
             .await
             .expect("failed to list revision aliases");
         assert_eq!(revision_aliases.len(), 1);
+        assert_eq!(revision_aliases[0].content_id, content.id);
 
         let revision_tags = list_revision_tags(&db, latest.id)
             .await
             .expect("failed to list revision tags");
         assert_eq!(revision_tags.len(), 1);
+        let revision_tag_links = entities::content_revision_tag::Entity::find()
+            .filter(entities::content_revision_tag::Column::RevisionId.eq(latest.id))
+            .all(&db)
+            .await
+            .expect("failed to load revision tag links");
+        assert_eq!(revision_tag_links.len(), 1);
+        assert_eq!(revision_tag_links[0].content_id, content.id);
     }
 
     #[test]
@@ -2328,6 +2401,17 @@ mod tests {
         )
         .await
         .expect("failed to assign initial tags");
+        let revision_tag_links = entities::content_revision_tag::Entity::find()
+            .filter(entities::content_revision_tag::Column::RevisionId.eq(rev1.id))
+            .all(&db)
+            .await
+            .expect("failed to load initial revision tag links");
+        assert_eq!(revision_tag_links.len(), 2);
+        assert!(
+            revision_tag_links
+                .iter()
+                .all(|link| link.content_id == content.id)
+        );
 
         update_content(
             &db,
@@ -2587,6 +2671,175 @@ mod tests {
             .await
             .expect("failed to list aliases");
         assert_eq!(aliases.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn import_wordpress_skips_unsupported_item_types() {
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let file_path = temp_dir.path().join("import.xml");
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:wp="http://wordpress.org/export/1.2/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <item>
+      <title>Imported Post</title>
+      <link>https://example.com/2020/01/imported-post/?p=123</link>
+      <wp:post_id>123</wp:post_id>
+      <wp:post_name>imported-post</wp:post_name>
+      <wp:post_type>post</wp:post_type>
+      <wp:status>publish</wp:status>
+      <content:encoded><![CDATA[Hello world]]></content:encoded>
+    </item>
+    <item>
+      <title>Imported Page</title>
+      <link>https://example.com/about/</link>
+      <wp:post_id>456</wp:post_id>
+      <wp:post_name>about</wp:post_name>
+      <wp:post_type>page</wp:post_type>
+      <wp:status>publish</wp:status>
+      <content:encoded><![CDATA[About page]]></content:encoded>
+    </item>
+    <item>
+      <title>Header Image</title>
+      <link>https://example.com/wp-content/uploads/header.jpg</link>
+      <wp:post_id>789</wp:post_id>
+      <wp:post_name>header-jpg</wp:post_name>
+      <wp:post_type>attachment</wp:post_type>
+      <wp:status>inherit</wp:status>
+      <content:encoded><![CDATA[]]></content:encoded>
+    </item>
+    <item>
+      <title></title>
+      <link>https://example.com/?p=999</link>
+      <wp:post_id>999</wp:post_id>
+      <wp:status>publish</wp:status>
+      <content:encoded><![CDATA[]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"#;
+
+        fs::write(&file_path, xml.as_bytes())
+            .await
+            .expect("failed to write import file");
+
+        let imported = import_wordpress(
+            &db,
+            site.id,
+            file_path.to_str().expect("invalid path"),
+            "creator",
+        )
+        .await
+        .expect("failed to import wordpress data");
+        assert_eq!(imported, 2);
+
+        let content = list_content(&db, site.id, None)
+            .await
+            .expect("failed to list content");
+        assert_eq!(content.len(), 2);
+        assert!(content.iter().any(|item| item.title == "Imported Post"));
+        assert!(content.iter().any(|item| item.title == "Imported Page"));
+    }
+
+    #[tokio::test]
+    async fn import_wordpress_skips_duplicates_on_repeat_imports() {
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let file_path = temp_dir.path().join("import.xml");
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:wp="http://wordpress.org/export/1.2/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <item>
+      <title>Imported Post</title>
+      <link>https://example.com/2020/01/imported-post/?p=123</link>
+      <wp:post_id>123</wp:post_id>
+      <wp:post_name>imported-post</wp:post_name>
+      <wp:post_type>post</wp:post_type>
+      <wp:status>publish</wp:status>
+      <content:encoded><![CDATA[Hello world]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"#;
+
+        fs::write(&file_path, xml.as_bytes())
+            .await
+            .expect("failed to write import file");
+
+        let imported_first = import_wordpress(
+            &db,
+            site.id,
+            file_path.to_str().expect("invalid path"),
+            "creator",
+        )
+        .await
+        .expect("failed to import wordpress data the first time");
+        let imported_second = import_wordpress(
+            &db,
+            site.id,
+            file_path.to_str().expect("invalid path"),
+            "creator",
+        )
+        .await
+        .expect("failed to import wordpress data the second time");
+
+        assert_eq!(imported_first, 1);
+        assert_eq!(imported_second, 0);
+
+        let content = list_content(&db, site.id, None)
+            .await
+            .expect("failed to list content");
+        assert_eq!(content.len(), 1);
+
+        let aliases = list_aliases(&db, site.id, None)
+            .await
+            .expect("failed to list aliases");
+        assert_eq!(aliases.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn import_wordpress_deduplicates_equivalent_aliases_per_item() {
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let file_path = temp_dir.path().join("import.xml");
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:wp="http://wordpress.org/export/1.2/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <item>
+      <title>Imported Post</title>
+      <link>https://example.com/?p=123</link>
+      <wp:post_id>123</wp:post_id>
+      <wp:post_name>imported-post</wp:post_name>
+      <wp:post_type>post</wp:post_type>
+      <wp:status>publish</wp:status>
+      <content:encoded><![CDATA[Hello world]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"#;
+
+        fs::write(&file_path, xml.as_bytes())
+            .await
+            .expect("failed to write import file");
+
+        let imported = import_wordpress(
+            &db,
+            site.id,
+            file_path.to_str().expect("invalid path"),
+            "creator",
+        )
+        .await
+        .expect("failed to import wordpress data");
+        assert_eq!(imported, 1);
+
+        let aliases = list_aliases(&db, site.id, None)
+            .await
+            .expect("failed to list aliases");
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0].alias_path, "/?p=123");
     }
 
     #[tokio::test]
