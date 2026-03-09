@@ -660,69 +660,164 @@ const initTagEditor = () => {
 
 const initMembershipCreateForm = () => {
 	const form = document.querySelector<HTMLFormElement>("[data-membership-create]");
+	const autocomplete = form?.querySelector<HTMLElement>(
+		"[data-membership-autocomplete]",
+	);
 	const queryInput = form?.querySelector<HTMLInputElement>(
 		"[data-membership-user-query]",
 	);
 	const userIdInput = form?.querySelector<HTMLInputElement>(
 		"[data-membership-user-id]",
 	);
-	const datalist = document.getElementById("membership-user-options");
+	const optionsContainer = form?.querySelector<HTMLElement>(
+		"[data-membership-user-options]",
+	);
+	const emptyState = form?.querySelector<HTMLElement>("[data-membership-empty]");
 
-	if (!form || !queryInput || !userIdInput || !datalist) {
+	if (!form || !autocomplete || !queryInput || !userIdInput || !optionsContainer || !emptyState) {
 		return;
 	}
 
-	const candidates = Array.from(datalist.querySelectorAll<HTMLOptionElement>("option"))
+	const candidates = Array.from(
+		optionsContainer.querySelectorAll<HTMLButtonElement>("[data-membership-option]"),
+	)
 		.map((option) => ({
-			value: option.value.trim(),
+			element: option,
+			value: option.dataset.searchValue?.trim() ?? "",
 			userId: option.dataset.userId ?? "",
-			subject: option.dataset.userSubject?.trim().toLowerCase() ?? "",
-			email: option.dataset.userEmail?.trim().toLowerCase() ?? "",
+			subject: option.dataset.userSubject?.trim() ?? "",
+			email: option.dataset.userEmail?.trim() ?? "",
 		}))
 		.filter((candidate) => candidate.value.length > 0 && candidate.userId.length > 0);
 
+	const normalize = (value: string) => value.trim().toLowerCase();
+
 	const resolveCandidate = (rawValue: string) => {
-		const normalized = rawValue.trim().toLowerCase();
+		const normalized = normalize(rawValue);
 		if (!normalized) {
 			return null;
 		}
 		return (
-			candidates.find((candidate) => candidate.value.toLowerCase() === normalized) ??
-			candidates.find((candidate) => candidate.subject === normalized) ??
-			candidates.find((candidate) => candidate.email === normalized) ??
+			candidates.find((candidate) => normalize(candidate.value) === normalized) ??
+			candidates.find((candidate) => normalize(candidate.subject) === normalized) ??
+			candidates.find((candidate) => normalize(candidate.email) === normalized) ??
 			null
 		);
+	};
+
+	const filterCandidates = (rawValue: string) => {
+		const normalized = normalize(rawValue);
+		if (!normalized) {
+			return candidates.slice(0, 8);
+		}
+		return candidates
+			.filter((candidate) => {
+				const haystacks = [candidate.value, candidate.subject, candidate.email]
+					.map((value) => normalize(value))
+					.filter((value) => value.length > 0);
+				return haystacks.some((value) => value.includes(normalized));
+			})
+			.slice(0, 8);
+	};
+
+	const renderMatches = (matches: typeof candidates) => {
+		for (const candidate of candidates) {
+			candidate.element.hidden = !matches.includes(candidate);
+		}
+		emptyState.hidden = matches.length > 0 || !queryInput.value.trim();
+		const shouldShow =
+			document.activeElement === queryInput &&
+			(matches.length > 0 || !emptyState.hidden);
+		optionsContainer.hidden = !shouldShow;
+		queryInput.setAttribute("aria-expanded", shouldShow ? "true" : "false");
+	};
+
+	const applyCandidate = (candidate: (typeof candidates)[number]) => {
+		queryInput.value = candidate.value;
+		userIdInput.value = candidate.userId;
+		queryInput.setCustomValidity("");
+		optionsContainer.hidden = true;
+		queryInput.setAttribute("aria-expanded", "false");
 	};
 
 	const syncSelection = () => {
 		const match = resolveCandidate(queryInput.value);
 		userIdInput.value = match?.userId ?? "";
-		queryInput.setCustomValidity(
-			queryInput.value.trim() && !match ? "Choose an existing user." : "",
-		);
+		if (queryInput.value.trim() && !match) {
+			renderMatches(filterCandidates(queryInput.value));
+		}
 		return match;
 	};
 
 	queryInput.addEventListener("input", () => {
 		userIdInput.value = "";
 		queryInput.setCustomValidity("");
-		syncSelection();
+		const match = resolveCandidate(queryInput.value);
+		if (match) {
+			userIdInput.value = match.userId;
+		}
+		renderMatches(filterCandidates(queryInput.value));
 	});
 
 	queryInput.addEventListener("change", () => {
 		syncSelection();
 	});
 
+	queryInput.addEventListener("focus", () => {
+		renderMatches(filterCandidates(queryInput.value));
+	});
+
+	queryInput.addEventListener("keydown", (event) => {
+		if (event.key === "Escape") {
+			optionsContainer.hidden = true;
+			queryInput.setAttribute("aria-expanded", "false");
+			return;
+		}
+		if (event.key !== "Enter" || userIdInput.value) {
+			return;
+		}
+		const firstMatch = filterCandidates(queryInput.value)[0];
+		if (!firstMatch) {
+			return;
+		}
+		event.preventDefault();
+		applyCandidate(firstMatch);
+	});
+
 	queryInput.addEventListener("blur", () => {
-		syncSelection();
+		window.setTimeout(() => {
+			optionsContainer.hidden = true;
+			queryInput.setAttribute("aria-expanded", "false");
+			const match = resolveCandidate(queryInput.value);
+			queryInput.setCustomValidity(
+				queryInput.value.trim() && !match ? "Choose an existing user." : "",
+			);
+		}, 100);
+	});
+
+	for (const candidate of candidates) {
+		candidate.element.addEventListener("click", () => {
+			applyCandidate(candidate);
+			queryInput.focus();
+		});
+	}
+
+	document.addEventListener("click", (event) => {
+		if (!autocomplete.contains(event.target as Node)) {
+			optionsContainer.hidden = true;
+			queryInput.setAttribute("aria-expanded", "false");
+		}
 	});
 
 	form.addEventListener("submit", (event) => {
-		const match = syncSelection();
+		const match = syncSelection() ?? filterCandidates(queryInput.value)[0] ?? null;
 		if (!match) {
 			event.preventDefault();
+			queryInput.setCustomValidity("Choose an existing user.");
 			queryInput.reportValidity();
+			return;
 		}
+		applyCandidate(match);
 	});
 };
 

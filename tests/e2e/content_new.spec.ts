@@ -154,7 +154,9 @@ test.describe("content new editor", () => {
     try {
       const ownerId = await createUser(harness, "membership-owner");
       await addMembership(harness, ownerId, "owner");
-      await createUser(harness, "membership-target");
+      await createUser(harness, "membership-target", {
+        email: "membership-target@example.com",
+      });
       const { context, page } = await createAuthenticatedPage(
         browser,
         harness,
@@ -167,6 +169,17 @@ test.describe("content new editor", () => {
       );
 
       await page.getByLabel("User").fill("membership-target");
+      await expect(
+        page.getByRole("option", {
+          name: /membership-target membership-target@example.com/i,
+        }),
+      ).toBeVisible();
+      await page.getByLabel("User").fill("membership-target@example");
+      const candidate = page.getByRole("option", {
+        name: /membership-target membership-target@example.com/i,
+      });
+      await expect(candidate).toBeVisible();
+      await candidate.click();
       await page.getByRole("button", { name: "Add member" }).click();
       await expect(page.locator('[aria-label="membership-target"]')).toBeVisible();
 

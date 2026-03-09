@@ -427,8 +427,9 @@ export async function setupHarness(): Promise<TestHarness> {
 export async function createUser(
   harness: TestHarness,
   subject: string,
-  admin = false,
+  options: { admin?: boolean; email?: string } = {},
 ): Promise<string> {
+  const { admin = false, email } = options;
   const result = await runWebsitesCommand(
     [
       "--database-url",
@@ -444,6 +445,7 @@ export async function createUser(
       "create",
       "--subject",
       subject,
+      ...(email ? ["--email", email] : []),
       ...(admin ? ["--admin"] : []),
     ],
     { cwd: harness.tempRoot, env: harness.env },
