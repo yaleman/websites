@@ -62,6 +62,16 @@ test.describe("content new editor", () => {
       await modal.getByLabel("Alt text").fill("Test image");
       await modal.getByRole("button", { name: "Insert image" }).click();
       await expect(modal).toBeHidden();
+      await page.getByRole("button", { name: "Image" }).click();
+      await expect(modal).toBeVisible();
+      await modal.getByPlaceholder("Search by filename").fill("test-image");
+      await modal.getByRole("button", { name: "Cancel" }).click();
+      await expect(modal).toBeHidden();
+      await page.getByRole("button", { name: "Image" }).click();
+      await expect(modal).toBeVisible();
+      await expect(modal.getByPlaceholder("Search by filename")).toHaveValue("");
+      await modal.getByRole("button", { name: "Cancel" }).click();
+      await expect(modal).toBeHidden();
       await expect(
         page.locator(
           `.ProseMirror a[href="/media/images/${asset.storageBasename}"] img[src="/media/images/${asset.thumbnailFilename}"]`,
