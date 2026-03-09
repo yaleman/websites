@@ -234,6 +234,8 @@ ul.shared-actions {
 	border: 0;
 	list-style: none;
 	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
 	gap: 1rem;
 }
 
@@ -249,6 +251,7 @@ ul.shared-actions li {
 	border-radius: var(--small-border-radius);
 	padding: 0.25rem 0.5rem;
 	color: var(--text-dark);
+	flex: 0 0 auto;
 }
 
 .editor-source {
