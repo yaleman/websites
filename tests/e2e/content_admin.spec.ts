@@ -142,8 +142,11 @@ test.describe("content admin", () => {
 				waitUntil: "domcontentloaded",
 			});
 
-			await expect(page).toHaveTitle("Sites");
-			await expect(page.getByRole("heading", { name: "Sites" })).toBeVisible();
+			await expect(page).toHaveURL(`https://127.0.0.1:${harness.port}/admin`);
+			await expect(page).toHaveTitle("Admin Dashboard");
+			await expect(
+				page.getByRole("heading", { name: "Admin Dashboard" }),
+			).toBeVisible();
 			await expect(page.locator(".page-site-indicator")).toHaveCount(0);
 
 			await context.close();

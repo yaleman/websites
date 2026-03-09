@@ -147,6 +147,7 @@ pub(crate) struct AdminState {
 #[template(path = "admin_index.html")]
 struct AdminIndexTemplate {
     template_shared: AdminTemplateData,
+    sites: Vec<crate::entities::site::Model>,
 }
 
 #[allow(dead_code)]
@@ -258,15 +259,6 @@ struct AdminTagsTemplate {
     template_shared: AdminTemplateData,
     site_id: Uuid,
     tags: Vec<AdminSiteTagRow>,
-}
-
-#[allow(dead_code)]
-#[derive(Template, WebTemplate)]
-#[template(path = "sites.html")]
-struct AdminSitesTemplate {
-    template_shared: AdminTemplateData,
-
-    sites: Vec<crate::entities::site::Model>,
 }
 
 #[allow(dead_code)]
@@ -457,7 +449,7 @@ struct UpdateSiteSettingsForm {
 }
 
 #[derive(Debug, Deserialize)]
-struct SitesIndexQuery {
+struct DashboardQuery {
     imported: Option<String>,
 }
 
@@ -932,19 +924,20 @@ async fn not_found(OriginalUri(uri): OriginalUri) -> impl IntoResponse {
     )
 }
 
-/// The home page
-async fn get_index() -> Result<AdminIndexTemplate, SiteError> {
-    Ok(AdminIndexTemplate {
-        template_shared: AdminTemplateData::new("Admin Dashboard"),
-    })
+async fn get_sites(Query(query): Query<DashboardQuery>) -> Redirect {
+    if query.imported.is_some() {
+        Redirect::to("/admin?imported=1")
+    } else {
+        Redirect::to("/admin")
+    }
 }
 
-/// Sites list
-async fn get_sites(
+/// The home page
+async fn get_index(
     State(state): State<AdminState>,
     session: Session,
-    Query(query): Query<SitesIndexQuery>,
-) -> Result<AdminSitesTemplate, SiteError> {
+    Query(query): Query<DashboardQuery>,
+) -> Result<AdminIndexTemplate, SiteError> {
     let viewer = current_user(&session).await?;
     let sites = list_sites(state.db.as_ref()).await?;
     let mut links = vec![AdminLink::new("/admin/sites/new", "New site")];
@@ -952,14 +945,14 @@ async fn get_sites(
         links.push(AdminLink::new("/admin/sites/import", "Import site"));
     }
 
-    let template_shared = AdminTemplateData::new("Sites").with_links(links);
+    let template_shared = AdminTemplateData::new("Admin Dashboard").with_links(links);
     let template_shared = if query.imported.is_some() {
         template_shared.with_toast_message("Site import complete.", "imported")
     } else {
         template_shared
     };
 
-    Ok(AdminSitesTemplate {
+    Ok(AdminIndexTemplate {
         template_shared,
         sites,
     })
@@ -968,7 +961,7 @@ async fn get_sites(
 async fn admin_sites_new() -> Response {
     AdminSitesNewTemplate {
         template_shared: AdminTemplateData::new("Create Site")
-            .with_links(vec![AdminLink::new("/admin/sites", "Back to sites")]),
+            .with_links(vec![AdminLink::new("/admin", "Back to dashboard")]),
 
         templates: get_template_names().await,
     }
@@ -979,7 +972,7 @@ async fn admin_sites_import(session: Session) -> Result<AdminSitesImportTemplate
     require_global_admin(&session).await?;
     Ok(AdminSitesImportTemplate {
         template_shared: AdminTemplateData::new("Import Site")
-            .with_links(vec![AdminLink::new("/admin/sites", "Back to sites")]),
+            .with_links(vec![AdminLink::new("/admin", "Back to dashboard")]),
     })
 }
 
@@ -1031,7 +1024,7 @@ async fn admin_sites_import_create(
     .map_err(|error| SiteError::internal(format!("failed to log import audit: {error}")))?;
     txn.commit().await?;
 
-    Ok(Redirect::to("/admin/sites?imported=1"))
+    Ok(Redirect::to("/admin?imported=1"))
 }
 
 async fn ensure_site_owner_membership<C: ConnectionTrait>(
@@ -1115,7 +1108,7 @@ async fn admin_sites_create(
         .map_err(|error| SiteError::internal(format!("failed to log membership audit: {error}")))?;
     }
     txn.commit().await?;
-    Ok(Redirect::to("/admin/sites"))
+    Ok(Redirect::to("/admin"))
 }
 
 async fn admin_login(
@@ -3581,7 +3574,7 @@ mod tests {
                 .expect("missing location header")
                 .to_str()
                 .expect("invalid location header"),
-            "/admin/sites?imported=1"
+            "/admin?imported=1"
         );
 
         let imported_site = crate::entities::site::Entity::find()
