@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand};
 use sea_orm::{EntityTrait, TransactionTrait};
 use serde_json::json;
+use tokio::fs;
 use url::Url;
 use uuid::Uuid;
 
@@ -185,6 +186,13 @@ pub enum SiteCommands {
         templates_dir: PathBuf,
         #[arg(long, default_value = crate::constants::RENDERED_DIR)]
         rendered_dir: PathBuf,
+    },
+    /// Export site data as a versioned JSON document.
+    Export {
+        #[arg(long)]
+        site_id: Uuid,
+        #[arg(long)]
+        output: Option<PathBuf>,
     },
 }
 
@@ -561,6 +569,17 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                         .await
                         .map_err(|err| err.to_string())?;
                 println!("rendered site {} files {}", site_id, files_written);
+                Ok(())
+            }
+            SiteCommands::Export { site_id, output } => {
+                let export = export_site(db_ref, site_id)
+                    .await
+                    .map_err(|error| format!("failed to export site: {error}"))?;
+                let json = serialize_site_export_pretty(&export)
+                    .map_err(|error| format!("failed to serialize site export: {error}"))?;
+                write_site_export_output(output.as_deref(), &json)
+                    .await
+                    .map_err(|error| format!("failed to write site export: {error}"))?;
                 Ok(())
             }
         },
@@ -1201,4 +1220,36 @@ fn parse_optional_datetime(
     let parsed = DateTime::parse_from_rfc3339(trimmed)
         .map_err(|error| format!("Invalid {label} datetime: {error}"))?;
     Ok(Some(parsed.with_timezone(&Utc)))
+}
+
+async fn write_site_export_output(output: Option<&Path>, json: &str) -> Result<(), String> {
+    if let Some(path) = output {
+        fs::write(path, json.as_bytes())
+            .await
+            .map_err(|error| error.to_string())?;
+    } else {
+        println!("{json}");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn write_site_export_output_writes_requested_file() {
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
+        let output = dir.path().join("site-export.json");
+        let payload = "{\n  \"format_version\": 1\n}";
+
+        write_site_export_output(Some(output.as_path()), payload)
+            .await
+            .expect("failed to write export output");
+
+        let written = fs::read_to_string(&output)
+            .await
+            .expect("failed to read export output");
+        assert_eq!(written, payload);
+    }
 }
