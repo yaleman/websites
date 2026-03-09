@@ -15,6 +15,32 @@ import {
 test.describe("content admin", () => {
   test.setTimeout(120_000);
 
+  test("shows a friendly 404 page for missing routes", async ({ browser }) => {
+    const harness = await setupHarness();
+
+    try {
+      const context = await browser.newContext({ ignoreHTTPSErrors: true });
+      const page = await context.newPage();
+      const response = await page.goto(
+        `https://127.0.0.1:${harness.port}/missing-page`,
+        { waitUntil: "domcontentloaded" },
+      );
+
+      expect(response).not.toBeNull();
+      expect(response?.status()).toBe(404);
+      await expect(page.getByRole("heading", { name: "Page Not Found" })).toBeVisible();
+      await expect(page.locator("body")).toContainText("could not be found");
+      await expect(page.getByRole("link", { name: "Go back to the home page" })).toHaveAttribute(
+        "href",
+        "/",
+      );
+
+      await context.close();
+    } finally {
+      await cleanupHarness(harness);
+    }
+  });
+
   test("shows content overview and metadata workflow pages", async ({ browser }) => {
     const harness = await setupHarness();
 

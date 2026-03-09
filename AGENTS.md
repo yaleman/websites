@@ -36,3 +36,4 @@ The system manages site metadata, content, tags, assets, and memberships in a SQ
 - 2026-03-09: Added per-site template overrides stored under the runtime upload root at `.site-template-overrides/<site_id>/`. Site preview and render load these overrides before the shared `site_templates/<template>/` files, and the admin UI currently edits template files only, not template asset directories.
 - 2026-03-09: Site memberships can only be granted to users who already exist from a prior login. The admin memberships page now presents an autocomplete picker over known user email/subject values instead of free-form subject entry.
 - 2026-03-09: User records now persist the OIDC display-name claim when available, and the admin user profile shows that display name alongside subject and email.
+- 2026-03-09: Unmatched routes now render a human-facing 404 page with the requested path and a link back to `/` instead of returning Axum's default plain response body.
