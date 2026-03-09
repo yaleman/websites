@@ -1091,7 +1091,10 @@ struct WordpressItem {
     slug: Option<String>,
     content: Option<String>,
     status: Option<String>,
+    post_date: Option<String>,
     post_date_gmt: Option<String>,
+    post_modified: Option<String>,
+    post_modified_gmt: Option<String>,
     link: Option<String>,
 }
 
@@ -1124,10 +1127,13 @@ pub async fn import_wordpress<C: ConnectionTrait>(
         let content = item.content.unwrap_or_default();
         let status = item.status.unwrap_or_else(|| "draft".to_string());
         let draft = status != "publish";
-        let published_at = item
-            .post_date_gmt
-            .as_deref()
-            .and_then(wordpress_date_to_rfc3339);
+        let created_at =
+            resolve_wordpress_timestamp(item.post_date_gmt.as_deref(), item.post_date.as_deref());
+        let updated_at = resolve_wordpress_timestamp(
+            item.post_modified_gmt.as_deref(),
+            item.post_modified.as_deref(),
+        );
+        let published_at = if draft { None } else { created_at };
         let mut known_aliases = Vec::new();
         if let Some(post_id) = item.post_id.as_deref().map(str::trim)
             && !post_id.is_empty()
@@ -1152,7 +1158,7 @@ pub async fn import_wordpress<C: ConnectionTrait>(
             continue;
         }
 
-        let content_model = create_content(
+        let imported_content = create_content(
             db,
             NewContent {
                 site_id,
@@ -1166,6 +1172,8 @@ pub async fn import_wordpress<C: ConnectionTrait>(
             },
         )
         .await?;
+        let content_model =
+            apply_imported_content_timestamps(db, imported_content, created_at, updated_at).await?;
 
         let mut alias_paths = HashSet::new();
         for alias_path in known_aliases {
@@ -1188,6 +1196,39 @@ pub async fn import_wordpress<C: ConnectionTrait>(
     }
 
     Ok(imported)
+}
+
+async fn apply_imported_content_timestamps<C: ConnectionTrait>(
+    db: &C,
+    content: entities::content_item::Model,
+    created_at: Option<DateTime<Utc>>,
+    last_updated: Option<DateTime<Utc>>,
+) -> Result<entities::content_item::Model, SiteError> {
+    if created_at.is_none() && last_updated.is_none() {
+        return Ok(content);
+    }
+
+    let mut active = content.into_active_model();
+    if let Some(created_at) = created_at {
+        active.created_at = Set(created_at);
+    }
+    active.last_updated = Set(last_updated);
+
+    let content = active.update(db).await?;
+
+    if let Some(created_at) = created_at
+        && let Some(revision) = entities::content_revision::Entity::find()
+            .filter(entities::content_revision::Column::ContentId.eq(content.id))
+            .filter(entities::content_revision::Column::RevisionNumber.eq(1))
+            .one(db)
+            .await?
+    {
+        let mut revision = revision.into_active_model();
+        revision.created_at = Set(created_at);
+        revision.update(db).await?;
+    }
+
+    Ok(content)
 }
 
 async fn wordpress_item_exists<C: ConnectionTrait>(
@@ -1296,13 +1337,16 @@ fn assign_wordpress_field(item: &mut WordpressItem, tag: &str, value: &str) {
         "wp:post_name" => item.slug = Some(value.to_string()),
         "wp:post_type" => item.post_type = Some(value.to_string()),
         "wp:status" => item.status = Some(value.to_string()),
+        "wp:post_date" => item.post_date = Some(value.to_string()),
         "wp:post_date_gmt" => item.post_date_gmt = Some(value.to_string()),
+        "wp:post_modified" => item.post_modified = Some(value.to_string()),
+        "wp:post_modified_gmt" => item.post_modified_gmt = Some(value.to_string()),
         "content:encoded" => item.content = Some(value.to_string()),
         _ => {}
     }
 }
 
-fn wordpress_date_to_rfc3339(value: &str) -> Option<DateTime<Utc>> {
+fn wordpress_date_to_utc(value: &str) -> Option<DateTime<Utc>> {
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed == "0000-00-00 00:00:00" {
         return None;
@@ -1311,6 +1355,15 @@ fn wordpress_date_to_rfc3339(value: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(&rfc3339)
         .ok()
         .map(|value| value.with_timezone(&Utc))
+}
+
+fn resolve_wordpress_timestamp(
+    gmt_value: Option<&str>,
+    local_value: Option<&str>,
+) -> Option<DateTime<Utc>> {
+    gmt_value
+        .and_then(wordpress_date_to_utc)
+        .or_else(|| local_value.and_then(wordpress_date_to_utc))
 }
 
 fn wordpress_link_to_alias(link: &str) -> Option<String> {
@@ -2656,7 +2709,10 @@ mod tests {
       <wp:post_name>imported-post</wp:post_name>
       <wp:post_type>post</wp:post_type>
       <wp:status>publish</wp:status>
+      <wp:post_date>2025-01-02 13:04:05</wp:post_date>
       <wp:post_date_gmt>2025-01-02 03:04:05</wp:post_date_gmt>
+      <wp:post_modified>2025-01-03 14:05:06</wp:post_modified>
+      <wp:post_modified_gmt>2025-01-03 04:05:06</wp:post_modified_gmt>
       <content:encoded><![CDATA[Hello world]]></content:encoded>
     </item>
   </channel>
@@ -2681,11 +2737,91 @@ mod tests {
             .await
             .expect("failed to list content");
         assert_eq!(content.len(), 1);
+        assert_eq!(
+            content[0].created_at,
+            Utc.with_ymd_and_hms(2025, 1, 2, 3, 4, 5)
+                .single()
+                .expect("invalid expected created_at")
+        );
+        assert_eq!(
+            content[0].last_updated,
+            Some(
+                Utc.with_ymd_and_hms(2025, 1, 3, 4, 5, 6)
+                    .single()
+                    .expect("invalid expected last_updated")
+            )
+        );
+        assert_eq!(content[0].published_at, Some(content[0].created_at));
+
+        let revisions = list_revisions(&db, content[0].id)
+            .await
+            .expect("failed to list revisions");
+        assert_eq!(revisions.len(), 1);
+        assert_eq!(revisions[0].created_at, content[0].created_at);
 
         let aliases = list_aliases(&db, site.id, None)
             .await
             .expect("failed to list aliases");
         assert_eq!(aliases.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn import_wordpress_falls_back_to_non_gmt_timestamps() {
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let file_path = temp_dir.path().join("import.xml");
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:wp="http://wordpress.org/export/1.2/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <item>
+      <title>Imported Page</title>
+      <link>https://example.com/imported-page/</link>
+      <wp:post_id>124</wp:post_id>
+      <wp:post_name>imported-page</wp:post_name>
+      <wp:post_type>page</wp:post_type>
+      <wp:status>publish</wp:status>
+      <wp:post_date>2025-02-03 04:05:06</wp:post_date>
+      <wp:post_modified>2025-02-04 05:06:07</wp:post_modified>
+      <content:encoded><![CDATA[Hello page]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"#;
+
+        fs::write(&file_path, xml.as_bytes())
+            .await
+            .expect("failed to write import file");
+
+        let imported = import_wordpress(
+            &db,
+            site.id,
+            file_path.to_str().expect("invalid path"),
+            "creator",
+        )
+        .await
+        .expect("failed to import wordpress data");
+        assert_eq!(imported, 1);
+
+        let content = list_content(&db, site.id, Some(PageType::Page))
+            .await
+            .expect("failed to list imported page content");
+        assert_eq!(content.len(), 1);
+        assert_eq!(
+            content[0].created_at,
+            Utc.with_ymd_and_hms(2025, 2, 3, 4, 5, 6)
+                .single()
+                .expect("invalid expected created_at")
+        );
+        assert_eq!(
+            content[0].last_updated,
+            Some(
+                Utc.with_ymd_and_hms(2025, 2, 4, 5, 6, 7)
+                    .single()
+                    .expect("invalid expected last_updated")
+            )
+        );
+        assert_eq!(content[0].published_at, Some(content[0].created_at));
     }
 
     #[tokio::test]
