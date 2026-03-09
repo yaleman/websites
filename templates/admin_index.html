@@ -1,4 +1,23 @@
 {% extends "base_template.html" %}
 {% block body %}
-
+{% if sites.is_empty() %}
+<p class="inline-body">No sites yet.</p>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Site</th>
+      <th>Short Name</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for site in sites %}
+    <tr>
+      <td><a href="/admin/site/{{ site.id }}/content">{{ site.full_title }}</a></td>
+      <td><a href="/admin/site/{{ site.id }}/content">{{ site.short_name }}</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
 {% endblock %}

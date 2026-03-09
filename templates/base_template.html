@@ -20,12 +20,12 @@
       </header>
       <nav>
         <a href="/admin">Dashboard</a>
-        <a href="/admin/sites">Sites </a>
         {% if let Some(site_id) = template_shared.site_id %}
         <a href="/admin/site/{{ site_id }}/content">Site Content</a>
         <a href="/admin/site/{{ site_id }}/render">Render Site</a>
         {% endif %}
         <a href="/admin/users/me">My Profile</a>
+        <a href="/admin/logout">Logout</a>
         {% block nav_links %}{% endblock %}
       </nav>
 

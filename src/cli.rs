@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand};
 use sea_orm::{EntityTrait, TransactionTrait};
 use serde_json::json;
+use tokio::fs;
 use url::Url;
 use uuid::Uuid;
 
@@ -186,6 +187,18 @@ pub enum SiteCommands {
         #[arg(long, default_value = crate::constants::RENDERED_DIR)]
         rendered_dir: PathBuf,
     },
+    /// Export site data as a versioned JSON document.
+    Export {
+        #[arg(long)]
+        site_id: Uuid,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Import a site from a versioned JSON document.
+    Import {
+        #[arg(long, value_name = "FILE")]
+        input: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -360,8 +373,8 @@ pub enum ContentCommands {
     ImportWordpress {
         #[arg(long)]
         site_id: Uuid,
-        #[arg(long, value_name = "FILE")]
-        file_path: String,
+        #[arg(long, value_name = "FILE", required = true)]
+        file_path: Vec<String>,
         #[arg(long)]
         creator_sub: String,
     },
@@ -561,6 +574,57 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                         .await
                         .map_err(|err| err.to_string())?;
                 println!("rendered site {} files {}", site_id, files_written);
+                Ok(())
+            }
+            SiteCommands::Export { site_id, output } => {
+                let export = export_site(db_ref, site_id)
+                    .await
+                    .map_err(|error| format!("failed to export site: {error}"))?;
+                let json = serialize_site_export_pretty(&export)
+                    .map_err(|error| format!("failed to serialize site export: {error}"))?;
+                write_site_export_output(output.as_deref(), &json)
+                    .await
+                    .map_err(|error| format!("failed to write site export: {error}"))?;
+                Ok(())
+            }
+            SiteCommands::Import { input } => {
+                let json = fs::read(&input)
+                    .await
+                    .map_err(|error| format!("failed to read site import file: {error}"))?;
+                let result = db_ref
+                    .transaction::<_, _, String>(|txn| {
+                        Box::pin(async move {
+                            let result = import_site_json(txn, &json)
+                                .await
+                                .map_err(|error| format!("failed to import site: {error}"))?;
+                            log_audit_event(
+                                txn,
+                                "system",
+                                "import_site",
+                                "site",
+                                result.site_id,
+                                Some(result.site_id),
+                                Some(json!({
+                                    "site_short_name": &result.site_short_name,
+                                    "created_users": result.created_users,
+                                    "reused_users": result.reused_users,
+                                    "warnings": &result.warnings,
+                                })),
+                            )
+                            .await
+                            .map_err(|error| format!("Failed to create audit event: {error}"))?;
+                            Ok(result)
+                        })
+                    })
+                    .await
+                    .map_err(|error| format!("failed to import site: {error}"))?;
+                println!(
+                    "imported site: {} ({})",
+                    result.site_id, result.site_short_name
+                );
+                for warning in result.warnings {
+                    println!("warning: {warning}");
+                }
                 Ok(())
             }
         },
@@ -1161,9 +1225,14 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 let imported = db_ref
                     .transaction::<_, _, String>(|txn| {
                         Box::pin(async move {
-                            let imported = import_wordpress(txn, site_id, &file_path, &creator_sub)
-                                .await
-                                .map_err(|err| err.to_string())?;
+                            let mut imported = 0usize;
+                            for current_file in &file_path {
+                                imported = imported.saturating_add(
+                                    import_wordpress(txn, site_id, current_file, &creator_sub)
+                                        .await
+                                        .map_err(|err| err.to_string())?,
+                                );
+                            }
                             log_audit_event(
                                 txn,
                                 &creator_sub,
@@ -1171,7 +1240,7 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                                 "content_item",
                                 &site_id,
                                 Some(site_id),
-                                Some(json!({"imported": imported})),
+                                Some(json!({"imported": imported, "files": file_path})),
                             )
                             .await
                             .map_err(|err| format!("Failed to create audit event: {}", err))?;
@@ -1201,4 +1270,65 @@ fn parse_optional_datetime(
     let parsed = DateTime::parse_from_rfc3339(trimmed)
         .map_err(|error| format!("Invalid {label} datetime: {error}"))?;
     Ok(Some(parsed.with_timezone(&Utc)))
+}
+
+async fn write_site_export_output(output: Option<&Path>, json: &str) -> Result<(), String> {
+    if let Some(path) = output {
+        fs::write(path, json.as_bytes())
+            .await
+            .map_err(|error| error.to_string())?;
+    } else {
+        println!("{json}");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn write_site_export_output_writes_requested_file() {
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
+        let output = dir.path().join("site-export.json");
+        let payload = "{\n  \"format_version\": 1\n}";
+
+        write_site_export_output(Some(output.as_path()), payload)
+            .await
+            .expect("failed to write export output");
+
+        let written = fs::read_to_string(&output)
+            .await
+            .expect("failed to read export output");
+        assert_eq!(written, payload);
+    }
+
+    #[test]
+    fn site_import_command_requires_input_path() {
+        let cli = Cli::try_parse_from([
+            "websites",
+            "--tls-cert-path",
+            "cert.pem",
+            "--tls-key-path",
+            "key.pem",
+            "--frontend-url",
+            "https://example.com",
+            "--client-id",
+            "client-id",
+            "--discovery-url",
+            "https://issuer.example.com",
+            "site",
+            "import",
+            "--input",
+            "site-export.json",
+        ])
+        .expect("failed to parse site import command");
+
+        match cli.command.expect("missing command") {
+            Commands::Site {
+                command: SiteCommands::Import { input },
+            } => assert_eq!(input, PathBuf::from("site-export.json")),
+            other => panic!("unexpected parsed command: {other:?}"),
+        }
+    }
 }
