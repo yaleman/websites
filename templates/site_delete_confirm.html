@@ -1,0 +1,18 @@
+{% extends "base_template.html" %}
+{% block body %}
+<section>
+  <h2>Delete {{ site_full_title }}?</h2>
+  <p class="inline-body">
+    This permanently removes the site, including its content, memberships, tags, assets, and template overrides.
+  </p>
+  <p>
+    Site ID: {{ site_id }}
+  </p>
+  <p>
+    Short Name: {{ site_short_name }}
+  </p>
+  <form method="post" action="/admin/site/{{ site_id }}/delete">
+    <button type="submit">Confirm site deletion</button>
+  </form>
+</section>
+{% endblock %}

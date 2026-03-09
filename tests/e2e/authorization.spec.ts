@@ -693,7 +693,7 @@ test.describe("admin authorization coverage", () => {
 	}
 });
 
-test("POST site delete requires a global admin session", async () => {
+test("site delete confirmation and deletion require a global admin session", async () => {
 	const harness = await setupHarness();
 
 	try {
@@ -705,6 +705,19 @@ test("POST site delete requires a global admin session", async () => {
 			"delete-site-owner",
 		);
 		try {
+			const confirmResponse = await ownerContext.api.fetch(
+				`/admin/site/${harness.siteId}/delete`,
+				{
+					method: "GET",
+					failOnStatusCode: false,
+					maxRedirects: 0,
+				},
+			);
+			expect(confirmResponse.status()).toBe(401);
+			expect(await confirmResponse.text()).toContain(
+				"global admin access is required",
+			);
+
 			const response = await ownerContext.api.fetch(
 				`/admin/site/${harness.siteId}/delete`,
 				{
@@ -727,6 +740,19 @@ test("POST site delete requires a global admin session", async () => {
 			true,
 		);
 		try {
+			const confirmResponse = await adminContext.api.fetch(
+				`/admin/site/${harness.siteId}/delete`,
+				{
+					method: "GET",
+					failOnStatusCode: false,
+					maxRedirects: 0,
+				},
+			);
+			expect(confirmResponse.status()).toBe(200);
+			expect(await confirmResponse.text()).toContain(
+				"Confirm Site Deletion",
+			);
+
 			const response = await adminContext.api.fetch(
 				`/admin/site/${harness.siteId}/delete`,
 				{
