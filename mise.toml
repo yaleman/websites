@@ -2,7 +2,7 @@
 pnpm = "latest"
 
 [tasks.check]
-depends = ["rust_clippy", "rust_fmt", "rust_test", "frontend_check"]
+depends = ["rust_clippy", "rust_fmt", "rust_test", "frontend_check", "frontend_e2e"]
 
 
 [tasks.rust_clippy]
