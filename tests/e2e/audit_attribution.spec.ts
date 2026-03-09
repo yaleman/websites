@@ -196,6 +196,7 @@ test.describe("web audit attribution", () => {
       const context = await createRoleApi(harness, actor, "owner");
       try {
         const targetSubject = "membership-target";
+        await createUser(harness, targetSubject);
         const createResponse = await context.api.fetch(
           `/admin/site/${harness.siteId}/memberships/new`,
           {

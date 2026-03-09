@@ -658,6 +658,74 @@ const initTagEditor = () => {
 	renderTags();
 };
 
+const initMembershipCreateForm = () => {
+	const form = document.querySelector<HTMLFormElement>("[data-membership-create]");
+	const queryInput = form?.querySelector<HTMLInputElement>(
+		"[data-membership-user-query]",
+	);
+	const userIdInput = form?.querySelector<HTMLInputElement>(
+		"[data-membership-user-id]",
+	);
+	const datalist = document.getElementById("membership-user-options");
+
+	if (!form || !queryInput || !userIdInput || !datalist) {
+		return;
+	}
+
+	const candidates = Array.from(datalist.querySelectorAll<HTMLOptionElement>("option"))
+		.map((option) => ({
+			value: option.value.trim(),
+			userId: option.dataset.userId ?? "",
+			subject: option.dataset.userSubject?.trim().toLowerCase() ?? "",
+			email: option.dataset.userEmail?.trim().toLowerCase() ?? "",
+		}))
+		.filter((candidate) => candidate.value.length > 0 && candidate.userId.length > 0);
+
+	const resolveCandidate = (rawValue: string) => {
+		const normalized = rawValue.trim().toLowerCase();
+		if (!normalized) {
+			return null;
+		}
+		return (
+			candidates.find((candidate) => candidate.value.toLowerCase() === normalized) ??
+			candidates.find((candidate) => candidate.subject === normalized) ??
+			candidates.find((candidate) => candidate.email === normalized) ??
+			null
+		);
+	};
+
+	const syncSelection = () => {
+		const match = resolveCandidate(queryInput.value);
+		userIdInput.value = match?.userId ?? "";
+		queryInput.setCustomValidity(
+			queryInput.value.trim() && !match ? "Choose an existing user." : "",
+		);
+		return match;
+	};
+
+	queryInput.addEventListener("input", () => {
+		userIdInput.value = "";
+		queryInput.setCustomValidity("");
+		syncSelection();
+	});
+
+	queryInput.addEventListener("change", () => {
+		syncSelection();
+	});
+
+	queryInput.addEventListener("blur", () => {
+		syncSelection();
+	});
+
+	form.addEventListener("submit", (event) => {
+		const match = syncSelection();
+		if (!match) {
+			event.preventDefault();
+			queryInput.reportValidity();
+		}
+	});
+};
+
 const initEditor = () => {
 	const root = document.getElementById("editor");
 	const textarea = document.getElementById(
@@ -724,10 +792,12 @@ if (document.readyState === "loading") {
 	document.addEventListener("DOMContentLoaded", () => {
 		initTransientMessages();
 		initTagEditor();
+		initMembershipCreateForm();
 		initEditor();
 	});
 } else {
 	initTransientMessages();
 	initTagEditor();
+	initMembershipCreateForm();
 	initEditor();
 }
