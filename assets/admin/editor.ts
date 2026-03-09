@@ -256,12 +256,32 @@ const createAssetModal = (editor: Editor) => {
 		setSelectedAsset(asset);
 	};
 
+	const insertImageMarkup = (options: {
+		src: string;
+		alt?: string;
+		href?: string;
+	}) => {
+		const image = document.createElement("img");
+		image.src = options.src;
+		if (options.alt) {
+			image.alt = options.alt;
+		}
+		if (!options.href) {
+			editor.chain().focus().insertContent(image.outerHTML).run();
+			return;
+		}
+
+		const link = document.createElement("a");
+		link.href = options.href;
+		link.appendChild(image);
+		editor.chain().focus().insertContent(link.outerHTML).run();
+	};
+
 	const insertSelection = () => {
 		const altText = altInput?.value.trim();
 		const externalUrl = externalInput?.value.trim();
 		if (externalUrl) {
-			const attrs = altText ? { src: externalUrl, alt: altText } : { src: externalUrl };
-			editor.chain().focus().setImage(attrs).run();
+			insertImageMarkup({ src: externalUrl, alt: altText });
 			close();
 			return;
 		}
@@ -270,30 +290,16 @@ const createAssetModal = (editor: Editor) => {
 			return;
 		}
 		if (selectedAsset.has_thumbnail && selectedAsset.thumbnail_url) {
-			editor
-				.chain()
-				.focus()
-				.insertContent({
-					type: "image",
-					attrs: {
-						src: selectedAsset.thumbnail_url,
-						alt: altText || null,
-					},
-					marks: [
-						{
-							type: "link",
-							attrs: {
-								href: selectedAsset.original_url,
-							},
-						},
-					],
-				})
-				.run();
+			insertImageMarkup({
+				src: selectedAsset.thumbnail_url,
+				alt: altText,
+				href: selectedAsset.original_url,
+			});
 		} else {
-			const attrs = altText
-				? { src: selectedAsset.original_url, alt: altText }
-				: { src: selectedAsset.original_url };
-			editor.chain().focus().setImage(attrs).run();
+			insertImageMarkup({
+				src: selectedAsset.original_url,
+				alt: altText,
+			});
 		}
 		close();
 	};

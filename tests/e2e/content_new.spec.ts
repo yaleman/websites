@@ -32,6 +32,12 @@ test.describe("content new editor", () => {
         harness,
         "test-user",
       );
+      const consoleErrors: string[] = [];
+      page.on("console", (message) => {
+        if (message.type() === "error") {
+          consoleErrors.push(message.text());
+        }
+      });
       await page.goto(
         `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/new`,
         { waitUntil: "domcontentloaded" },
@@ -61,6 +67,9 @@ test.describe("content new editor", () => {
           `.ProseMirror a[href="/media/images/${asset.storageBasename}"] img[src="/media/images/${asset.thumbnailFilename}"]`,
         ),
       ).toBeVisible();
+      expect(
+        consoleErrors.filter((message) => message.includes("contentMatchAt")),
+      ).toHaveLength(0);
       await page.locator(".ProseMirror").click();
       await page.keyboard.type("Preview check");
       await expect(
