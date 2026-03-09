@@ -17,9 +17,9 @@ use crate::{
     delete_membership, delete_tag, get_membership_by_id, get_membership_for_subject, get_revision,
     get_revision_by_number, get_user_by_id, list_aliases, list_assets, list_content,
     list_content_tags, list_memberships, list_memberships_for_user_id, list_revisions, list_sites,
-    list_sites_for_subject, list_tags, list_users_by_ids, render_content_preview, render_site,
-    resolve_site_template_override_root, resolve_upload_root, search_content, sync_tags_to_content,
-    update_content, update_membership_role, update_site_settings,
+    list_sites_for_subject, list_tags, list_users, list_users_by_ids, render_content_preview,
+    render_site, resolve_site_template_override_root, resolve_upload_root, search_content,
+    sync_tags_to_content, update_content, update_membership_role, update_site_settings,
 };
 use anyhow::Context;
 use askama::Template;
@@ -305,6 +305,7 @@ struct AdminMembershipsTemplate {
     site_full_title: String,
     roles: Vec<SiteRole>,
     memberships: Vec<AdminMembershipRow>,
+    membership_candidates: Vec<AdminMembershipCandidateRow>,
 }
 
 #[allow(dead_code)]
@@ -355,6 +356,14 @@ struct AdminMembershipRow {
     profile_href: Option<String>,
     update_href: String,
     remove_href: String,
+}
+
+#[derive(Debug)]
+struct AdminMembershipCandidateRow {
+    user_id: Uuid,
+    subject: String,
+    email: Option<String>,
+    search_value: String,
 }
 
 #[derive(Debug)]
@@ -450,6 +459,7 @@ struct CreateTagForm {
 #[derive(Debug, Serialize, Deserialize)]
 struct MembershipCreateForm {
     subject: String,
+    user_id: Option<Uuid>,
     role: SiteRole,
 }
 
@@ -1095,6 +1105,10 @@ async fn admin_site_memberships(
         .into_iter()
         .map(|user| (user.id, (user.subject, user.email)))
         .collect::<HashMap<_, _>>();
+    let membership_user_ids = user_map
+        .keys()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
     let membership_rows = memberships
         .into_iter()
         .map(|membership| {
@@ -1116,6 +1130,24 @@ async fn admin_site_memberships(
             }
         })
         .collect();
+    let membership_candidates = list_users(state.db.as_ref())
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load candidate users: {error}")))?
+        .into_iter()
+        .filter(|user| !membership_user_ids.contains(&user.id))
+        .map(|user| {
+            let search_value = match &user.email {
+                Some(email) => format!("{email} ({})", user.subject),
+                None => user.subject.clone(),
+            };
+            AdminMembershipCandidateRow {
+                user_id: user.id,
+                subject: user.subject,
+                email: user.email,
+                search_value,
+            }
+        })
+        .collect();
 
     Ok(AdminMembershipsTemplate {
         template_shared: AdminTemplateData::new("Memberships").with_links(vec![
@@ -1128,6 +1160,7 @@ async fn admin_site_memberships(
         site_id: site.id,
         site_full_title: site.full_title,
         memberships: membership_rows,
+        membership_candidates,
         roles: SiteRole::all_without_admin(),
     })
 }
@@ -1205,18 +1238,35 @@ async fn admin_site_membership_create(
     Form(form): Form<MembershipCreateForm>,
 ) -> Result<Redirect, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Owner).await?;
-    let subject = form.subject.trim();
-    if subject.is_empty() {
-        return Err(SiteError::internal("missing subject".to_string()));
-    }
+    let subject = form.subject.trim().to_string();
+    let user = if let Some(user_id) = form.user_id {
+        let user = get_user_by_id(state.db.as_ref(), user_id)
+            .await
+            .map_err(|error| SiteError::internal(format!("failed to load user: {error}")))?;
+        user.ok_or_else(|| SiteError::BadRequest("unknown user".to_string()))?
+    } else {
+        let subject = subject.trim();
+        if subject.is_empty() {
+            return Err(SiteError::internal("missing subject".to_string()));
+        }
+        entities::user::Entity::find()
+            .filter(
+                Condition::any()
+                    .add(entities::user::Column::Subject.eq(subject))
+                    .add(entities::user::Column::Email.eq(subject)),
+            )
+            .one(state.db.as_ref())
+            .await
+            .map_err(|error| SiteError::internal(format!("failed to load user: {error}")))?
+            .ok_or_else(|| {
+                SiteError::BadRequest(
+                    "user must log in before site access can be granted".to_string(),
+                )
+            })?
+    };
     let actor = current_user(&session).await?.subject;
     let txn = state.db.begin().await?;
     let actor = actor.clone();
-    let subject = subject.to_string();
-    // TODO the user should already exist here
-    let user = upsert_user_login(&txn, &subject, None)
-        .await
-        .map_err(|error| SiteError::internal(format!("failed to upsert user: {error}")))?;
     let membership = create_membership(
         &txn,
         crate::NewMembership {

@@ -413,16 +413,20 @@ const routeCases: RouteCase[] = [
     requiredRole: "owner",
     lowerRole: "editor",
     successStatus: 303,
-    prepare: async (harness, _fixtures, scenario) => ({
-      path: `/admin/site/${harness.siteId}/memberships/new`,
-      form: {
-        subject: `created-member-${scenario}-${Date.now()}`,
-        role: "viewer",
-      },
-      assertSuccess: async (response) => {
-        expect(response.headers()["location"]).toBe(`/admin/site/${harness.siteId}/memberships`);
-      },
-    }),
+    prepare: async (harness, _fixtures, scenario) => {
+      const subject = `created-member-${scenario}-${Date.now()}`;
+      await createUser(harness, subject);
+      return {
+        path: `/admin/site/${harness.siteId}/memberships/new`,
+        form: {
+          subject,
+          role: "viewer",
+        },
+        assertSuccess: async (response) => {
+          expect(response.headers()["location"]).toBe(`/admin/site/${harness.siteId}/memberships`);
+        },
+      };
+    },
   },
   {
     name: "membership update",

@@ -148,6 +148,34 @@ test.describe("content new editor", () => {
     }
   });
 
+  test("adds an existing user to memberships from the autocomplete input", async ({ browser }) => {
+    const harness = await setupHarness();
+
+    try {
+      const ownerId = await createUser(harness, "membership-owner");
+      await addMembership(harness, ownerId, "owner");
+      await createUser(harness, "membership-target");
+      const { context, page } = await createAuthenticatedPage(
+        browser,
+        harness,
+        "membership-owner",
+      );
+
+      await page.goto(
+        `https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/memberships`,
+        { waitUntil: "domcontentloaded" },
+      );
+
+      await page.getByLabel("User").fill("membership-target");
+      await page.getByRole("button", { name: "Add member" }).click();
+      await expect(page.locator('[aria-label="membership-target"]')).toBeVisible();
+
+      await context.close();
+    } finally {
+      await cleanupHarness(harness);
+    }
+  });
+
   test("saves back to the source editor and shows a toast", async ({ browser }) => {
     const harness = await setupHarness();
 
