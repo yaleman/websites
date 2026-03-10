@@ -16,3 +16,5 @@ rendered/*
 !rendered/.gitkeeper
 site_templates/
 !site_templates/default/
+# rendered documentation
+docs/book/

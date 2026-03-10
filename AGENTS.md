@@ -12,7 +12,7 @@ The system manages site metadata, content, tags, assets, and memberships in a SQ
 - Do not use the SeaORM CLI.
 - All DB schema changes must be made through migration files in the db crate.
 - If more than one database modification is needed, start a transaction and use it, so that failures roll back all changes.
-- Any change to system design must include an update to this file.
+- Any change to system design must update docs/src/System-Design-Updates.md.
 - A task is not complete until `mise check` passes.
 - Commit changes once a user request is confirmed complete.
 - Tests must use run-specific temporary directories for filesystem-emulated state; use OS temp locations (for example /tmp via tempfile/mkdtemp) and never create test temp workspaces inside the repository tree. For database-backed tests, prefer in-memory databases when feasible. Per test, use one fresh instance of every mutable dependency (filesystem roots, database, and service process) and never reuse local persistent state.
@@ -20,25 +20,9 @@ The system manages site metadata, content, tags, assets, and memberships in a SQ
 - Fill page data primarily through Askama templates rendered on the server; frontend JavaScript should be used for client-side actions and progressive enhancement, not initial content hydration when template rendering can provide the content.
 - Runtime logging must use `tracing` only, include timestamps, and write to stdout.
 - In async runtime codepaths, use `tokio::fs` instead of `std::fs` for filesystem operations.
-- Prefer workspace-level dependency declarations and `workspace = true` member usage to keep crate versions aligned.
 - Binaries should parse CLI arguments and environment variables via `clap`.
 - All askama templates should derive `askama_web::WebTemplate` so we don't have to manually implement `IntoResponse`
 - All admin templates should be based on `base_template.html` to keep navigation/UI consistent.
 - Each admin view should have its own template file (no shared admin view template).
 
-## System Design Updates
-
-- 2026-03-07: Replaced raw SQL schema bootstrapping with SeaORM migrations (`sea-orm-migration`) and set SQLite foreign keys via the connection URL.
-- 2026-03-08: Documented the rendering split: admin UI templates use Askama from `templates/`, while site previews and published site output use Tera from `site_templates/`.
-- 2026-03-08: Site previews now rewrite `/assets/...` references to an authenticated preview asset route that serves files from `site_templates/<template>/assets/`.
-- 2026-03-08: Added a global user admin flag that bypasses per-site membership checks for admin routes; site memberships remain limited to viewer/author/editor/owner roles. Published site rendering now copies uploaded media from the resolved runtime upload root instead of assuming a fixed relative path.
-- 2026-03-08: Added a user profile admin view keyed by database user UUID. Global admins can view any user profile, and non-admin users can view only their own profile; the view shows stored user details plus site memberships.
-- 2026-03-09: Added per-site template overrides stored under the runtime upload root at `.site-template-overrides/<site_id>/`. Site preview and render load these overrides before the shared `site_templates/<template>/` files, and the admin UI currently edits template files only, not template asset directories.
-- 2026-03-09: Site memberships can only be granted to users who already exist from a prior login. The admin memberships page now presents an autocomplete picker over known user email/subject values instead of free-form subject entry.
-- 2026-03-09: User records now persist the OIDC display-name claim when available, and the admin user profile shows that display name alongside subject and email.
-- 2026-03-09: Unmatched routes now render a human-facing 404 page with the requested path and a link back to `/` instead of returning Axum's default plain response body.
-- 2026-03-09: `content_revision_alias` and `content_revision_tag` now store a direct `content_id` foreign key to `content_item` alongside `revision_id`, so revision child rows remain tied to the owning content item without relying on an indirect join.
-- 2026-03-09: Site transfer uses one versioned JSON document for export and import. CLI and admin UI can import/export site-scoped database records, but v1 only records filesystem metadata for uploaded media and template overrides, not file bytes.
-- 2026-03-09: Site exports are available through the CLI and an owner-only admin download endpoint as a versioned JSON document containing site-scoped database records plus uploaded media/template-override file metadata, but not file bytes.
-- 2026-03-09: Site settings now expose a delete-site action only to global admins; deletion removes the site row plus site-owned uploaded media files and template override files.
-- 2026-03-09: Admin destructive POST flows can use session-backed CSRF tokens issued and validated through a reusable `Session` extension; site deletion confirmation uses this token check.
+@docs/src/System-Design-Updates.md

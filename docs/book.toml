@@ -1,0 +1,14 @@
+[book]
+title = "Websites"
+authors = ["James Hodgkinson"]
+language = "en"
+
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "ayu"
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+
+# mermaid graph rendering, you need mdbook-mermaid installed for this to work
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
