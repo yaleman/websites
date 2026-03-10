@@ -23,9 +23,7 @@ pub mod user;
 )]
 #[serde(rename_all = "lowercase")]
 pub enum PageType {
-    // #[sea_orm(string_value = "post")]
     Post,
-    // #[sea_orm(string_value = "page")]
     Page,
 }
 
@@ -81,6 +79,13 @@ impl PageType {
         match self {
             PageType::Post => "post.html",
             PageType::Page => "page.html",
+        }
+    }
+
+    pub fn css_class(&self) -> &'static str {
+        match self {
+            PageType::Post => "post",
+            PageType::Page => "page",
         }
     }
 }

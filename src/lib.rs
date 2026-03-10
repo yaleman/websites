@@ -1,4 +1,5 @@
 use crate::constants::{CUSTOMIZABLE_TEMPLATE_FILES, REQUIRED_TEMPLATES, SITE_TEMPLATES_DIR};
+use crate::content_scan::expand_asset_shortcodes;
 use crate::web::SiteRole;
 use crate::{entities::PageType, errors::SiteError};
 use chrono::{DateTime, Datelike, Utc};
@@ -21,8 +22,10 @@ use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;
 
+pub mod api_docs;
 pub mod cli;
 pub mod constants;
+pub mod content_scan;
 pub mod csrf;
 pub mod db;
 pub mod entities;
@@ -302,7 +305,7 @@ async fn render_site_with_overrides(
             routes.insert(alias.alias_path);
         }
 
-        let html = render_markdown(&item.page_content);
+        let html = render_content_html(db, item.site_id, &item.page_content).await?;
 
         let tags = load_tag_names(db, item.id).await?;
         let tag_links = render_tag_links(&tags);
@@ -453,7 +456,7 @@ async fn render_content_preview_with_overrides(
     let template_root = Path::new(templates_dir).join(site.template_name.clone());
     let tera = load_site_templates(&template_root, override_root).await?;
 
-    let html = render_markdown(&content.page_content);
+    let html = render_content_html(db, content.site_id, &content.page_content).await?;
 
     let tags = load_tag_names(db, content.id).await?;
     let tag_links = render_tag_links(&tags);
@@ -490,6 +493,15 @@ fn render_markdown(value: &str) -> String {
         },
     )
     .expect("markdown rendering should not fail without MDX support")
+}
+
+async fn render_content_html(
+    db: &DatabaseConnection,
+    site_id: Uuid,
+    value: &str,
+) -> Result<String, SiteError> {
+    let expanded = expand_asset_shortcodes(db, site_id, value).await?;
+    Ok(render_markdown(&expanded))
 }
 
 async fn load_template(
@@ -3410,6 +3422,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn render_content_preview_expands_asset_shortcode_into_figure() {
+        let db = test_db_start().await;
+        let site = create_site_with_template_fixture(&db, "asset-preview", "asset-preview").await;
+        let templates_dir = TempDir::new().expect("failed to create templates dir");
+        let template_root = templates_dir.path().join("asset-preview");
+        fs::create_dir_all(&template_root)
+            .await
+            .expect("failed to create template root");
+        fs::write(
+            template_root.join("base_template.html"),
+            r#"<!doctype html><html><body>{% block content %}{% endblock %}</body></html>"#,
+        )
+        .await
+        .expect("failed to write base template");
+        fs::write(
+            template_root.join("page.html"),
+            r#"{% extends "base_template.html" %}{% block content %}<article>{{content}}</article>{% endblock %}"#,
+        )
+        .await
+        .expect("failed to write page template");
+
+        let asset = create_asset(
+            &db,
+            NewAsset {
+                site_id: site.id,
+                uploader_sub: "creator".to_string(),
+                original_filename: "preview-image.png".to_string(),
+                storage_basename: "preview-image.png".to_string(),
+                mime_type: "image/png".to_string(),
+                byte_length: 10,
+                width: Some(640),
+                height: Some(480),
+            },
+        )
+        .await
+        .expect("failed to create asset");
+        create_asset_variant(
+            &db,
+            NewAssetVariant {
+                asset_id: asset.id,
+                variant_kind: "thumbnail".to_string(),
+                filename: "preview-image_thumb.png".to_string(),
+                mime_type: "image/png".to_string(),
+                byte_length: 5,
+                width: Some(320),
+                height: Some(240),
+            },
+        )
+        .await
+        .expect("failed to create thumbnail variant");
+
+        let content = create_content(
+            &db,
+            NewContent {
+                site_id: site.id,
+                page_type: PageType::Page,
+                title: "Asset Preview".to_string(),
+                slug: "asset-preview".to_string(),
+                page_content: format!(
+                    "Before [[asset id=\"{}\" variant=\"thumbnail\" alt=\"Preview alt\" title=\"Preview caption\"]] after",
+                    asset.id
+                ),
+                draft: true,
+                creator_sub: "creator".to_string(),
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create content");
+
+        let rendered = render_content_preview(
+            &db,
+            site.id,
+            content.id,
+            templates_dir
+                .path()
+                .to_str()
+                .expect("invalid templates path"),
+        )
+        .await
+        .expect("failed to render preview");
+
+        assert!(rendered.contains("<figure><img"));
+        assert!(rendered.contains("src=\"/media/images/preview-image_thumb.png\""));
+        assert!(rendered.contains("<figcaption>Preview caption</figcaption>"));
+    }
+
+    #[tokio::test]
     async fn render_site_supports_template_inheritance() {
         let db = test_db_start().await;
         let site = create_site_with_template_fixture(&db, "render-site", "custom-render").await;
@@ -3526,6 +3626,109 @@ mod tests {
 
         assert!(page_output.contains(r#"<span class="inline-html">inline html</span>"#));
         assert!(!page_output.contains("&lt;span"));
+    }
+
+    #[tokio::test]
+    async fn render_site_expands_asset_shortcode_into_figure() {
+        let db = test_db_start().await;
+        let site = create_site_with_template_fixture(&db, "asset-site", "asset-site").await;
+        let templates_dir = TempDir::new().expect("failed to create templates dir");
+        let rendered_dir = TempDir::new().expect("failed to create rendered dir");
+        let upload_root = TempDir::new().expect("failed to create upload root");
+        let template_root = templates_dir.path().join("asset-site");
+        fs::create_dir_all(&template_root)
+            .await
+            .expect("failed to create template root");
+        fs::write(
+            template_root.join("base_template.html"),
+            r#"<!doctype html><html><body>{% block content %}{% endblock %}</body></html>"#,
+        )
+        .await
+        .expect("failed to write base template");
+        fs::write(
+            template_root.join("page.html"),
+            r#"{% extends "base_template.html" %}{% block content %}<article>{{content}}</article>{% endblock %}"#,
+        )
+        .await
+        .expect("failed to write page template");
+
+        let asset = create_asset(
+            &db,
+            NewAsset {
+                site_id: site.id,
+                uploader_sub: "creator".to_string(),
+                original_filename: "render-image.png".to_string(),
+                storage_basename: "render-image.png".to_string(),
+                mime_type: "image/png".to_string(),
+                byte_length: 10,
+                width: Some(1024),
+                height: Some(768),
+            },
+        )
+        .await
+        .expect("failed to create asset");
+        create_asset_variant(
+            &db,
+            NewAssetVariant {
+                asset_id: asset.id,
+                variant_kind: "thumbnail".to_string(),
+                filename: "render-image_thumb.png".to_string(),
+                mime_type: "image/png".to_string(),
+                byte_length: 5,
+                width: Some(320),
+                height: Some(240),
+            },
+        )
+        .await
+        .expect("failed to create thumbnail variant");
+        fs::write(upload_root.path().join("render-image.png"), b"image")
+            .await
+            .expect("failed to write asset file");
+        fs::write(upload_root.path().join("render-image_thumb.png"), b"thumb")
+            .await
+            .expect("failed to write thumbnail file");
+
+        let content = create_content(
+            &db,
+            NewContent {
+                site_id: site.id,
+                page_type: PageType::Page,
+                title: "Asset Render".to_string(),
+                slug: "asset-render".to_string(),
+                page_content: format!(
+                    "[[asset id=\"{}\" variant=\"thumbnail\" alt=\"Render alt\" title=\"Render caption\"]]",
+                    asset.id
+                ),
+                draft: false,
+                creator_sub: "creator".to_string(),
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create content");
+
+        render_site(
+            &db,
+            site.id,
+            templates_dir.path(),
+            rendered_dir.path(),
+            upload_root.path(),
+        )
+        .await
+        .expect("failed to render site");
+
+        let rendered_root = rendered_dir.path().join(site.short_name);
+        let page_output = fs::read_to_string(
+            rendered_root
+                .join(content_primary_route(&content))
+                .join("index.html"),
+        )
+        .await
+        .expect("failed to read page output");
+
+        assert!(page_output.contains("<figure><img"));
+        assert!(page_output.contains("src=\"/media/images/render-image_thumb.png\""));
+        assert!(page_output.contains("<figcaption>Render caption</figcaption>"));
     }
 
     #[tokio::test]
