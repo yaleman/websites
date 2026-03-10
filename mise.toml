@@ -2,7 +2,13 @@
 pnpm = "latest"
 
 [tasks.check]
-depends = ["rust_clippy", "rust_fmt", "rust_test", "frontend_check", "frontend_e2e"]
+depends = [
+    "rust_clippy",
+    "rust_fmt",
+    "rust_test",
+    "frontend_check",
+    "frontend_e2e",
+]
 
 
 [tasks.rust_clippy]
@@ -30,6 +36,12 @@ run = "cargo run"
 
 [tasks.coverage]
 run = "cargo tarpaulin --lib --out Html --exclude-files src/cli.rs"
+
+[tasks.docs_build]
+run = "cd docs && mdbook build"
+
+[tasks.docs_serve]
+run = "cd docs && mdbook serve"
 
 [tasks.coveralls]
 run = [
