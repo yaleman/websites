@@ -33,9 +33,11 @@ impl IntoResponse for SiteError {
             SiteError::Internal(msg) => {
                 (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(msg)).into_response()
             }
-            SiteError::UnAuthorized(msg) => {
-                (axum::http::StatusCode::UNAUTHORIZED, msg).into_response()
-            }
+            SiteError::UnAuthorized(msg) => (
+                axum::http::StatusCode::UNAUTHORIZED,
+                format!("{}<br /><a href=\"/\">Login</a>", msg),
+            )
+                .into_response(),
             SiteError::Database(error) => {
                 (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(error)).into_response()
             }
@@ -44,16 +46,16 @@ impl IntoResponse for SiteError {
             }
             SiteError::TeraTemplate(err) => (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(format!("Template rendering error: {:?}", err)),
+                format!("Template rendering error: {:?}", err),
             )
                 .into_response(),
             SiteError::SiteNotFound(identifier) => (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                axum::http::StatusCode::NOT_FOUND,
                 Json(json!({"message" :  "Site Not Found", "identifier" : identifier})),
             )
                 .into_response(),
             SiteError::ContentNotFound(identifier) => (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                axum::http::StatusCode::NOT_FOUND,
                 Json(json!({"message" :  "Content Not Found", "identifier" : identifier})),
             )
                 .into_response(),
@@ -69,7 +71,7 @@ impl IntoResponse for SiteError {
                 .into_response(),
             SiteError::MembershipNotFound(identifier) => (
                 axum::http::StatusCode::NOT_FOUND,
-                Json(json!({"message" :  "Membership Not Found", "identifier" : identifier})),
+                Json(json!({"message" :  "Site Permission Membership Not Found", "identifier" : identifier})),
             )
                 .into_response(),
         }

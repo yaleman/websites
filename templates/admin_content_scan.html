@@ -1,0 +1,227 @@
+{% extends "base_template.html" %}
+{% block header %}
+    <link rel="stylesheet" href="/admin/assets/remediation.css" />
+    <script src="/admin/assets/remediation.js" defer></script>
+{% endblock %}
+{% block body %}
+<section class="scan-shell">
+  <form method="post" action="/admin/site/{{ site_id }}/content/scan" class="scan-panel">
+    <div class="scan-panel__intro">
+      <h2>Scan Site Content</h2>
+      <p>
+        Enter one or more internal domains, then scan the least recently updated content first for link rewrites, image remediation, simple tag cleanup, and review-only HTML.
+      </p>
+    </div>
+    <div class="scan-panel__grid">
+      <div class="form-field">
+        <label for="domains">Internal Domains</label>
+        <textarea id="domains" name="domains" rows="3" placeholder="example.com&#10;www.example.com">{{ domains }}</textarea>
+      </div>
+      <div class="form-field">
+        <label for="scan_limit">Pages With Issues To Show</label>
+        <input id="scan_limit" name="scan_limit" type="number" min="1" max="50" value="{{ scan_limit }}" />
+      </div>
+      <div class="form-field">
+        <label for="filter">Issue Filter</label>
+        <select id="filter" name="filter">
+          {% for option in filter_options %}
+          <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit">Scan content</button>
+    </div>
+  </form>
+
+    {% if let Some(summary) = summary %}
+    <section class="scan-summary">
+      <div class="scan-summary__stats">
+        <article>
+          <strong>{{ summary.inspected_count }}</strong>
+          <span>pages inspected</span>
+        </article>
+        <article>
+          <strong>{{ summary.result_count }}</strong>
+          <span>issue pages shown</span>
+        </article>
+        <article>
+          <strong>{{ summary.issue_count }}</strong>
+          <span>issues found</span>
+      </article>
+      <article>
+        <strong>{{ summary.applied_count }}</strong>
+        <span>changes applied</span>
+      </article>
+    </div>
+    {% if !summary.updated_items.is_empty() %}
+    <div class="scan-summary__changes">
+      <h3>Updated Content</h3>
+      <ul>
+        {% for item in summary.updated_items %}
+        <li><strong>{{ item.title }}</strong> updated with {{ item.applied_count }} change(s).</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+    {% if !summary.skipped_messages.is_empty() %}
+    <div class="scan-summary__changes">
+      <h3>Skipped</h3>
+      <ul>
+        {% for message in summary.skipped_messages %}
+        <li>{{ message }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if results.is_empty() %}
+  <section class="scan-empty">
+    <p>No scan results to show yet.</p>
+  </section>
+  {% else %}
+  <form
+    method="post"
+    action="/admin/site/{{ site_id }}/content/scan/apply"
+    class="scan-results"
+    data-remediation-root
+    data-site-id="{{ site_id }}">
+    <input type="hidden" name="domains" value="{{ domains }}" />
+    <input type="hidden" name="scan_limit" value="{{ scan_limit }}" />
+    <input type="hidden" name="filter" value="{{ current_filter }}" />
+    <input type="hidden" name="selected_issue_ids_json" value="[]" data-selected-issues-json />
+    <input type="hidden" name="remote_import_issue_ids_json" value="[]" data-remote-import-json />
+    <input type="hidden" name="asset_selections_json" value="{}" data-asset-selections-json />
+
+    <div class="scan-results__actions">
+      <button type="submit" class="save">Apply selected fixes</button>
+    </div>
+
+    {% for result in results %}
+    <section class="scan-card">
+      <header class="scan-card__header">
+        <div>
+          <h2>{{ result.title }}</h2>
+          <p>{{ result.issue_count }} issue(s), {{ result.fixable_count }} fixable, {{ result.review_count }} review-only.</p>
+        </div>
+        <div class="scan-card__links">
+          <a href="{{ result.detail_href }}">Details</a>
+          <a href="{{ result.edit_href }}">Open editor</a>
+        </div>
+      </header>
+      <div class="scan-issues">
+        {% for issue in result.issues %}
+        <article class="scan-issue{% if !issue.can_apply %} scan-issue--review{% endif %}">
+          <header class="scan-issue__header">
+            <label class="scan-issue__toggle">
+              <input
+                type="checkbox"
+                value="{{ issue.issue_id }}"
+                data-issue-select
+                {% if issue.selected %}checked{% endif %}
+                {% if !issue.can_apply %}disabled{% endif %} />
+              <span>{{ issue.label }}</span>
+            </label>
+            <span class="scan-issue__kind">{{ issue.kind }}</span>
+          </header>
+          <p class="scan-issue__snippet">{{ issue.snippet }}</p>
+          <div class="scan-issue__diff">
+            <div>
+              <h3>Current</h3>
+              <pre>{{ issue.current_value }}</pre>
+            </div>
+            <div>
+              <h3>Proposed</h3>
+              <pre>{{ issue.proposed_value }}</pre>
+            </div>
+          </div>
+          {% if issue.needs_asset || issue.can_import_remote %}
+          <div
+            class="scan-issue__asset"
+            data-remediation-issue
+            data-issue-id="{{ issue.issue_id }}"
+            data-selected-asset="{{ issue.selected_asset_id }}"
+            data-selected-label="{{ issue.selected_asset_label }}"
+            data-remote-url="{{ issue.remote_url }}">
+            <div class="scan-issue__asset-summary" data-selected-asset-label>
+              {% if issue.selected_asset_label != "" %}
+              {{ issue.selected_asset_label }}
+              {% else %}
+              No asset selected yet.
+              {% endif %}
+            </div>
+            <div class="scan-issue__asset-actions">
+              <button type="button" class="editor-button" data-pick-asset>Choose asset</button>
+              {% if issue.can_import_remote %}
+              <label class="scan-issue__remote">
+                <input type="checkbox" value="{{ issue.issue_id }}" data-remote-import />
+                Import remote image
+              </label>
+              <span class="scan-issue__remote-url">{{ issue.remote_url }}</span>
+              {% endif %}
+            </div>
+          </div>
+          {% endif %}
+        </article>
+        {% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+  </form>
+
+  <div class="editor-modal" data-scan-asset-modal hidden aria-hidden="true">
+    <div class="editor-modal__backdrop" data-scan-asset-close></div>
+    <div class="editor-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="scan-asset-modal-title">
+      <header class="editor-modal__header">
+        <h2 id="scan-asset-modal-title">Select asset</h2>
+        <button type="button" class="editor-button" data-scan-asset-close>Close</button>
+      </header>
+      <div class="editor-modal__body">
+        <div class="asset-controls">
+          <div class="form-field">
+            <label for="scan_asset_search">Search images</label>
+            <input id="scan_asset_search" type="search" placeholder="Search by filename" data-scan-asset-search />
+          </div>
+          <div class="form-field">
+            <label for="scan_asset_type">Type</label>
+            <select id="scan_asset_type" data-scan-asset-type>
+              <option value="all">All images</option>
+              <option value="jpeg">JPEG</option>
+              <option value="png">PNG</option>
+              <option value="gif">GIF</option>
+              <option value="svg">SVG</option>
+              <option value="webp">WebP</option>
+            </select>
+          </div>
+        </div>
+
+        <section class="asset-section" data-scan-asset-recent-section>
+          <h3>Recent uploads</h3>
+          <div class="asset-grid" data-scan-asset-recent></div>
+        </section>
+
+        <section class="asset-section" data-scan-asset-results-section hidden>
+          <h3>Search results</h3>
+          <div class="asset-grid" data-scan-asset-results></div>
+        </section>
+
+        <div class="scan-modal__variant">
+          <label for="scan_asset_variant">Variant</label>
+          <select id="scan_asset_variant" data-scan-asset-variant>
+            <option value="original">Original</option>
+            <option value="thumbnail">Thumbnail</option>
+          </select>
+        </div>
+      </div>
+      <footer class="editor-modal__footer">
+        <button type="button" class="editor-button" data-scan-asset-close>Cancel</button>
+        <button type="button" class="editor-button save" data-scan-asset-apply disabled>Use asset</button>
+      </footer>
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

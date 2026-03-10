@@ -6,7 +6,8 @@
 			"!*.json",
 			"!!node_modules/",
 			"!!target/*",
-			"!!rendered/*"
+			"!!rendered/*",
+			"!!admin-ui-assets/*"
 		],
 
 		"ignoreUnknown": true,

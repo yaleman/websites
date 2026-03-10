@@ -20,11 +20,16 @@ run = "cargo fmt --all --"
 [tasks.rust_test]
 run = "cargo test --all --quiet"
 
+[tasks.frontend_install]
+run = "pnpm install --frozen-lockfile"
+
 [tasks.frontend_build]
+depends = ["frontend_install"]
 run = "pnpm run build:admin"
 
 [tasks.frontend_check]
-run = "pnpm install --frozen-lockfile && pnpm exec tsc --noEmit"
+depends = ["frontend_install"]
+run = "pnpm exec tsc --noEmit"
 
 [tasks.frontend_e2e]
 depends = ["frontend_build"]

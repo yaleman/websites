@@ -21,6 +21,7 @@ markdown = "1.0.0"
 mime_guess = "2.0.5"
 openidconnect = { version = "4.0.1", features = ["reqwest"] }
 quick-xml = "0.39.2"
+regex = "1.12.3"
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
     "json",
@@ -55,6 +56,8 @@ tracing-subscriber = { version = "0.3.22", features = [
     "env-filter",
 ] }
 url = "2.5.8"
+utoipa = { version = "5.4.0", features = ["url", "uuid", "time", "chrono", "axum_extras"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "reqwest"] }
 uuid = { version = "1.22.0", features = ["v7"] }
 
 [dev-dependencies]

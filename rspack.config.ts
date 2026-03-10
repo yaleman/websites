@@ -4,6 +4,7 @@ import { defineConfig } from "@rspack/cli";
 export default defineConfig({
 	entry: {
 		editor: "./assets/admin/editor.ts",
+		remediation: "./assets/admin/remediation.ts",
 	},
 	module: {
 		rules: [

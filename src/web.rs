@@ -1,6 +1,11 @@
+use crate::api_docs::ApiDoc;
 use crate::constants::{
     CUSTOMIZABLE_TEMPLATE_FILES, DEFAULT_TEMPLATE_NAME, SESSION_OIDC_NONCE_KEY,
     SESSION_OIDC_PKCE_KEY, SESSION_OIDC_STATE_KEY, SESSION_USER,
+};
+use crate::content_scan::{
+    AssetReference, ContentScanReport, ScanAction, ScanContext, ScanIssue, format_asset_shortcode,
+    scan_content,
 };
 use crate::csrf::SessionCsrfExt;
 use crate::entities::audit_event::log_audit_event;
@@ -50,7 +55,7 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use similar::TextDiff;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::net::SocketAddr;
 use std::path::{Component, Path as StdPath, PathBuf};
@@ -63,6 +68,8 @@ use tower_sessions::{Expiry, Session, SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
 use tracing::{error, info};
 use url::Url;
+use utoipa::{OpenApi, ToSchema};
+use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
 /// Holds all the common template-shared data for admin pages.
@@ -198,7 +205,7 @@ struct AdminSearchTemplate {
 struct AdminContentDetailTemplate {
     template_shared: AdminTemplateData,
     title: String,
-    page_type: String,
+    page_type: PageType,
     status: String,
     primary_route: String,
     revisions_summary: String,
@@ -303,6 +310,20 @@ struct AdminContentSourceTemplate {
     page_content: String,
     site_id: Uuid,
     allow_external_image: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_content_scan.html")]
+struct AdminContentScanTemplate {
+    template_shared: AdminTemplateData,
+    site_id: Uuid,
+    domains: String,
+    scan_limit: usize,
+    filter_options: Vec<AdminSelectOption>,
+    current_filter: String,
+    results: Vec<AdminContentScanResult>,
+    summary: Option<AdminContentScanSummary>,
 }
 
 #[allow(dead_code)]
@@ -473,6 +494,50 @@ struct AdminAssetRow {
 }
 
 #[derive(Debug)]
+struct AdminContentScanResult {
+    title: String,
+    edit_href: String,
+    detail_href: String,
+    issue_count: usize,
+    fixable_count: usize,
+    review_count: usize,
+    issues: Vec<AdminContentScanIssueRow>,
+}
+
+#[derive(Debug)]
+struct AdminContentScanIssueRow {
+    issue_id: String,
+    kind: String,
+    label: String,
+    current_value: String,
+    proposed_value: String,
+    snippet: String,
+    can_apply: bool,
+    selected: bool,
+    needs_asset: bool,
+    can_import_remote: bool,
+    remote_url: String,
+    selected_asset_id: String,
+    selected_asset_label: String,
+}
+
+#[derive(Debug)]
+struct AdminContentScanSummary {
+    inspected_count: usize,
+    result_count: usize,
+    issue_count: usize,
+    applied_count: usize,
+    updated_items: Vec<AdminContentScanUpdatedItem>,
+    skipped_messages: Vec<String>,
+}
+
+#[derive(Debug)]
+struct AdminContentScanUpdatedItem {
+    title: String,
+    applied_count: usize,
+}
+
+#[derive(Debug)]
 struct AdminSiteTemplateFileRow {
     file_name: String,
     source_origin: String,
@@ -485,6 +550,7 @@ struct AdminSiteTemplateFileRow {
 struct AdminLink {
     href: String,
     label: String,
+    target: Option<String>,
 }
 
 impl AdminLink {
@@ -492,6 +558,13 @@ impl AdminLink {
         Self {
             href: href.to_string(),
             label: label.to_string(),
+            target: None,
+        }
+    }
+    fn with_target_blank(self) -> Self {
+        Self {
+            target: Some("_blank".to_string()),
+            ..self
         }
     }
 }
@@ -577,6 +650,31 @@ struct SearchQuery {
 #[derive(Debug, Deserialize)]
 struct SourceEditorQuery {
     saved: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ContentScanForm {
+    domains: String,
+    scan_limit: Option<usize>,
+    filter: Option<String>,
+    content_id: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ContentScanApplyForm {
+    domains: String,
+    scan_limit: Option<usize>,
+    filter: Option<String>,
+    selected_issue_ids_json: Option<String>,
+    remote_import_issue_ids_json: Option<String>,
+    asset_selections_json: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManualAssetSelection {
+    asset_id: Uuid,
+    variant: String,
+    asset_label: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -851,6 +949,257 @@ fn parse_tag_list(raw: Option<String>) -> Vec<String> {
         .collect()
 }
 
+fn scan_filter_value(value: Option<&str>) -> &'static str {
+    match value {
+        Some("fixable") => "fixable",
+        Some("review") => "review",
+        Some("asset") => "asset",
+        _ => "all",
+    }
+}
+
+fn content_scan_filter_options(current: &str) -> Vec<AdminSelectOption> {
+    [
+        ("All issues", "all"),
+        ("Fixable only", "fixable"),
+        ("Review only", "review"),
+        ("Asset issues", "asset"),
+    ]
+    .into_iter()
+    .map(|(label, value)| AdminSelectOption {
+        label,
+        value,
+        selected: current == value,
+    })
+    .collect()
+}
+
+struct LoadedContentScanReports {
+    reports: Vec<ContentScanReport>,
+    inspected_count: usize,
+}
+
+fn normalize_content_scan_limit(limit: Option<usize>) -> usize {
+    limit.unwrap_or(5).clamp(1, 50)
+}
+
+async fn load_content_scan_reports(
+    db: &DatabaseConnection,
+    site_id: Uuid,
+    content_id: Option<Uuid>,
+    domains_raw: &str,
+    scan_limit: usize,
+) -> Result<LoadedContentScanReports, SiteError> {
+    let context = ScanContext::load(db, site_id, content_id, domains_raw).await?;
+    let mut content_items = list_content(db, site_id, None)
+        .await
+        .map_err(SiteError::internal)?;
+    content_items.sort_by(|left, right| {
+        left.last_updated
+            .unwrap_or(left.created_at)
+            .cmp(&right.last_updated.unwrap_or(right.created_at))
+            .then_with(|| left.created_at.cmp(&right.created_at))
+            .then_with(|| left.title.to_lowercase().cmp(&right.title.to_lowercase()))
+    });
+
+    let mut reports = Vec::new();
+    let mut inspected_count = 0usize;
+    for content in content_items {
+        inspected_count = inspected_count.saturating_add(1);
+        let report = scan_content(&content, &context);
+        if report.issues.is_empty() {
+            continue;
+        }
+        reports.push(report);
+        if reports.len() >= scan_limit {
+            break;
+        }
+    }
+
+    Ok(LoadedContentScanReports {
+        reports,
+        inspected_count,
+    })
+}
+
+fn build_content_scan_template(
+    site: &entities::site::Model,
+    site_id: Uuid,
+    domains: String,
+    scan_limit: usize,
+    current_filter: &str,
+    reports: Vec<ContentScanReport>,
+    summary: Option<AdminContentScanSummary>,
+) -> AdminContentScanTemplate {
+    let results = build_content_scan_results(site_id, current_filter, reports);
+    AdminContentScanTemplate {
+        template_shared: AdminTemplateData::new("Content Remediation")
+            .with_site_context(site.id, &site.full_title)
+            .with_links(vec![
+                AdminLink::new(&format!("/admin/site/{site_id}/content"), "Back to content"),
+                AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Assets"),
+            ]),
+        site_id,
+        domains,
+        scan_limit,
+        filter_options: content_scan_filter_options(current_filter),
+        current_filter: current_filter.to_string(),
+        results,
+        summary,
+    }
+}
+
+fn build_content_scan_results(
+    site_id: Uuid,
+    current_filter: &str,
+    reports: Vec<ContentScanReport>,
+) -> Vec<AdminContentScanResult> {
+    reports
+        .into_iter()
+        .filter_map(|report| {
+            let issues = report
+                .issues
+                .into_iter()
+                .filter(|issue| issue_matches_filter(issue, current_filter))
+                .map(build_scan_issue_row)
+                .collect::<Vec<_>>();
+            if issues.is_empty() {
+                return None;
+            }
+            let fixable_count = issues.iter().filter(|issue| issue.can_apply).count();
+            let review_count = issues.len().saturating_sub(fixable_count);
+            Some(AdminContentScanResult {
+                title: report.content.title,
+                edit_href: format!("/admin/site/{site_id}/content/{}/edit", report.content.id),
+                detail_href: format!("/admin/site/{site_id}/content/{}", report.content.id),
+                issue_count: issues.len(),
+                fixable_count,
+                review_count,
+                issues,
+            })
+        })
+        .collect()
+}
+
+fn issue_matches_filter(issue: &ScanIssue, current_filter: &str) -> bool {
+    match current_filter {
+        "fixable" => !matches!(issue.action, ScanAction::ReviewOnly),
+        "review" => matches!(issue.action, ScanAction::ReviewOnly),
+        "asset" => matches!(issue.action, ScanAction::ReplaceAsset { .. }),
+        _ => true,
+    }
+}
+
+fn build_scan_issue_row(issue: ScanIssue) -> AdminContentScanIssueRow {
+    let (
+        can_apply,
+        needs_asset,
+        can_import_remote,
+        remote_url,
+        selected_asset_id,
+        selected_asset_label,
+    ) = match &issue.action {
+        ScanAction::ReplaceText { .. } => (
+            true,
+            false,
+            false,
+            String::new(),
+            String::new(),
+            String::new(),
+        ),
+        ScanAction::ReplaceAsset {
+            suggested_asset,
+            remote_url,
+            ..
+        } => {
+            let suggested_asset_id = suggested_asset
+                .as_ref()
+                .map(|asset| format!("{}:{}", asset.asset_id, asset.variant))
+                .unwrap_or_default();
+            let suggested_asset_label = suggested_asset
+                .as_ref()
+                .map(|asset| format!("{} ({})", asset.asset_label, asset.variant))
+                .unwrap_or_default();
+            (
+                true,
+                suggested_asset.is_none(),
+                remote_url.is_some(),
+                remote_url.clone().unwrap_or_default(),
+                suggested_asset_id,
+                suggested_asset_label,
+            )
+        }
+        ScanAction::ReviewOnly => (
+            false,
+            false,
+            false,
+            String::new(),
+            String::new(),
+            String::new(),
+        ),
+    };
+
+    AdminContentScanIssueRow {
+        issue_id: issue.issue_id,
+        kind: issue.kind,
+        label: issue.label,
+        current_value: issue.current_value,
+        proposed_value: issue
+            .proposed_value
+            .unwrap_or_else(|| "Manual selection required".to_string()),
+        snippet: issue.snippet,
+        can_apply,
+        selected: can_apply && !needs_asset,
+        needs_asset,
+        can_import_remote,
+        remote_url,
+        selected_asset_id,
+        selected_asset_label,
+    }
+}
+
+fn build_scan_summary(
+    scan_reports: &LoadedContentScanReports,
+    applied_count: usize,
+    updated_items: Vec<AdminContentScanUpdatedItem>,
+    skipped_messages: Vec<String>,
+) -> AdminContentScanSummary {
+    AdminContentScanSummary {
+        inspected_count: scan_reports.inspected_count,
+        result_count: scan_reports.reports.len(),
+        issue_count: scan_reports
+            .reports
+            .iter()
+            .map(|report| report.issues.len())
+            .sum(),
+        applied_count,
+        updated_items,
+        skipped_messages,
+    }
+}
+
+fn deserialize_manual_asset_map(
+    raw: Option<&str>,
+) -> Result<HashMap<String, ManualAssetSelection>, SiteError> {
+    let raw = raw.unwrap_or("").trim();
+    if raw.is_empty() {
+        return Ok(HashMap::new());
+    }
+    serde_json::from_str(raw).map_err(|error| {
+        SiteError::BadRequest(format!("invalid asset selections payload: {error}"))
+    })
+}
+
+fn deserialize_string_set(raw: Option<&str>) -> Result<HashSet<String>, SiteError> {
+    let raw = raw.unwrap_or("").trim();
+    if raw.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let values = serde_json::from_str::<Vec<String>>(raw)
+        .map_err(|error| SiteError::BadRequest(format!("invalid string list payload: {error}")))?;
+    Ok(values.into_iter().collect())
+}
+
 #[derive(Debug, Deserialize)]
 struct AssetLibraryQuery {
     q: Option<String>,
@@ -858,13 +1207,13 @@ struct AssetLibraryQuery {
     r#type: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct AssetLibraryResponse {
     assets: Vec<AssetLibraryItem>,
 }
 
-#[derive(Debug, Serialize)]
-struct AssetLibraryItem {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct AssetLibraryItem {
     id: Uuid,
     original_filename: String,
     mime_type: String,
@@ -1085,6 +1434,14 @@ pub async fn run_admin_server(
         )
         .route("/admin/site/{site_id}/search", get(get_site_search))
         .route(
+            "/admin/site/{site_id}/content/scan",
+            get(admin_site_content_scan).post(admin_site_content_scan_run),
+        )
+        .route(
+            "/admin/site/{site_id}/content/scan/apply",
+            axum::routing::post(admin_site_content_scan_apply),
+        )
+        .route(
             "/admin/site/{site_id}/content/new",
             get(admin_site_content_new).post(admin_site_content_create),
         )
@@ -1168,11 +1525,20 @@ pub async fn run_admin_server(
         ));
     }
 
+    // disable the validator since it won't work locally etc.
+    let swagger_config =
+        utoipa_swagger_ui::Config::new(["/api-doc/openapi.json"]).validator_url("none");
+
     let app = Router::new()
         .route("/", get(admin_root))
         .route("/admin/login", get(admin_login))
         .route("/oauth2/callback", get(admin_login_callback))
         .route("/admin/logout", get(admin_logout))
+        .merge(
+            SwaggerUi::new("/api-docs")
+                .url("/api-doc/openapi.json", ApiDoc::openapi())
+                .config(swagger_config),
+        )
         .merge(protected_routes)
         .fallback(not_found)
         .layer(session_layer)
@@ -1534,6 +1900,10 @@ async fn admin_site_content_list(
                         AdminLink::new(
                             &format!("/admin/site/{site_id}/content/new"),
                             "New content",
+                        ),
+                        AdminLink::new(
+                            &format!("/admin/site/{site_id}/content/scan"),
+                            "Scan content",
                         ),
                         AdminLink::new(&format!("/admin/site/{site_id}/search"), "Search content"),
                         AdminLink::new(
@@ -1955,6 +2325,246 @@ async fn get_site_search(
     })
 }
 
+async fn admin_site_content_scan(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+) -> Result<AdminContentScanTemplate, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let site = get_by_id(state.db.as_ref(), site_id).await?;
+    Ok(build_content_scan_template(
+        &site,
+        site_id,
+        String::new(),
+        5,
+        "all",
+        Vec::new(),
+        None,
+    ))
+}
+
+async fn admin_site_content_scan_run(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    Form(form): Form<ContentScanForm>,
+) -> Result<AdminContentScanTemplate, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let scan_limit = normalize_content_scan_limit(form.scan_limit);
+    let scan_reports = load_content_scan_reports(
+        state.db.as_ref(),
+        site_id,
+        form.content_id,
+        &form.domains,
+        scan_limit,
+    )
+    .await?;
+    let summary = Some(build_scan_summary(&scan_reports, 0, Vec::new(), Vec::new()));
+    Ok(build_content_scan_template(
+        &site,
+        site_id,
+        form.domains,
+        scan_limit,
+        scan_filter_value(form.filter.as_deref()),
+        scan_reports.reports,
+        summary,
+    ))
+}
+
+async fn admin_site_content_scan_apply(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    Form(form): Form<ContentScanApplyForm>,
+) -> Result<AdminContentScanTemplate, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let actor = current_user(&session).await?;
+    let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let scan_limit = normalize_content_scan_limit(form.scan_limit);
+    let selected_issue_ids = deserialize_string_set(form.selected_issue_ids_json.as_deref())?;
+    let remote_import_issue_ids =
+        deserialize_string_set(form.remote_import_issue_ids_json.as_deref())?;
+    let manual_asset_map = deserialize_manual_asset_map(form.asset_selections_json.as_deref())?;
+    let scan_reports =
+        load_content_scan_reports(state.db.as_ref(), site_id, None, &form.domains, scan_limit)
+            .await?;
+
+    let mut updated_items = Vec::new();
+    let mut skipped_messages = Vec::new();
+    let mut applied_count = 0usize;
+    let mut imported_assets: HashMap<String, AssetReference> = HashMap::new();
+    let txn = state.db.begin().await?;
+
+    for report in &scan_reports.reports {
+        let selected_for_content = report
+            .issues
+            .iter()
+            .filter(|issue| selected_issue_ids.contains(&issue.issue_id))
+            .count();
+        if selected_for_content == 0 {
+            continue;
+        }
+
+        let mut asset_replacements = HashMap::new();
+        let mut missing_remote_issues = Vec::new();
+        for issue in &report.issues {
+            if !selected_issue_ids.contains(&issue.issue_id) {
+                continue;
+            }
+            if let Some(selection) = manual_asset_map.get(&issue.issue_id) {
+                asset_replacements.insert(
+                    issue.issue_id.clone(),
+                    AssetReference {
+                        asset_id: selection.asset_id,
+                        variant: selection.variant.clone(),
+                        asset_label: selection.asset_label.clone(),
+                    },
+                );
+                continue;
+            }
+            if remote_import_issue_ids.contains(&issue.issue_id)
+                && let ScanAction::ReplaceAsset {
+                    remote_url: Some(remote_url),
+                    alt,
+                    title,
+                    ..
+                } = &issue.action
+            {
+                let asset_reference = if let Some(existing) = imported_assets.get(remote_url) {
+                    existing.clone()
+                } else {
+                    let imported = import_remote_scan_asset(
+                        &txn,
+                        state.oidc_client.as_ref(),
+                        site_id,
+                        &actor.subject,
+                        remote_url,
+                    )
+                    .await?;
+                    imported_assets.insert(remote_url.clone(), imported.clone());
+                    imported
+                };
+                let shortcode = format_asset_shortcode(
+                    asset_reference.asset_id,
+                    &asset_reference.variant,
+                    alt,
+                    title.as_deref(),
+                );
+                asset_replacements.insert(
+                    issue.issue_id.clone(),
+                    AssetReference {
+                        asset_id: asset_reference.asset_id,
+                        variant: asset_reference.variant.clone(),
+                        asset_label: shortcode,
+                    },
+                );
+            } else if let ScanAction::ReplaceAsset {
+                suggested_asset: None,
+                remote_url: Some(_),
+                ..
+            } = &issue.action
+            {
+                missing_remote_issues.push(issue.label.clone());
+            }
+        }
+
+        if !missing_remote_issues.is_empty() {
+            skipped_messages.push(format!(
+                "{} was skipped because some image issues still need an asset selection or remote import.",
+                report.content.title
+            ));
+            continue;
+        }
+
+        let applied_issues = crate::content_scan::apply_issue_replacements(
+            &report.content.page_content,
+            &report.issues,
+            &selected_issue_ids,
+            &asset_replacements,
+            &remote_import_issue_ids,
+        );
+        if applied_issues.is_empty() {
+            skipped_messages.push(format!(
+                "{} had no applicable fixes after rescanning.",
+                report.content.title
+            ));
+            continue;
+        }
+
+        let mut page_content = report.content.page_content.clone();
+        for applied in &applied_issues {
+            if applied.kind == "__remote_import__" {
+                skipped_messages.push(format!(
+                    "{} still has an unresolved remote image replacement.",
+                    report.content.title
+                ));
+                continue;
+            }
+            if applied.end <= page_content.len() && applied.start <= applied.end {
+                page_content.replace_range(applied.start..applied.end, &applied.replacement);
+            }
+        }
+
+        let content = update_content(
+            &txn,
+            crate::UpdateContent {
+                content_id: report.content.id,
+                page_type: None,
+                title: Some(report.content.title.clone()),
+                slug: Some(report.content.slug.clone()),
+                page_content: Some(page_content),
+                draft: Some(report.content.draft),
+                published_at: report.content.published_at,
+                editor_sub: actor.subject.clone(),
+            },
+        )
+        .await
+        .map_err(SiteError::internal)?;
+        applied_count = applied_count.saturating_add(applied_issues.len());
+        updated_items.push(AdminContentScanUpdatedItem {
+            title: content.title,
+            applied_count: applied_issues.len(),
+        });
+    }
+
+    log_audit_event(
+        &txn,
+        &actor.subject,
+        "content_scan_apply",
+        "content_item",
+        &site_id.to_string(),
+        Some(site_id),
+        Some(json!({
+            "applied_count": applied_count,
+            "updated_titles": updated_items.iter().map(|item| item.title.clone()).collect::<Vec<_>>(),
+            "selected_issue_count": selected_issue_ids.len(),
+        })),
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to log scan apply audit: {error}")))?;
+    txn.commit().await?;
+
+    let refreshed_reports =
+        load_content_scan_reports(state.db.as_ref(), site_id, None, &form.domains, scan_limit)
+            .await?;
+    let summary = Some(build_scan_summary(
+        &refreshed_reports,
+        applied_count,
+        updated_items,
+        skipped_messages,
+    ));
+    Ok(build_content_scan_template(
+        &site,
+        site_id,
+        form.domains,
+        scan_limit,
+        scan_filter_value(form.filter.as_deref()),
+        refreshed_reports.reports,
+        summary,
+    ))
+}
+
 async fn admin_site_content_new(
     State(state): State<AdminState>,
     session: Session,
@@ -2142,7 +2752,7 @@ async fn admin_site_content_detail(
                 ),
             ]),
         title: content.title,
-        page_type: content.page_type.to_string(),
+        page_type: content.page_type,
         status: content_status_label(content.draft),
         primary_route: display_route_path(&route),
         revisions_summary: latest_revision_summary(&revisions),
@@ -2214,7 +2824,7 @@ async fn admin_site_content_source(
 
     let template_shared = AdminTemplateData::new(format!("Editing: {}", title))
         .with_links(vec![
-            AdminLink::new(&preview_href, "Preview"),
+            AdminLink::new(&preview_href, "Preview").with_target_blank(),
             AdminLink::new(&back_href, "Back to site dashboard"),
         ])
         .with_site_context(site.id, &site.full_title);
@@ -2775,6 +3385,138 @@ async fn fetch_remote_asset(
     Ok((bytes.to_vec(), original_filename, mime_type))
 }
 
+async fn store_image_asset<C: ConnectionTrait>(
+    db: &C,
+    site_id: Uuid,
+    uploader_sub: &str,
+    bytes: Vec<u8>,
+    original_filename: String,
+    mime_type: Option<String>,
+) -> Result<entities::asset::Model, SiteError> {
+    let extension = StdPath::new(&original_filename)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("bin")
+        .to_lowercase();
+    let storage_basename = format!("{}.{}", Uuid::now_v7(), extension);
+    let upload_root = resolve_upload_root();
+    let storage_path = upload_root.join(&storage_basename);
+
+    fs::create_dir_all(&upload_root).await.map_err(|error| {
+        SiteError::internal(format!("failed to create upload directory: {error}"))
+    })?;
+    let mut file = fs::File::create(&storage_path)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to create upload file: {error}")))?;
+    file.write_all(&bytes)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to write upload file: {error}")))?;
+
+    let byte_length = i32::try_from(bytes.len()).unwrap_or(i32::MAX);
+    let (dimensions, thumbnail) = generate_thumbnail(bytes, &extension)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to process image: {error}")))?;
+    let (width, height) = dimensions.unwrap_or((0, 0));
+    let width_i32 = if width > 0 {
+        i32::try_from(width).ok()
+    } else {
+        None
+    };
+    let height_i32 = if height > 0 {
+        i32::try_from(height).ok()
+    } else {
+        None
+    };
+    let mime_type = mime_type.unwrap_or_else(|| mime_from_extension(&extension).to_string());
+
+    let asset = create_asset(
+        db,
+        NewAsset {
+            site_id,
+            uploader_sub: uploader_sub.to_string(),
+            original_filename,
+            storage_basename: storage_basename.clone(),
+            mime_type: mime_type.clone(),
+            byte_length,
+            width: width_i32,
+            height: height_i32,
+        },
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to create asset: {error}")))?;
+
+    create_asset_variant(
+        db,
+        NewAssetVariant {
+            asset_id: asset.id,
+            variant_kind: "original".to_string(),
+            filename: storage_basename,
+            mime_type: mime_type.clone(),
+            byte_length,
+            width: width_i32,
+            height: height_i32,
+        },
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to create asset variant: {error}")))?;
+
+    if let Some(thumbnail) = thumbnail {
+        let stem = StdPath::new(&asset.storage_basename)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("asset");
+        let filename = format!("{stem}_thumb.{}", thumbnail.extension);
+        let thumb_path = upload_root.join(&filename);
+        fs::write(&thumb_path, &thumbnail.bytes)
+            .await
+            .map_err(|error| SiteError::internal(format!("failed to write thumbnail: {error}")))?;
+        create_asset_variant(
+            db,
+            NewAssetVariant {
+                asset_id: asset.id,
+                variant_kind: "thumbnail".to_string(),
+                filename,
+                mime_type: thumbnail.mime_type,
+                byte_length: thumbnail.byte_length,
+                width: thumbnail.width,
+                height: thumbnail.height,
+            },
+        )
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!("failed to create asset thumbnail: {error}"))
+        })?;
+    }
+
+    Ok(asset)
+}
+
+async fn import_remote_scan_asset<C: ConnectionTrait>(
+    db: &C,
+    client: &reqwest::Client,
+    site_id: Uuid,
+    uploader_sub: &str,
+    remote_url: &str,
+) -> Result<AssetReference, SiteError> {
+    let url = normalize_remote_asset_url(remote_url.to_string())?
+        .ok_or_else(|| SiteError::BadRequest("missing remote asset url".to_string()))?;
+    let (bytes, original_filename, mime_type) = fetch_remote_asset(client, url).await?;
+    let asset = store_image_asset(
+        db,
+        site_id,
+        uploader_sub,
+        bytes,
+        original_filename,
+        mime_type,
+    )
+    .await?;
+    Ok(AssetReference {
+        asset_id: asset.id,
+        variant: "original".to_string(),
+        asset_label: asset.original_filename,
+    })
+}
+
 fn format_asset_dimensions(width: Option<i32>, height: Option<i32>) -> String {
     match (width, height) {
         (Some(width), Some(height)) if width > 0 && height > 0 => format!("{width} x {height}"),
@@ -2828,6 +3570,22 @@ async fn build_admin_asset_rows<C: ConnectionTrait>(
         .collect())
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/site/{site_id}/assets/library",
+    params(
+        ("site_id" = Uuid, Path, description = "The ID of the site to list assets for"),
+        ("q" = String, Query, description = "Optional search query to filter assets by original filename or storage basename"),
+        ("type" = String, Query, description = "Optional filter by image type (jpeg, png, gif, svg, webp)"),
+    ),
+    responses(
+        (status = 200, description = "A list of assets matching the query", body = AssetLibraryResponse),
+        (status = 400, description = "Invalid request parameters", body = String),
+        (status = 401, description = "Unauthorized access", body = String),
+        (status = 403, description = "Forbidden - insufficient permissions", body = String),
+        (status = 500, description = "Internal server error", body = String),
+    ),
+)]
 async fn admin_site_assets_library(
     State(state): State<AdminState>,
     session: Session,
@@ -3054,80 +3812,16 @@ async fn admin_site_assets_create(
         ));
     };
 
-    let extension = StdPath::new(&original_filename)
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("bin")
-        .to_lowercase();
-    let storage_basename = format!("{}.{}", Uuid::now_v7(), extension);
-    let upload_root = resolve_upload_root();
-    let storage_path = upload_root.join(&storage_basename);
-
-    if let Err(error) = fs::create_dir_all(&upload_root).await {
-        return Err(SiteError::internal(format!(
-            "failed to create upload directory: {error}"
-        )));
-    }
-
-    match fs::File::create(&storage_path).await {
-        Ok(mut file) => {
-            if let Err(error) = file.write_all(&bytes).await {
-                return Err(SiteError::internal(format!(
-                    "failed to write upload file: {error}"
-                )));
-            }
-        }
-        Err(error) => {
-            return Err(SiteError::internal(format!(
-                "failed to create upload file: {error}"
-            )));
-        }
-    }
-
-    let byte_length = i32::try_from(bytes.len()).unwrap_or(i32::MAX);
-    let (dimensions, thumbnail) = match generate_thumbnail(bytes, &extension).await {
-        Ok(result) => result,
-        Err(error) => {
-            return Err(SiteError::internal(format!(
-                "failed to process image: {error}"
-            )));
-        }
-    };
-
-    let (width, height) = dimensions.unwrap_or((0, 0));
-    let width_i32 = if width > 0 {
-        i32::try_from(width).ok()
-    } else {
-        None
-    };
-    let height_i32 = if height > 0 {
-        i32::try_from(height).ok()
-    } else {
-        None
-    };
-
-    let mime_type = mime_type.unwrap_or_else(|| mime_from_extension(&extension).to_string());
-
     let db_txn = state.db.begin().await?;
-
-    let original_filename = original_filename.clone();
-    let storage_basename = storage_basename.clone();
-    let mime_type = mime_type.clone();
-    let asset = create_asset(
+    let asset = store_image_asset(
         &db_txn,
-        NewAsset {
-            site_id: site.id,
-            uploader_sub: actor.subject.clone(),
-            original_filename,
-            storage_basename: storage_basename.clone(),
-            mime_type: mime_type.clone(),
-            byte_length,
-            width: width_i32,
-            height: height_i32,
-        },
+        site.id,
+        &actor.subject,
+        bytes,
+        original_filename,
+        mime_type,
     )
-    .await
-    .map_err(|error| SiteError::internal(format!("failed to create asset: {error}")))?;
+    .await?;
 
     log_audit_event(
         &db_txn,
@@ -3144,52 +3838,6 @@ async fn admin_site_assets_create(
     )
     .await
     .map_err(|error| SiteError::internal(format!("failed to log asset audit: {error}")))?;
-
-    create_asset_variant(
-        &db_txn,
-        NewAssetVariant {
-            asset_id: asset.id,
-            variant_kind: "original".to_string(),
-            filename: storage_basename.clone(),
-            mime_type: mime_type.clone(),
-            byte_length,
-            width: width_i32,
-            height: height_i32,
-        },
-    )
-    .await
-    .map_err(|error| SiteError::internal(format!("failed to create asset variant: {error}")))?;
-
-    if let Some(thumbnail) = thumbnail {
-        let stem = StdPath::new(&asset.storage_basename)
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or("asset");
-        let filename = format!("{stem}_thumb.{}", thumbnail.extension);
-        let thumb_path = upload_root.join(&filename);
-        if let Err(error) = fs::write(&thumb_path, &thumbnail.bytes).await {
-            return Err(SiteError::internal(format!(
-                "failed to write thumbnail: {error}"
-            )));
-        }
-
-        create_asset_variant(
-            &db_txn,
-            NewAssetVariant {
-                asset_id: asset.id,
-                variant_kind: "thumbnail".to_string(),
-                filename,
-                mime_type: thumbnail.mime_type,
-                byte_length: thumbnail.byte_length,
-                width: thumbnail.width,
-                height: thumbnail.height,
-            },
-        )
-        .await
-        .map_err(|error| {
-            SiteError::internal(format!("failed to create thumbnail variant: {error}"))
-        })?;
-    }
 
     if let Err(error) = db_txn.commit().await {
         return Err(SiteError::internal(format!(

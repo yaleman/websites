@@ -4,11 +4,21 @@
   <strong>{{ title }}</strong> publishes at <code>{{ primary_route }}</code> and is currently <strong>{{ status }}</strong>.
 </p>
 
+<form method="POST" action="/admin/site/{{ site_id }}/content/scan" id="content-scan-form">
+  <label for="content-scan-form">Scan this content for issues:</label>
+  <!-- TODO is the "leave blank for all" legit here? -->
+  <input type="text" name="domains" , placeholder="Comma-separated list of domains to treat as local (leave blank for all)" />
+  <input type="hidden" name="scan_limit" value="1" />
+  <input type="hidden" name="site_id" value="{{ site_id }}" />
+  <input type="hidden" name="content_id" value="{{ content_id }}" />
+  <input type="submit" value="Scan for Issues" id="scan-button" />
+</form>
+
 <section id="content-metadata">
   <table>
     <tr>
       <th>Page Type</th>
-      <td>{{ page_type }}</td>
+      <td><span class="chip chip-{{ page_type.css_class() }}">{{ page_type }}</span></td>
     </tr>
     <tr>
       <th>Primary Route</th>
