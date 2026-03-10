@@ -84,8 +84,9 @@ const initRemediation = () => {
 	const searchInput = modal?.querySelector<HTMLInputElement>(
 		"[data-scan-asset-search]",
 	);
-	const typeSelect =
-		modal?.querySelector<HTMLSelectElement>("[data-scan-asset-type]");
+	const typeSelect = modal?.querySelector<HTMLSelectElement>(
+		"[data-scan-asset-type]",
+	);
 	const variantSelect = modal?.querySelector<HTMLSelectElement>(
 		"[data-scan-asset-variant]",
 	);
@@ -95,8 +96,12 @@ const initRemediation = () => {
 	const resultsSection = modal?.querySelector<HTMLElement>(
 		"[data-scan-asset-results-section]",
 	);
-	const recentGrid = modal?.querySelector<HTMLElement>("[data-scan-asset-recent]");
-	const resultsGrid = modal?.querySelector<HTMLElement>("[data-scan-asset-results]");
+	const recentGrid = modal?.querySelector<HTMLElement>(
+		"[data-scan-asset-recent]",
+	);
+	const resultsGrid = modal?.querySelector<HTMLElement>(
+		"[data-scan-asset-results]",
+	);
 	const applyButton = modal?.querySelector<HTMLButtonElement>(
 		"[data-scan-asset-apply]",
 	);
@@ -149,7 +154,7 @@ const initRemediation = () => {
 
 	const fetchAssets = async (query?: string) => {
 		const url = new URL(
-			`/admin/site/${siteId}/assets/library`,
+			`/api/site/${siteId}/assets/library`,
 			window.location.origin,
 		);
 		const type = typeSelect.value;
@@ -162,7 +167,9 @@ const initRemediation = () => {
 		if (type) {
 			url.searchParams.set("type", type);
 		}
-		const response = await fetch(url.toString(), { credentials: "same-origin" });
+		const response = await fetch(url.toString(), {
+			credentials: "same-origin",
+		});
 		if (!response.ok) {
 			throw new Error("failed to load assets");
 		}
@@ -195,7 +202,8 @@ const initRemediation = () => {
 		modal.querySelectorAll(".asset-card").forEach((card) => {
 			card.classList.toggle(
 				"is-selected",
-				JSON.parse(card.getAttribute("data-asset-payload") ?? "{}").id === asset?.id,
+				JSON.parse(card.getAttribute("data-asset-payload") ?? "{}").id ===
+					asset?.id,
 			);
 		});
 		applyButton.disabled = !asset;
@@ -237,8 +245,12 @@ const initRemediation = () => {
 		if (!issueId) {
 			return;
 		}
-		const label = issue.querySelector<HTMLElement>("[data-selected-asset-label]");
-		const remoteImport = issue.querySelector<HTMLInputElement>("[data-remote-import]");
+		const label = issue.querySelector<HTMLElement>(
+			"[data-selected-asset-label]",
+		);
+		const remoteImport = issue.querySelector<HTMLInputElement>(
+			"[data-remote-import]",
+		);
 		const issueToggle = issue
 			.closest(".scan-issue")
 			?.querySelector<HTMLInputElement>("[data-issue-select]");
@@ -266,37 +278,39 @@ const initRemediation = () => {
 		syncSelections();
 	};
 
-	root.querySelectorAll<HTMLElement>("[data-remediation-issue]").forEach((issue) => {
-		const issueId = issue.dataset.issueId;
-		const existing = issue.dataset.selectedAsset;
-		const existingLabel = issue.dataset.selectedLabel;
-		if (issueId && existing) {
-			const [assetId, variant] = existing.split(":");
-			selections[issueId] = {
-				asset_id: assetId,
-				variant,
-				asset_label: existingLabel ?? assetId,
-			};
-		}
-		issue
-			.querySelector<HTMLElement>("[data-pick-asset]")
-			?.addEventListener("click", () => openForIssue(issue));
-		issue
-			.querySelector<HTMLInputElement>("[data-remote-import]")
-			?.addEventListener("change", (event) => {
-				const input = event.currentTarget as HTMLInputElement;
-				const issueToggle = issue
-					.closest(".scan-issue")
-					?.querySelector<HTMLInputElement>("[data-issue-select]");
-				if (!input.checked) {
-					return;
-				}
-				if (issueToggle) {
-					issueToggle.checked = true;
-				}
-				updateIssueSelection(issue, null);
-			});
-	});
+	root
+		.querySelectorAll<HTMLElement>("[data-remediation-issue]")
+		.forEach((issue) => {
+			const issueId = issue.dataset.issueId;
+			const existing = issue.dataset.selectedAsset;
+			const existingLabel = issue.dataset.selectedLabel;
+			if (issueId && existing) {
+				const [assetId, variant] = existing.split(":");
+				selections[issueId] = {
+					asset_id: assetId,
+					variant,
+					asset_label: existingLabel ?? assetId,
+				};
+			}
+			issue
+				.querySelector<HTMLElement>("[data-pick-asset]")
+				?.addEventListener("click", () => openForIssue(issue));
+			issue
+				.querySelector<HTMLInputElement>("[data-remote-import]")
+				?.addEventListener("change", (event) => {
+					const input = event.currentTarget as HTMLInputElement;
+					const issueToggle = issue
+						.closest(".scan-issue")
+						?.querySelector<HTMLInputElement>("[data-issue-select]");
+					if (!input.checked) {
+						return;
+					}
+					if (issueToggle) {
+						issueToggle.checked = true;
+					}
+					updateIssueSelection(issue, null);
+				});
+		});
 	syncSelections();
 	root.addEventListener("submit", () => {
 		const selectedIssueIds = Array.from(

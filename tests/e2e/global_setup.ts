@@ -14,3 +14,5 @@ export default async function globalSetup(): Promise<void> {
 		"session_seed",
 	]);
 }
+
+export const defaultTimeout = 60_000;

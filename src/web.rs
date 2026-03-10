@@ -1484,8 +1484,8 @@ pub async fn run_admin_server(
         )
         .route("/admin/site/{site_id}/assets", get(admin_site_assets))
         .route(
-            "/admin/site/{site_id}/assets/library",
-            get(admin_site_assets_library),
+            "/api/site/{site_id}/assets/library",
+            get(api_site_assets_library),
         )
         .route(
             "/admin/site/{site_id}/assets/new",
@@ -3572,7 +3572,7 @@ async fn build_admin_asset_rows<C: ConnectionTrait>(
 
 #[utoipa::path(
     get,
-    path = "/admin/site/{site_id}/assets/library",
+    path = "/api/site/{site_id}/assets/library",
     params(
         ("site_id" = Uuid, Path, description = "The ID of the site to list assets for"),
         ("q" = String, Query, description = "Optional search query to filter assets by original filename or storage basename"),
@@ -3586,7 +3586,7 @@ async fn build_admin_asset_rows<C: ConnectionTrait>(
         (status = 500, description = "Internal server error", body = String),
     ),
 )]
-async fn admin_site_assets_library(
+async fn api_site_assets_library(
     State(state): State<AdminState>,
     session: Session,
     Path(site_id): Path<Uuid>,

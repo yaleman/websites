@@ -11,9 +11,10 @@ import {
 	setupHarness,
 	tinyPngBytes,
 } from "./support";
+import { defaultTimeout } from "./global_setup";
 
 test.describe("assets admin", () => {
-	test.setTimeout(120_000);
+	test.setTimeout(defaultTimeout);
 
 	test("shows asset metadata and recent uploads", async ({ browser }) => {
 		const harness = await setupHarness();
@@ -39,7 +40,9 @@ test.describe("assets admin", () => {
 			);
 			await expect(page).toHaveTitle("Assets - Test Site");
 			await expect(page.getByRole("heading", { name: "Assets" })).toBeVisible();
-			await expect(page.locator(".page-site-indicator")).toHaveText("Test Site");
+			await expect(page.locator(".page-site-indicator")).toHaveText(
+				"Test Site",
+			);
 			await expect(page.getByRole("img", { name: "banner.png" })).toBeVisible();
 			await expect(page.locator("body")).toContainText("banner.png");
 			await expect(page.locator("body")).toContainText("image/png");

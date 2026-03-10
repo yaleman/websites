@@ -7,9 +7,10 @@ import {
 	createUser,
 	setupHarness,
 } from "./support";
+import { defaultTimeout } from "./global_setup";
 
 test.describe("site settings", () => {
-	test.setTimeout(120_000);
+	test.setTimeout(defaultTimeout);
 
 	test("shows delete site only to global admins and deletes the site", async ({
 		browser,
@@ -53,7 +54,9 @@ test.describe("site settings", () => {
 					adminSession.page.getByRole("link", { name: "Delete site" }),
 				).toBeVisible();
 
-				await adminSession.page.getByRole("link", { name: "Delete site" }).click();
+				await adminSession.page
+					.getByRole("link", { name: "Delete site" })
+					.click();
 
 				await expect(adminSession.page).toHaveURL(
 					`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/delete`,
