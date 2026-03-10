@@ -12,9 +12,10 @@ import {
 	createUser,
 	setupHarness,
 } from "./support";
+import { defaultTimeout } from "./global_setup";
 
 test.describe("content admin", () => {
-	test.setTimeout(120_000);
+	test.setTimeout(defaultTimeout);
 
 	test("shows a friendly 404 page for missing routes", async ({ browser }) => {
 		const harness = await setupHarness();
@@ -99,7 +100,9 @@ test.describe("content admin", () => {
 			await expect(
 				page.getByRole("heading", { name: "Content: /guide-to-testing" }),
 			).toBeVisible();
-			await expect(page.locator(".page-site-indicator")).toHaveText("Test Site");
+			await expect(page.locator(".page-site-indicator")).toHaveText(
+				"Test Site",
+			);
 			await expect(page.locator("body")).toContainText("Primary Route");
 			await expect(page.locator("body")).toContainText("/guide-to-testing");
 			await expect(page.locator("body")).toContainText("/legacy/testing-guide");
@@ -167,8 +170,14 @@ test.describe("content admin", () => {
 
 			await page.selectOption("#page_type", "page");
 			await page.getByRole("button", { name: "Filter" }).click();
-			await page.getByRole("columnheader", { name: "Title" }).getByRole("link").click();
-			await page.getByRole("columnheader", { name: "Title (asc)" }).getByRole("link").click();
+			await page
+				.getByRole("columnheader", { name: "Title" })
+				.getByRole("link")
+				.click();
+			await page
+				.getByRole("columnheader", { name: "Title (asc)" })
+				.getByRole("link")
+				.click();
 
 			await expect(page).toHaveURL(
 				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content?sort_by=title_desc&page_type=page`,

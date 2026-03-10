@@ -4,7 +4,7 @@ use utoipa::OpenApi;
 #[derive(OpenApi)]
 #[openapi(
     paths(
-        admin_site_assets_library
+        api_site_assets_library
     ),
     components(
         schemas(

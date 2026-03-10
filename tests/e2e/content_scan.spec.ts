@@ -13,9 +13,10 @@ import {
 	setupHarness,
 	tinyPngBytes,
 } from "./support";
+import { defaultTimeout } from "./global_setup";
 
 test.describe("content remediation", () => {
-	test.setTimeout(120_000);
+	test.setTimeout(defaultTimeout);
 
 	test("scans content, rewrites internal links, and applies a selected asset", async ({
 		browser,
@@ -73,7 +74,7 @@ test.describe("content remediation", () => {
 			await expect(page.locator("body")).toContainText("<p> tag");
 			await expect(page.locator("body")).toContainText("<strong> tag");
 
-			const imageIssue = page.locator('[data-remediation-issue]').first();
+			const imageIssue = page.locator("[data-remediation-issue]").first();
 			await imageIssue.getByRole("button", { name: "Choose asset" }).click();
 			const modal = page.getByRole("dialog", { name: "Select asset" });
 			await expect(modal).toBeVisible();
@@ -92,11 +93,15 @@ test.describe("content remediation", () => {
 			);
 			await page.getByRole("button", { name: "Markdown" }).click();
 			const source = page.locator("#page_content");
-			await expect(source).toContainText("[Canonical Article](/legacy/article/)");
+			await expect(source).toContainText(
+				"[Canonical Article](/legacy/article/)",
+			);
 			await expect(source).toContainText("[Legacy link](/legacy/article/)");
 			await expect(source).toContainText("Paragraph");
 			await expect(source).toContainText("**Bold**");
-			await expect(source).toContainText(`[[asset id="${assetId}" variant="thumbnail" alt="Legacy hero"]]`);
+			await expect(source).toContainText(
+				`[[asset id="${assetId}" variant="thumbnail" alt="Legacy hero"]]`,
+			);
 
 			await page.goto(
 				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${scanContentId}`,
@@ -110,7 +115,9 @@ test.describe("content remediation", () => {
 		}
 	});
 
-	test("offers remote image import when no asset match exists", async ({ browser }) => {
+	test("offers remote image import when no asset match exists", async ({
+		browser,
+	}) => {
 		const harness = await setupHarness();
 		const remoteServer = createServer((request, response) => {
 			if (request.url === "/remote-banner.png") {
@@ -162,7 +169,9 @@ test.describe("content remediation", () => {
 			await remoteCheckbox.check();
 			await page.getByRole("button", { name: "Apply selected fixes" }).click();
 
-			await expect(page.locator("body")).toContainText("Remote Image Page updated");
+			await expect(page.locator("body")).toContainText(
+				"Remote Image Page updated",
+			);
 			await page.goto(
 				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/assets`,
 				{ waitUntil: "domcontentloaded" },
@@ -175,7 +184,9 @@ test.describe("content remediation", () => {
 			);
 			await page.getByRole("button", { name: "Markdown" }).click();
 			await expect(page.locator("#page_content")).toContainText("[[asset id=");
-			await expect(page.locator("#page_content")).toContainText("alt=\"Remote banner\"");
+			await expect(page.locator("#page_content")).toContainText(
+				'alt="Remote banner"',
+			);
 
 			await context.close();
 		} finally {
@@ -189,10 +200,12 @@ test.describe("content remediation", () => {
 					resolve();
 				});
 			});
-			}
-		});
+		}
+	});
 
-	test("limits results to the oldest pages with issues", async ({ browser }) => {
+	test("limits results to the oldest pages with issues", async ({
+		browser,
+	}) => {
 		const harness = await setupHarness();
 
 		try {

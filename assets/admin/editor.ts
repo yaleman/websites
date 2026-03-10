@@ -172,7 +172,7 @@ const createAssetModal = (editor: Editor) => {
 		type: string;
 	}) => {
 		const url = new URL(
-			`/admin/site/${siteId}/assets/library`,
+			`/api/site/${siteId}/assets/library`,
 			window.location.origin,
 		);
 		if (options.query) {

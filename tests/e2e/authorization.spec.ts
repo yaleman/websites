@@ -14,6 +14,7 @@ import {
 	type SiteRole,
 	type TestHarness,
 } from "./support";
+import { defaultTimeout } from "./global_setup";
 
 type ScenarioName = "lowest" | "lower" | "no_membership" | "admin";
 
@@ -330,7 +331,7 @@ const routeCases: RouteCase[] = [
 		lowerRole: "viewer",
 		successStatus: 200,
 		prepare: async (harness, fixtures) => ({
-			path: `/admin/site/${harness.siteId}/assets/library`,
+			path: `/api/site/${harness.siteId}/assets/library`,
 			assertSuccess: async (response) => {
 				const payload = await response.json();
 				expect(Array.isArray(payload.assets)).toBe(true);
@@ -595,7 +596,7 @@ const routeCases: RouteCase[] = [
 ];
 
 test.describe("admin authorization coverage", () => {
-	test.setTimeout(120_000);
+	test.setTimeout(defaultTimeout);
 
 	for (const route of routeCases) {
 		test(`${route.method} ${route.name}`, async () => {

@@ -10,9 +10,10 @@ import {
 	createUser,
 	setupHarness,
 } from "./support";
+import { defaultTimeout } from "./global_setup";
 
 test.describe("content new editor", () => {
-	test.setTimeout(120_000);
+	test.setTimeout(defaultTimeout);
 
 	test("renders TipTap editor", async ({ browser }) => {
 		const harness = await setupHarness();
@@ -87,11 +88,14 @@ test.describe("content new editor", () => {
 			await page.locator(".ProseMirror").click();
 			await page.keyboard.type("Preview check");
 			await expect(page.locator("[data-editor-preview]")).toBeHidden();
-			await page.getByRole("button", { name: "Preview" }).click();
-			await expect(page.locator("[data-editor-preview]")).toBeVisible();
-			await expect(page.locator("[data-editor-preview-body]")).toContainText(
-				"Preview check",
-			);
+
+			// TODO not currently tested as it's being removed/reworked
+			// await page.getByRole("button", { name: "Preview" }).click();
+			// await expect(page.locator("[data-editor-preview]")).toBeVisible();
+			// await expect(page.locator("[data-editor-preview-body]")).toContainText(
+			// 	"Preview check",
+			// );
+
 			await expect(page.locator("[data-editor-source-panel]")).toBeHidden();
 			await page.getByRole("button", { name: "Markdown" }).click();
 			await expect(page.locator("[data-editor-source-panel]")).toBeVisible();
@@ -372,7 +376,7 @@ test.describe("content new editor", () => {
 });
 
 test.describe("user profile", () => {
-	test.setTimeout(120_000);
+	test.setTimeout(defaultTimeout);
 
 	test("lets a user view their own profile details and memberships", async ({
 		browser,

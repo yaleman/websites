@@ -15,6 +15,7 @@ import {
 	type SiteRole,
 	type TestHarness,
 } from "./support";
+import { defaultTimeout } from "./global_setup";
 
 function parseContentIdFromLocation(
 	location: string | undefined,
@@ -89,7 +90,7 @@ async function assertRevisionEditorSub(
 }
 
 test.describe("web audit attribution", () => {
-	test.setTimeout(120_000);
+	test.setTimeout(defaultTimeout);
 
 	test("content creation records the acting user in audit and revision history", async () => {
 		const harness = await setupHarness();

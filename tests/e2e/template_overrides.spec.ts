@@ -11,6 +11,7 @@ import {
 	createUser,
 	setupHarness,
 } from "./support";
+import { defaultTimeout } from "./global_setup";
 
 const overrideSource = `{% extends "base_template.html" %}
 {% block content %}
@@ -19,7 +20,7 @@ const overrideSource = `{% extends "base_template.html" %}
 {% endblock %}`;
 
 test.describe("template overrides", () => {
-	test.setTimeout(120_000);
+	test.setTimeout(defaultTimeout);
 
 	test("saves and resets a per-site page template override", async ({
 		browser,
