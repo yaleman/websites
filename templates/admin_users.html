@@ -4,6 +4,7 @@
 <section>
   <h2>Create User</h2>
   <form method="post" action="/admin/users">
+    <input type="hidden" name="csrf_token" value="{{ create_user_csrf_token }}" />
     <label for="subject">Subject</label>
     <input id="subject" name="subject" required />
 

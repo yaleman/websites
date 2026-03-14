@@ -6,6 +6,7 @@ use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Duration, Utc};
 use compact_jwt::{JwsHs256Signer, JwsSigner, JwsVerifier, Jwt, JwtUnverified};
 use sea_orm::ActiveValue::Set;
+use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
     IntoActiveModel, QueryFilter, QueryOrder,
@@ -158,7 +159,7 @@ impl ApiPrincipal {
         db: &C,
     ) -> Result<(), ApiAuthError> {
         if let ApiPrincipalKind::Bearer { token, .. } = &self.kind {
-            touch_user_api_token(db, token.as_ref().clone(), Utc::now()).await?;
+            touch_user_api_token(db, token.id, Utc::now()).await?;
         }
         Ok(())
     }
@@ -522,13 +523,24 @@ async fn authenticate_bearer_token(
 
 async fn touch_user_api_token<C: ConnectionTrait>(
     db: &C,
-    token: entities::user_api_token::Model,
+    token_id: Uuid,
     used_at: DateTime<Utc>,
-) -> Result<entities::user_api_token::Model, SiteError> {
-    let mut active = token.into_active_model();
-    active.last_used_at = Set(Some(used_at));
-    active.inactive_expires_at = Set(next_inactive_expiry(used_at));
-    active.update(db).await.map_err(SiteError::from)
+) -> Result<(), SiteError> {
+    entities::user_api_token::Entity::update_many()
+        .col_expr(
+            entities::user_api_token::Column::LastUsedAt,
+            Expr::value(Some(used_at)),
+        )
+        .col_expr(
+            entities::user_api_token::Column::InactiveExpiresAt,
+            Expr::value(next_inactive_expiry(used_at)),
+        )
+        .filter(entities::user_api_token::Column::Id.eq(token_id))
+        .filter(entities::user_api_token::Column::RevokedAt.is_null())
+        .exec(db)
+        .await
+        .map(|_| ())
+        .map_err(SiteError::from)
 }
 
 async fn effective_bearer_role<C: ConnectionTrait>(
@@ -879,5 +891,50 @@ mod tests {
                 .await
                 .expect_err("expected revoked token to fail");
         assert!(matches!(revoked_error, ApiAuthError::Unauthorized(_)));
+    }
+
+    #[tokio::test]
+    async fn successful_use_does_not_restore_a_revoked_token() {
+        let db = crate::db::test_db_start().await;
+        let signer = signer_from_secret(
+            &ensure_jwt_hs256_secret(&db)
+                .await
+                .expect("failed to create secret"),
+        )
+        .expect("failed to build signer");
+        let user = entities::user::create_user(&db, "stale-principal-user", None, None, false)
+            .await
+            .expect("failed to create user");
+        let issued = issue_user_api_token(
+            &db,
+            &signer,
+            "https://example.test",
+            &user,
+            &user,
+            "stale principal token",
+            None,
+        )
+        .await
+        .expect("failed to issue token");
+
+        let principal =
+            authenticate_bearer_token(&db, &signer, "https://example.test", &issued.token)
+                .await
+                .expect("failed to authenticate token");
+        revoke_user_api_token(&db, issued.row.id, user.id)
+            .await
+            .expect("failed to revoke token");
+
+        principal
+            .record_successful_use(&db)
+            .await
+            .expect("recording successful use should be a no-op for revoked tokens");
+
+        let revoked = get_user_api_token_by_id(&db, issued.row.id)
+            .await
+            .expect("failed to reload revoked token")
+            .expect("missing revoked token");
+        assert!(revoked.revoked_at.is_some());
+        assert_eq!(revoked.revoked_by_user_id, Some(user.id));
     }
 }
