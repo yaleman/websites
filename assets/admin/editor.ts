@@ -551,18 +551,17 @@ const initTransientMessages = () => {
 			continue;
 		}
 
-		const queryParam = message.dataset.clearQueryParam;
-		if (queryParam) {
-			const url = new URL(window.location.href);
-			if (url.searchParams.has(queryParam)) {
-				url.searchParams.delete(queryParam);
-				const nextUrl = `${url.pathname}${url.search}${url.hash}`;
-				window.history.replaceState({}, "", nextUrl);
-			}
-		}
-
 		window.setTimeout(() => {
 			message.setAttribute("hidden", "");
+			const queryParam = message.dataset.clearQueryParam;
+			if (queryParam) {
+				const url = new URL(window.location.href);
+				if (url.searchParams.has(queryParam)) {
+					url.searchParams.delete(queryParam);
+					const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+					window.history.replaceState({}, "", nextUrl);
+				}
+			}
 		}, dismissMs);
 	}
 };

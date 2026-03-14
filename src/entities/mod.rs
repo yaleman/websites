@@ -10,10 +10,12 @@ pub mod content_revision;
 pub mod content_revision_alias;
 pub mod content_revision_tag;
 pub mod content_tag;
+pub mod setting;
 pub mod site;
 pub mod site_membership;
 pub mod tag;
 pub mod user;
+pub mod user_api_token;
 
 #[derive(EnumIter, DeriveActiveEnum, Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[sea_orm(
