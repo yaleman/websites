@@ -1641,41 +1641,13 @@ async fn require_site_role(
     }
 }
 
-pub async fn run_admin_server(
-    db: Arc<DatabaseConnection>,
-    listen: &str,
-    oidc: &OidcConfig,
-) -> Result<(), anyhow::Error> {
-    let jwt_secret = ensure_jwt_hs256_secret(db.as_ref())
-        .await
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let jwt_signer =
-        signer_from_secret(&jwt_secret).map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let state = AdminState {
-        db: db.clone(),
-        oidc_client_id: ClientId::new(oidc.oidc_client_id.clone()),
-        oidc_client_secret: oidc.oidc_client_secret.clone().map(ClientSecret::new),
-        oidc_frontend_url: oidc.frontend_url.clone(),
-        oidc_discovery_url: IssuerUrl::new(oidc.oidc_discovery_url.clone())
-            .context("Failed to parse discovery URL")?,
-        oidc_client: Arc::new(build_http_client().context("Failed to build OIDC HTTP client")?),
-        jwt_signer: Arc::new(jwt_signer),
-        jwt_issuer: oidc.frontend_url.to_string(),
-    };
+async fn health_check() -> Json<&'static str> {
+    Json("ok")
+}
 
-    let pool = db.get_sqlite_connection_pool();
-    let session_store = SqliteStore::new((*pool).clone());
-
-    let assets_dir = resolve_admin_assets_dir();
-    let upload_root = resolve_upload_root();
-    session_store
-        .migrate()
-        .await
-        .context("Failed to migrate Session store")?;
-
-    let session_layer = SessionManagerLayer::new(session_store)
-        .with_secure(false)
-        .with_expiry(Expiry::OnSessionEnd);
+fn build_admin_app(state: AdminState, assets_dir: &StdPath, upload_root: &StdPath) -> Router {
+    let swagger_config =
+        utoipa_swagger_ui::Config::new(["/api-doc/openapi.json"]).validator_url("none");
 
     let admin_routes = Router::new()
         .route("/admin", get(get_index))
@@ -1793,13 +1765,66 @@ pub async fn run_admin_server(
             axum::routing::post(admin_site_template_override_reset),
         )
         .route("/admin/site/{site_id}/render", get(admin_site_render))
-        .nest_service("/admin/assets", ServeDir::new(&assets_dir))
-        .nest_service("/media/images", ServeDir::new(&upload_root))
+        .nest_service("/admin/assets", ServeDir::new(assets_dir))
+        .nest_service("/media/images", ServeDir::new(upload_root))
         .layer(from_fn(crate::middleware::require_session));
     let api_routes = Router::new().route(
         "/api/site/{site_id}/assets/library",
         get(api_site_assets_library),
     );
+
+    Router::new()
+        .route("/", get(admin_root))
+        .route("/health", get(health_check))
+        .route("/admin/login", get(admin_login))
+        .route("/oauth2/callback", get(admin_login_callback))
+        .route("/admin/logout", get(admin_logout))
+        .merge(
+            SwaggerUi::new("/api-docs")
+                .url("/api-doc/openapi.json", ApiDoc::openapi())
+                .config(swagger_config),
+        )
+        .merge(admin_routes)
+        .merge(api_routes)
+        .fallback(not_found)
+        .with_state(state)
+}
+
+pub async fn run_admin_server(
+    db: Arc<DatabaseConnection>,
+    listen: &str,
+    oidc: &OidcConfig,
+) -> Result<(), anyhow::Error> {
+    let jwt_secret = ensure_jwt_hs256_secret(db.as_ref())
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let jwt_signer =
+        signer_from_secret(&jwt_secret).map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let state = AdminState {
+        db: db.clone(),
+        oidc_client_id: ClientId::new(oidc.oidc_client_id.clone()),
+        oidc_client_secret: oidc.oidc_client_secret.clone().map(ClientSecret::new),
+        oidc_frontend_url: oidc.frontend_url.clone(),
+        oidc_discovery_url: IssuerUrl::new(oidc.oidc_discovery_url.clone())
+            .context("Failed to parse discovery URL")?,
+        oidc_client: Arc::new(build_http_client().context("Failed to build OIDC HTTP client")?),
+        jwt_signer: Arc::new(jwt_signer),
+        jwt_issuer: oidc.frontend_url.to_string(),
+    };
+
+    let pool = db.get_sqlite_connection_pool();
+    let session_store = SqliteStore::new((*pool).clone());
+
+    let assets_dir = resolve_admin_assets_dir();
+    let upload_root = resolve_upload_root();
+    session_store
+        .migrate()
+        .await
+        .context("Failed to migrate Session store")?;
+
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_secure(false)
+        .with_expiry(Expiry::OnSessionEnd);
 
     info!(
         "admin server listening on http://{listen} / {}",
@@ -1813,27 +1838,10 @@ pub async fn run_admin_server(
         ));
     }
 
-    // disable the validator since it won't work locally etc.
-    let swagger_config =
-        utoipa_swagger_ui::Config::new(["/api-doc/openapi.json"]).validator_url("none");
-
-    let app = Router::new()
-        .route("/", get(admin_root))
-        .route("/admin/login", get(admin_login))
-        .route("/oauth2/callback", get(admin_login_callback))
-        .route("/admin/logout", get(admin_logout))
-        .merge(
-            SwaggerUi::new("/api-docs")
-                .url("/api-doc/openapi.json", ApiDoc::openapi())
-                .config(swagger_config),
-        )
-        .merge(admin_routes)
-        .merge(api_routes)
-        .fallback(not_found)
+    let app = build_admin_app(state, &assets_dir, &upload_root)
         .layer(session_layer)
         .layer(from_fn(log_requests))
-        .layer(from_fn(crate::middleware::set_cache))
-        .with_state(state);
+        .layer(from_fn(crate::middleware::set_cache));
 
     let tls_config = build_tls_config(&oidc.tls_cert_path, &oidc.tls_key_path).await?;
     let bind_addr: SocketAddr = SocketAddr::from_str(listen)
@@ -4983,7 +4991,7 @@ mod tests {
     use super::*;
     use crate::constants::SESSION_USER;
     use axum::Router;
-    use axum::body::Body;
+    use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use axum::routing::get;
     use tower::ServiceExt;
@@ -5201,12 +5209,53 @@ mod tests {
             .with_state(state)
     }
 
+    fn test_app_router(state: AdminState) -> Router {
+        let session_layer = SessionManagerLayer::new(MemoryStore::default())
+            .with_secure(false)
+            .with_expiry(Expiry::OnSessionEnd);
+
+        build_admin_app(state, StdPath::new("."), StdPath::new(".")).layer(session_layer)
+    }
+
     fn multipart_json_request_body(json: &str) -> (String, Vec<u8>) {
         let boundary = "site-import-boundary";
         let body = format!(
             "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"site-export.json\"\r\nContent-Type: application/json\r\n\r\n{json}\r\n--{boundary}--\r\n"
         );
         (boundary.to_string(), body.into_bytes())
+    }
+
+    #[tokio::test]
+    async fn health_check_is_public_and_returns_json_ok() {
+        let db = crate::db::db_start("sqlite::memory:")
+            .await
+            .expect("failed to start db");
+        let router = test_app_router(test_admin_state(db.clone()));
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .expect("failed to build health request"),
+            )
+            .await
+            .expect("failed to call health route");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .expect("missing content-type")
+                .to_str()
+                .expect("invalid content-type"),
+            "application/json"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("failed to read health response body");
+        assert_eq!(body, "\"ok\"");
     }
 
     #[tokio::test]
