@@ -58,5 +58,122 @@
   </table>
   {% endif %}
 </section>
+
+{% if can_manage_tokens %}
+<section>
+  <h2>Issue API Token</h2>
+  <p>Issued tokens expire 7 days after last successful use.</p>
+  <form method="post" action="/admin/users/{{ user_id }}/tokens">
+    <label for="token_label">Label</label>
+    <input id="token_label" name="label" required />
+
+    <fieldset>
+      <legend>Grant Mode</legend>
+      <label for="grant_mode_current">
+        <input id="grant_mode_current" type="radio" name="grant_mode" value="current" checked />
+        Current user access
+      </label>
+      <label for="grant_mode_restricted">
+        <input id="grant_mode_restricted" type="radio" name="grant_mode" value="restricted" />
+        Restricted access
+      </label>
+    </fieldset>
+
+    {% if is_admin %}
+    <label for="grant_admin">
+      <input id="grant_admin" type="checkbox" name="grant_admin" value="true" />
+      Allow global admin access in restricted mode
+    </label>
+    {% endif %}
+
+    {% if token_grant_options.is_empty() %}
+    <p>No site memberships available for restricted grants.</p>
+    {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th>Include</th>
+          <th>Site</th>
+          <th>Current Role</th>
+          <th>Grant Role</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for site in token_grant_options %}
+        <tr>
+          <td>
+            <input
+              type="checkbox"
+              name="site_{{ site.site_id }}_enabled"
+              value="true" />
+          </td>
+          <td>{{ site.site_title }}</td>
+          <td>Current {{ site.current_role }}</td>
+          <td>
+            <select name="site_{{ site.site_id }}_role">
+              {% for option in site.role_options %}
+              <option value="{{ option.value }}" {% if option.selected %}selected{% endif %}>
+                {{ option.label }}
+              </option>
+              {% endfor %}
+            </select>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    <button type="submit">Issue token</button>
+  </form>
+
+  {% if let Some(issued_token) = issued_token %}
+  <label for="issued_token">Issued Token</label>
+  <textarea id="issued_token" rows="8" readonly>{{ issued_token }}</textarea>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Issued API Tokens</h2>
+  {% if tokens.is_empty() %}
+  <p>No tokens issued.</p>
+  {% else %}
+  <table>
+    <thead>
+      <tr>
+        <th>Label</th>
+        <th>Access</th>
+        <th>Created</th>
+        <th>Last Used</th>
+        <th>Expires</th>
+        <th>Revoked</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for token in tokens %}
+      <tr>
+        <td>{{ token.label }}</td>
+        <td>{{ token.grants_summary }}</td>
+        <td>{{ token.created_at }}</td>
+        <td>{{ token.last_used_at }}</td>
+        <td>{{ token.inactive_expires_at }}</td>
+        <td>{{ token.revoked_at }}</td>
+        <td>
+          {% if token.can_revoke %}
+          <form method="post" action="{{ token.revoke_href }}">
+            <button type="submit">Revoke</button>
+          </form>
+          {% else %}
+          Revoked
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endif %}
 <!-- Database ID: {{ user_id }} -->
 {% endblock %}

@@ -408,8 +408,10 @@ test.describe("user profile", () => {
 				page.getByRole("cell", { name: "profile-user" }),
 			).toBeVisible();
 			await expect(page.getByRole("cell", { name: "No" })).toBeVisible();
-			await expect(page.getByRole("link", { name: "Test Site" })).toBeVisible();
-			await expect(page.getByRole("cell", { name: "Author" })).toBeVisible();
+			const membershipRow = page.getByRole("row", {
+				name: /Test Site test Author/,
+			});
+			await expect(membershipRow).toBeVisible();
 		} finally {
 			await cleanupHarness(harness);
 		}
@@ -442,7 +444,9 @@ test.describe("user profile", () => {
 			await expect(
 				page.getByRole("cell", { name: "target-user" }),
 			).toBeVisible();
-			await expect(page.getByRole("cell", { name: "Viewer" })).toBeVisible();
+			await expect(
+				page.getByRole("row", { name: /Test Site test Viewer/ }),
+			).toBeVisible();
 		} finally {
 			await cleanupHarness(harness);
 		}
