@@ -8,6 +8,7 @@ import {
 	createContent,
 	createTag,
 	createUser,
+	seedSession,
 	setupHarness,
 } from "./support";
 import { defaultTimeout } from "./global_setup";
@@ -182,6 +183,7 @@ test.describe("content new editor", () => {
 			await createUser(harness, "membership-target", {
 				email: "membership-target@example.com",
 			});
+			await seedSession(harness, "membership-target");
 			const { context, page } = await createAuthenticatedPage(
 				browser,
 				harness,
@@ -200,11 +202,13 @@ test.describe("content new editor", () => {
 				}),
 			).toBeVisible();
 			await page.getByLabel("User").fill("membership-target@example");
-			const candidate = page.getByRole("option", {
+			await expect(page.getByRole("option", {
 				name: /membership-target membership-target@example.com/i,
-			});
-			await expect(candidate).toBeVisible();
-			await candidate.click();
+			})).toBeVisible();
+			await page.getByLabel("User").press("Enter");
+			await expect(page.getByLabel("User")).toHaveValue(
+				"membership-target@example.com (membership-target)",
+			);
 			await page.getByRole("button", { name: "Add member" }).click();
 			await expect(
 				page.locator('[aria-label="membership-target"]'),

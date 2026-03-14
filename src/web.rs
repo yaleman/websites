@@ -405,6 +405,8 @@ struct AdminUserProfileTemplate {
     token_grant_options: Vec<AdminUserTokenGrantRow>,
     tokens: Vec<AdminUserTokenRow>,
     issued_token: Option<String>,
+    issue_token_csrf_token: String,
+    revoke_token_csrf_token: String,
     can_manage_tokens: bool,
     can_create_users: bool,
 }
@@ -415,6 +417,7 @@ struct AdminUserProfileTemplate {
 struct AdminUsersTemplate {
     template_shared: AdminTemplateData,
     users: Vec<AdminUserListRow>,
+    create_user_csrf_token: String,
 }
 
 #[derive(Debug)]
@@ -533,6 +536,14 @@ struct AdminUserTokenRow {
     revoked_at: String,
     can_revoke: bool,
     revoke_href: String,
+}
+
+#[derive(Default)]
+struct AdminUserProfileViewState {
+    issued_token: Option<String>,
+    page_message: Option<String>,
+    page_message_is_toast: bool,
+    clear_query_param: Option<String>,
 }
 
 #[derive(Debug)]
@@ -710,6 +721,7 @@ struct MembershipUpdateForm {
 
 #[derive(Debug, Deserialize)]
 struct AdminUserCreateForm {
+    csrf_token: String,
     subject: String,
     email: Option<String>,
     display_name: Option<String>,
@@ -1012,6 +1024,33 @@ fn build_search_rows(
 
 fn site_delete_csrf_scope(site_id: Uuid) -> String {
     format!("delete-site:{site_id}")
+}
+
+fn admin_user_create_csrf_scope() -> &'static str {
+    "create-user"
+}
+
+fn user_token_issue_csrf_scope(user_id: Uuid) -> String {
+    format!("issue-user-token:{user_id}")
+}
+
+fn user_token_revoke_csrf_scope(user_id: Uuid) -> String {
+    format!("revoke-user-token:{user_id}")
+}
+
+fn no_store_response(response: impl IntoResponse) -> Response {
+    let mut response = response.into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store, max-age=0"),
+    );
+    response
+        .headers_mut()
+        .insert(header::PRAGMA, header::HeaderValue::from_static("no-cache"));
+    response
+        .headers_mut()
+        .insert(header::EXPIRES, header::HeaderValue::from_static("0"));
+    response
 }
 
 fn parse_tag_list(raw: Option<String>) -> Vec<String> {
@@ -1449,12 +1488,10 @@ fn role_options_up_to(max_role: SiteRole) -> Vec<AdminUserTokenGrantRoleOption> 
 
 async fn build_admin_user_profile_template(
     state: &AdminState,
+    session: &Session,
     viewer: &entities::user::Model,
     target: entities::user::Model,
-    issued_token: Option<String>,
-    page_message: Option<String>,
-    page_message_is_toast: bool,
-    clear_query_param: Option<&str>,
+    view_state: AdminUserProfileViewState,
 ) -> Result<AdminUserProfileTemplate, SiteError> {
     let memberships = list_memberships_for_user_id(state.db.as_ref(), target.id)
         .await
@@ -1524,14 +1561,32 @@ async fn build_admin_user_profile_template(
         .to_string();
     let template_shared = AdminTemplateData::new(format!("User Profile: {profile_name}"))
         .with_links(vec![AdminLink::new("/admin", "Back to dashboard")]);
-    let template_shared = if let Some(message) = page_message {
-        if page_message_is_toast {
-            template_shared.with_toast_message(message, clear_query_param.unwrap_or("message"))
+    let template_shared = if let Some(message) = view_state.page_message {
+        if view_state.page_message_is_toast {
+            template_shared.with_toast_message(
+                message,
+                view_state.clear_query_param.as_deref().unwrap_or("message"),
+            )
         } else {
             template_shared.with_message(message)
         }
     } else {
         template_shared
+    };
+    let can_manage_tokens = can_view_user_profile(viewer, &target);
+    let issue_token_csrf_token = if can_manage_tokens {
+        session
+            .issue_csrf_token(&user_token_issue_csrf_scope(target.id))
+            .await?
+    } else {
+        String::new()
+    };
+    let revoke_token_csrf_token = if can_manage_tokens {
+        session
+            .issue_csrf_token(&user_token_revoke_csrf_scope(target.id))
+            .await?
+    } else {
+        String::new()
     };
 
     Ok(AdminUserProfileTemplate {
@@ -1546,8 +1601,10 @@ async fn build_admin_user_profile_template(
         memberships: membership_rows,
         token_grant_options,
         tokens,
-        issued_token,
-        can_manage_tokens: can_view_user_profile(viewer, &target),
+        issued_token: view_state.issued_token,
+        issue_token_csrf_token,
+        revoke_token_csrf_token,
+        can_manage_tokens,
         can_create_users: viewer.admin,
     })
 }
@@ -1922,6 +1979,9 @@ async fn admin_users(
 
     Ok(AdminUsersTemplate {
         template_shared,
+        create_user_csrf_token: session
+            .issue_csrf_token(admin_user_create_csrf_scope())
+            .await?,
         users: users
             .into_iter()
             .map(|user| AdminUserListRow {
@@ -1941,9 +2001,20 @@ async fn admin_users_create(
     Form(form): Form<AdminUserCreateForm>,
 ) -> Result<Redirect, SiteError> {
     let actor = require_global_admin(&session).await?;
+    session
+        .validate_csrf_token(admin_user_create_csrf_scope(), &form.csrf_token)
+        .await?;
     let subject = form.subject.trim().to_string();
     if subject.is_empty() {
         return Err(SiteError::BadRequest("subject is required".to_string()));
+    }
+    let existing = entities::user::Entity::find()
+        .filter(entities::user::Column::Subject.eq(subject.clone()))
+        .one(state.db.as_ref())
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load users: {error}")))?;
+    if existing.is_some() {
+        return Err(SiteError::BadRequest("subject already exists".to_string()));
     }
     let email = form
         .email
@@ -1992,7 +2063,16 @@ async fn admin_users_create(
             })
         })
         .await;
-    map_transaction_error(create_result)?;
+    match map_transaction_error(create_result) {
+        Err(SiteError::Database(message))
+            if message.contains("UNIQUE constraint failed: user.subject")
+                || message.contains("idx_user_subject") =>
+        {
+            return Err(SiteError::BadRequest("subject already exists".to_string()));
+        }
+        Err(error) => return Err(error),
+        Ok(()) => {}
+    }
 
     Ok(Redirect::to("/admin/users?created=1"))
 }
@@ -2380,12 +2460,15 @@ async fn admin_user_profile(
 
     build_admin_user_profile_template(
         &state,
+        &session,
         &viewer,
         target,
-        None,
-        query.revoked.as_ref().map(|_| "Token revoked.".to_string()),
-        query.revoked.is_some(),
-        Some("revoked"),
+        AdminUserProfileViewState {
+            page_message: query.revoked.as_ref().map(|_| "Token revoked.".to_string()),
+            page_message_is_toast: query.revoked.is_some(),
+            clear_query_param: Some("revoked".to_string()),
+            ..Default::default()
+        },
     )
     .await
 }
@@ -2395,7 +2478,7 @@ async fn admin_user_token_issue(
     session: Session,
     Path(user_id): Path<Uuid>,
     Form(form): Form<HashMap<String, String>>,
-) -> Result<AdminUserProfileTemplate, SiteError> {
+) -> Result<Response, SiteError> {
     let viewer = current_user(&session).await?;
     let target = get_user_by_id(state.db.as_ref(), user_id)
         .await
@@ -2406,6 +2489,13 @@ async fn admin_user_token_issue(
             "cannot manage another user's tokens".to_string(),
         ));
     }
+    let csrf_token = form
+        .get("csrf_token")
+        .map(String::as_str)
+        .ok_or_else(|| SiteError::BadRequest("missing csrf token".to_string()))?;
+    session
+        .validate_csrf_token(&user_token_issue_csrf_scope(user_id), csrf_token)
+        .await?;
 
     let label = form
         .get("label")
@@ -2513,22 +2603,26 @@ async fn admin_user_token_issue(
         .await;
     let issued = map_transaction_error(issued_result)?;
 
-    build_admin_user_profile_template(
+    let template = build_admin_user_profile_template(
         &state,
+        &session,
         &viewer,
         target,
-        Some(issued.token),
-        Some("Token issued. Copy it now; it won't be shown again.".to_string()),
-        false,
-        None,
+        AdminUserProfileViewState {
+            issued_token: Some(issued.token),
+            page_message: Some("Token issued. Copy it now; it won't be shown again.".to_string()),
+            ..Default::default()
+        },
     )
-    .await
+    .await?;
+    Ok(no_store_response(template))
 }
 
 async fn admin_user_token_revoke(
     State(state): State<AdminState>,
     session: Session,
     Path((user_id, token_id)): Path<(Uuid, Uuid)>,
+    Form(form): Form<CsrfTokenForm>,
 ) -> Result<Redirect, SiteError> {
     let viewer = current_user(&session).await?;
     let target = get_user_by_id(state.db.as_ref(), user_id)
@@ -2540,6 +2634,9 @@ async fn admin_user_token_revoke(
             "cannot manage another user's tokens".to_string(),
         ));
     }
+    session
+        .validate_csrf_token(&user_token_revoke_csrf_scope(user_id), &form.csrf_token)
+        .await?;
 
     let revoke_result = state
         .db

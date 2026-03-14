@@ -64,6 +64,7 @@
   <h2>Issue API Token</h2>
   <p>Issued tokens expire 7 days after last successful use.</p>
   <form method="post" action="/admin/users/{{ user_id }}/tokens">
+    <input type="hidden" name="csrf_token" value="{{ issue_token_csrf_token }}" />
     <label for="token_label">Label</label>
     <input id="token_label" name="label" required />
 
@@ -162,6 +163,7 @@
         <td>
           {% if token.can_revoke %}
           <form method="post" action="{{ token.revoke_href }}">
+            <input type="hidden" name="csrf_token" value="{{ revoke_token_csrf_token }}" />
             <button type="submit">Revoke</button>
           </form>
           {% else %}
