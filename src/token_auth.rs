@@ -58,7 +58,10 @@ pub struct IssuedApiToken {
 #[derive(Clone, Debug)]
 pub enum ApiPrincipalKind {
     Session,
-    Bearer { grants: Option<TokenGrantSet> },
+    Bearer {
+        grants: Option<TokenGrantSet>,
+        token: Box<entities::user_api_token::Model>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -148,6 +151,16 @@ impl TokenGrantSet {
 impl ApiPrincipal {
     pub fn is_bearer(&self) -> bool {
         matches!(self.kind, ApiPrincipalKind::Bearer { .. })
+    }
+
+    pub async fn record_successful_use<C: ConnectionTrait>(
+        &self,
+        db: &C,
+    ) -> Result<(), ApiAuthError> {
+        if let ApiPrincipalKind::Bearer { token, .. } = &self.kind {
+            touch_user_api_token(db, token.as_ref().clone(), Utc::now()).await?;
+        }
+        Ok(())
     }
 
     pub async fn require_site_role<C: ConnectionTrait>(
@@ -498,11 +511,11 @@ async fn authenticate_bearer_token(
         ));
     }
 
-    touch_user_api_token(db, token_row, now).await?;
     Ok(ApiPrincipal {
         user,
         kind: ApiPrincipalKind::Bearer {
             grants: stored_grants,
+            token: Box::new(token_row),
         },
     })
 }
@@ -611,7 +624,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn issued_token_authenticates_and_refreshes_idle_expiry() {
+    async fn issued_token_only_refreshes_idle_expiry_after_successful_use() {
         let db = crate::db::test_db_start().await;
         let secret = ensure_jwt_hs256_secret(&db)
             .await
@@ -655,10 +668,24 @@ mod tests {
                 .await
                 .expect("failed to authenticate token");
 
+        let untouched = get_user_api_token_by_id(&db, issued.row.id)
+            .await
+            .expect("failed to load untouched token")
+            .expect("missing untouched token");
+        assert!(untouched.last_used_at.is_none());
+        assert_eq!(
+            untouched.inactive_expires_at,
+            issued.row.inactive_expires_at
+        );
+
         principal
             .require_site_role(&db, site.id, SiteRole::Author)
             .await
             .expect("expected author access");
+        principal
+            .record_successful_use(&db)
+            .await
+            .expect("expected successful use to refresh expiry");
 
         let refreshed = get_user_api_token_by_id(&db, issued.row.id)
             .await
@@ -786,6 +813,16 @@ mod tests {
             .await
             .expect_err("expected downgraded membership to remove author access");
         assert!(matches!(error, ApiAuthError::Forbidden(_)));
+
+        let untouched = get_user_api_token_by_id(&db, issued.row.id)
+            .await
+            .expect("failed to load token after forbidden access")
+            .expect("missing token after forbidden access");
+        assert!(untouched.last_used_at.is_none());
+        assert_eq!(
+            untouched.inactive_expires_at,
+            issued.row.inactive_expires_at
+        );
     }
 
     #[tokio::test]

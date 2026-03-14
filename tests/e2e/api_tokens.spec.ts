@@ -106,7 +106,10 @@ test.describe("api token admin flows", () => {
 
 			await tokenRow.getByRole("button", { name: "Revoke" }).click();
 			await expect(page).toHaveURL(
-				new RegExp(`/admin/users/${targetUserId}\\?revoked=1$`),
+				new RegExp(`/admin/users/${targetUserId}$`),
+			);
+			await expect(page.locator(".message--toast")).toContainText(
+				"Token revoked.",
 			);
 
 			const revoked = await bearerApi.get(

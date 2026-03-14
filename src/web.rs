@@ -4118,6 +4118,7 @@ async fn api_site_assets_library(
         .map_err(|error| SiteError::internal(format!("failed to list assets: {error}")))?;
 
     if assets.is_empty() {
+        principal.record_successful_use(state.db.as_ref()).await?;
         return Ok(Json(AssetLibraryResponse { assets: Vec::new() }));
     }
 
@@ -4155,6 +4156,7 @@ async fn api_site_assets_library(
         })
         .collect();
 
+    principal.record_successful_use(state.db.as_ref()).await?;
     Ok(Json(AssetLibraryResponse { assets: items }))
 }
 
