@@ -37,6 +37,7 @@ pub mod oidc;
 pub mod site_export;
 pub mod telemetry;
 pub mod tls;
+pub mod token_auth;
 pub mod web;
 
 pub use site_export::{

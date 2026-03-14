@@ -15,12 +15,14 @@ axum = { version = "0.8.8", features = ["multipart", "macros"] }
 axum-server = { version = "0.8.0", features = ["tokio-rustls", "tls-rustls"] }
 chrono = "0.4.44"
 clap = { version = "4.5.60", features = ["derive", "env"] }
+compact_jwt = "0.5.5"
 glob = "0.3.3"
 image = "0.25.9"
 markdown = "1.0.0"
 mime_guess = "2.0.5"
 openidconnect = { version = "4.0.1", features = ["reqwest"] }
 quick-xml = "0.39.2"
+rand = "0.10.0"
 regex = "1.12.3"
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
