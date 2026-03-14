@@ -17,6 +17,11 @@ use crate::images::{generate_thumbnail, mime_from_extension};
 use crate::middleware::log_requests;
 use crate::oidc::{admin_login_callback, build_http_client, build_oidc_client};
 use crate::tls::build_tls_config;
+use crate::token_auth::{
+    self, TokenGrantSet, TokenSiteGrant, authenticate_api_request, deserialize_grants_json,
+    ensure_jwt_hs256_secret, issue_user_api_token, revoke_user_api_token, signer_from_secret,
+    summarize_grants,
+};
 use crate::{
     NewAsset, NewAssetVariant, NewContent, cli::OidcConfig, content_primary_route, create_asset,
     create_asset_variant, create_content, create_membership, create_site, create_tag,
@@ -37,7 +42,7 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{Form, Multipart, OriginalUri, Path, Query, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
     routing::get,
 };
@@ -162,6 +167,8 @@ pub(crate) struct AdminState {
     pub(crate) oidc_frontend_url: Url,
     pub(crate) oidc_discovery_url: IssuerUrl,
     pub(crate) oidc_client: Arc<reqwest::Client>,
+    pub(crate) jwt_signer: Arc<compact_jwt::JwsHs256Signer>,
+    pub(crate) jwt_issuer: String,
 }
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
@@ -395,6 +402,22 @@ struct AdminUserProfileTemplate {
     last_login_at: String,
     is_admin: bool,
     memberships: Vec<AdminUserMembershipRow>,
+    token_grant_options: Vec<AdminUserTokenGrantRow>,
+    tokens: Vec<AdminUserTokenRow>,
+    issued_token: Option<String>,
+    issue_token_csrf_token: String,
+    revoke_token_csrf_token: String,
+    can_manage_tokens: bool,
+    can_create_users: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_users.html")]
+struct AdminUsersTemplate {
+    template_shared: AdminTemplateData,
+    users: Vec<AdminUserListRow>,
+    create_user_csrf_token: String,
 }
 
 #[derive(Debug)]
@@ -477,6 +500,50 @@ struct AdminUserMembershipRow {
     site_short_name: String,
     role: SiteRole,
     site_href: String,
+}
+
+#[derive(Debug)]
+struct AdminUserListRow {
+    profile_href: String,
+    subject: String,
+    display_name: String,
+    email: String,
+    is_admin: bool,
+}
+
+#[derive(Debug)]
+struct AdminUserTokenGrantRoleOption {
+    value: &'static str,
+    label: String,
+    selected: bool,
+}
+
+#[derive(Debug)]
+struct AdminUserTokenGrantRow {
+    site_id: Uuid,
+    site_title: String,
+    current_role: SiteRole,
+    role_options: Vec<AdminUserTokenGrantRoleOption>,
+}
+
+#[derive(Debug)]
+struct AdminUserTokenRow {
+    label: String,
+    grants_summary: String,
+    created_at: String,
+    last_used_at: String,
+    inactive_expires_at: String,
+    revoked_at: String,
+    can_revoke: bool,
+    revoke_href: String,
+}
+
+#[derive(Default)]
+struct AdminUserProfileViewState {
+    issued_token: Option<String>,
+    page_message: Option<String>,
+    page_message_is_toast: bool,
+    clear_query_param: Option<String>,
 }
 
 #[derive(Debug)]
@@ -594,6 +661,16 @@ struct DashboardQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct AdminUsersQuery {
+    created: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminUserProfileQuery {
+    revoked: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct AdminContentListQuery {
     page_type: Option<String>,
     sort_by: Option<String>,
@@ -640,6 +717,15 @@ struct MembershipCreateForm {
 #[derive(Debug, Deserialize)]
 struct MembershipUpdateForm {
     role: SiteRole,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminUserCreateForm {
+    csrf_token: String,
+    subject: String,
+    email: Option<String>,
+    display_name: Option<String>,
+    admin: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -938,6 +1024,33 @@ fn build_search_rows(
 
 fn site_delete_csrf_scope(site_id: Uuid) -> String {
     format!("delete-site:{site_id}")
+}
+
+fn admin_user_create_csrf_scope() -> &'static str {
+    "create-user"
+}
+
+fn user_token_issue_csrf_scope(user_id: Uuid) -> String {
+    format!("issue-user-token:{user_id}")
+}
+
+fn user_token_revoke_csrf_scope(user_id: Uuid) -> String {
+    format!("revoke-user-token:{user_id}")
+}
+
+fn no_store_response(response: impl IntoResponse) -> Response {
+    let mut response = response.into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store, max-age=0"),
+    );
+    response
+        .headers_mut()
+        .insert(header::PRAGMA, header::HeaderValue::from_static("no-cache"));
+    response
+        .headers_mut()
+        .insert(header::EXPIRES, header::HeaderValue::from_static("0"));
+    response
 }
 
 fn parse_tag_list(raw: Option<String>) -> Vec<String> {
@@ -1302,6 +1415,21 @@ impl std::fmt::Display for SiteRole {
     }
 }
 
+impl std::str::FromStr for SiteRole {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "viewer" => Ok(Self::Viewer),
+            "author" => Ok(Self::Author),
+            "editor" => Ok(Self::Editor),
+            "owner" => Ok(Self::Owner),
+            "admin" => Ok(Self::Admin),
+            _ => Err(format!("unsupported site role: {value}")),
+        }
+    }
+}
+
 async fn current_user(session: &Session) -> Result<entities::user::Model, SiteError> {
     session
         .get::<entities::user::Model>(SESSION_USER)
@@ -1335,6 +1463,150 @@ fn role_satisfies(actual: SiteRole, required: SiteRole) -> bool {
 
 fn can_view_user_profile(viewer: &entities::user::Model, target: &entities::user::Model) -> bool {
     viewer.admin || viewer.id == target.id
+}
+
+fn map_transaction_error<T>(
+    result: Result<T, sea_orm::TransactionError<SiteError>>,
+) -> Result<T, SiteError> {
+    result.map_err(|error| match error {
+        sea_orm::TransactionError::Connection(error) => SiteError::from(error),
+        sea_orm::TransactionError::Transaction(error) => error,
+    })
+}
+
+fn role_options_up_to(max_role: SiteRole) -> Vec<AdminUserTokenGrantRoleOption> {
+    SiteRole::all_without_admin()
+        .into_iter()
+        .filter(|role| role_satisfies(max_role, *role))
+        .map(|role| AdminUserTokenGrantRoleOption {
+            value: role.label(),
+            label: role.to_string(),
+            selected: role == max_role,
+        })
+        .collect()
+}
+
+async fn build_admin_user_profile_template(
+    state: &AdminState,
+    session: &Session,
+    viewer: &entities::user::Model,
+    target: entities::user::Model,
+    view_state: AdminUserProfileViewState,
+) -> Result<AdminUserProfileTemplate, SiteError> {
+    let memberships = list_memberships_for_user_id(state.db.as_ref(), target.id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load memberships: {error}")))?;
+    let role_by_site = memberships
+        .iter()
+        .map(|membership| (membership.site_id, membership.role))
+        .collect::<HashMap<_, _>>();
+    let sites = list_sites_for_subject(state.db.as_ref(), &target.subject)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load sites: {error}")))?;
+    let membership_rows = sites
+        .iter()
+        .filter_map(|site| {
+            role_by_site
+                .get(&site.id)
+                .copied()
+                .map(|role| AdminUserMembershipRow {
+                    site_title: site.full_title.clone(),
+                    site_short_name: site.short_name.clone(),
+                    role,
+                    site_href: format!("/admin/site/{}/content", site.id),
+                })
+        })
+        .collect::<Vec<_>>();
+    let token_grant_options = sites
+        .iter()
+        .filter_map(|site| {
+            role_by_site
+                .get(&site.id)
+                .copied()
+                .map(|role| AdminUserTokenGrantRow {
+                    site_id: site.id,
+                    site_title: site.full_title.clone(),
+                    current_role: role,
+                    role_options: role_options_up_to(role),
+                })
+        })
+        .collect::<Vec<_>>();
+    let tokens = token_auth::list_user_api_tokens(state.db.as_ref(), target.id)
+        .await?
+        .into_iter()
+        .map(|token| {
+            let grants = deserialize_grants_json(token.grants_json.as_ref())?;
+            Ok(AdminUserTokenRow {
+                label: token.label,
+                grants_summary: summarize_grants(grants.as_ref()),
+                created_at: token.created_at.to_rfc3339(),
+                last_used_at: format_optional_datetime(token.last_used_at),
+                inactive_expires_at: token.inactive_expires_at.to_rfc3339(),
+                revoked_at: format_optional_datetime(token.revoked_at),
+                can_revoke: token.revoked_at.is_none(),
+                revoke_href: format!("/admin/users/{}/tokens/{}/revoke", target.id, token.id),
+            })
+        })
+        .collect::<Result<Vec<_>, SiteError>>()?;
+
+    let display_name = target
+        .display_name
+        .clone()
+        .unwrap_or_else(|| "n/a".to_string());
+    let profile_name = target
+        .display_name
+        .as_deref()
+        .or(target.email.as_deref())
+        .unwrap_or(&target.subject)
+        .to_string();
+    let template_shared = AdminTemplateData::new(format!("User Profile: {profile_name}"))
+        .with_links(vec![AdminLink::new("/admin", "Back to dashboard")]);
+    let template_shared = if let Some(message) = view_state.page_message {
+        if view_state.page_message_is_toast {
+            template_shared.with_toast_message(
+                message,
+                view_state.clear_query_param.as_deref().unwrap_or("message"),
+            )
+        } else {
+            template_shared.with_message(message)
+        }
+    } else {
+        template_shared
+    };
+    let can_manage_tokens = can_view_user_profile(viewer, &target);
+    let issue_token_csrf_token = if can_manage_tokens {
+        session
+            .issue_csrf_token(&user_token_issue_csrf_scope(target.id))
+            .await?
+    } else {
+        String::new()
+    };
+    let revoke_token_csrf_token = if can_manage_tokens {
+        session
+            .issue_csrf_token(&user_token_revoke_csrf_scope(target.id))
+            .await?
+    } else {
+        String::new()
+    };
+
+    Ok(AdminUserProfileTemplate {
+        template_shared,
+        user_id: target.id,
+        display_name,
+        subject: target.subject.clone(),
+        email: target.email.clone().unwrap_or_else(|| "n/a".to_string()),
+        created_at: target.created_at.to_rfc3339(),
+        last_login_at: format_optional_datetime(target.last_login_at),
+        is_admin: target.admin,
+        memberships: membership_rows,
+        token_grant_options,
+        tokens,
+        issued_token: view_state.issued_token,
+        issue_token_csrf_token,
+        revoke_token_csrf_token,
+        can_manage_tokens,
+        can_create_users: viewer.admin,
+    })
 }
 
 async fn require_site_role(
@@ -1374,6 +1646,11 @@ pub async fn run_admin_server(
     listen: &str,
     oidc: &OidcConfig,
 ) -> Result<(), anyhow::Error> {
+    let jwt_secret = ensure_jwt_hs256_secret(db.as_ref())
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let jwt_signer =
+        signer_from_secret(&jwt_secret).map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let state = AdminState {
         db: db.clone(),
         oidc_client_id: ClientId::new(oidc.oidc_client_id.clone()),
@@ -1382,6 +1659,8 @@ pub async fn run_admin_server(
         oidc_discovery_url: IssuerUrl::new(oidc.oidc_discovery_url.clone())
             .context("Failed to parse discovery URL")?,
         oidc_client: Arc::new(build_http_client().context("Failed to build OIDC HTTP client")?),
+        jwt_signer: Arc::new(jwt_signer),
+        jwt_issuer: oidc.frontend_url.to_string(),
     };
 
     let pool = db.get_sqlite_connection_pool();
@@ -1398,12 +1677,21 @@ pub async fn run_admin_server(
         .with_secure(false)
         .with_expiry(Expiry::OnSessionEnd);
 
-    let protected_routes = Router::new()
+    let admin_routes = Router::new()
         .route("/admin", get(get_index))
         .route("/admin/sites", get(get_sites))
         .route("/admin/search", get(get_global_search))
+        .route("/admin/users", get(admin_users).post(admin_users_create))
         .route("/admin/users/me", get(admin_user_profile_redirect))
         .route("/admin/users/{user_id}", get(admin_user_profile))
+        .route(
+            "/admin/users/{user_id}/tokens",
+            axum::routing::post(admin_user_token_issue),
+        )
+        .route(
+            "/admin/users/{user_id}/tokens/{token_id}/revoke",
+            axum::routing::post(admin_user_token_revoke),
+        )
         .route(
             "/admin/sites/new",
             get(admin_sites_new).post(admin_sites_create),
@@ -1484,10 +1772,6 @@ pub async fn run_admin_server(
         )
         .route("/admin/site/{site_id}/assets", get(admin_site_assets))
         .route(
-            "/api/site/{site_id}/assets/library",
-            get(api_site_assets_library),
-        )
-        .route(
             "/admin/site/{site_id}/assets/new",
             get(admin_site_assets_new).post(admin_site_assets_create),
         )
@@ -1512,6 +1796,10 @@ pub async fn run_admin_server(
         .nest_service("/admin/assets", ServeDir::new(&assets_dir))
         .nest_service("/media/images", ServeDir::new(&upload_root))
         .layer(from_fn(crate::middleware::require_session));
+    let api_routes = Router::new().route(
+        "/api/site/{site_id}/assets/library",
+        get(api_site_assets_library),
+    );
 
     info!(
         "admin server listening on http://{listen} / {}",
@@ -1539,7 +1827,8 @@ pub async fn run_admin_server(
                 .url("/api-doc/openapi.json", ApiDoc::openapi())
                 .config(swagger_config),
         )
-        .merge(protected_routes)
+        .merge(admin_routes)
+        .merge(api_routes)
         .fallback(not_found)
         .layer(session_layer)
         .layer(from_fn(log_requests))
@@ -1652,6 +1941,7 @@ async fn get_index(
     let mut links = vec![AdminLink::new("/admin/sites/new", "New site")];
     if viewer.admin {
         links.push(AdminLink::new("/admin/sites/import", "Import site"));
+        links.push(AdminLink::new("/admin/users", "Users"));
     }
 
     let template_shared = AdminTemplateData::new("Admin Dashboard").with_links(links);
@@ -1667,6 +1957,124 @@ async fn get_index(
         template_shared,
         sites,
     })
+}
+
+async fn admin_users(
+    State(state): State<AdminState>,
+    session: Session,
+    Query(query): Query<AdminUsersQuery>,
+) -> Result<AdminUsersTemplate, SiteError> {
+    require_global_admin(&session).await?;
+    let mut users = list_users(state.db.as_ref())
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load users: {error}")))?;
+    users.sort_by(|left, right| left.subject.cmp(&right.subject));
+    let template_shared = AdminTemplateData::new("Users")
+        .with_links(vec![AdminLink::new("/admin", "Back to dashboard")]);
+    let template_shared = if query.created.is_some() {
+        template_shared.with_toast_message("User created.", "created")
+    } else {
+        template_shared
+    };
+
+    Ok(AdminUsersTemplate {
+        template_shared,
+        create_user_csrf_token: session
+            .issue_csrf_token(admin_user_create_csrf_scope())
+            .await?,
+        users: users
+            .into_iter()
+            .map(|user| AdminUserListRow {
+                profile_href: format!("/admin/users/{}", user.id),
+                subject: user.subject,
+                display_name: user.display_name.unwrap_or_else(|| "n/a".to_string()),
+                email: user.email.unwrap_or_else(|| "n/a".to_string()),
+                is_admin: user.admin,
+            })
+            .collect(),
+    })
+}
+
+async fn admin_users_create(
+    State(state): State<AdminState>,
+    session: Session,
+    Form(form): Form<AdminUserCreateForm>,
+) -> Result<Redirect, SiteError> {
+    let actor = require_global_admin(&session).await?;
+    session
+        .validate_csrf_token(admin_user_create_csrf_scope(), &form.csrf_token)
+        .await?;
+    let subject = form.subject.trim().to_string();
+    if subject.is_empty() {
+        return Err(SiteError::BadRequest("subject is required".to_string()));
+    }
+    let existing = entities::user::Entity::find()
+        .filter(entities::user::Column::Subject.eq(subject.clone()))
+        .one(state.db.as_ref())
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load users: {error}")))?;
+    if existing.is_some() {
+        return Err(SiteError::BadRequest("subject already exists".to_string()));
+    }
+    let email = form
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let display_name = form
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let is_admin = form.admin.is_some();
+    let create_result = state
+        .db
+        .transaction::<_, _, SiteError>(|txn| {
+            let subject = subject.clone();
+            let email = email.clone();
+            let display_name = display_name.clone();
+            Box::pin(async move {
+                let user = entities::user::create_user(
+                    txn,
+                    &subject,
+                    email.as_deref(),
+                    display_name.as_deref(),
+                    is_admin,
+                )
+                .await?;
+                log_audit_event(
+                    txn,
+                    &actor.subject,
+                    "create_user",
+                    "user",
+                    user.id,
+                    None,
+                    Some(json!({
+                        "subject": user.subject,
+                        "email": user.email,
+                        "display_name": user.display_name,
+                        "admin": user.admin
+                    })),
+                )
+                .await?;
+                Ok(())
+            })
+        })
+        .await;
+    match map_transaction_error(create_result) {
+        Err(SiteError::Database(message))
+            if message.contains("UNIQUE constraint failed: user.subject")
+                || message.contains("idx_user_subject") =>
+        {
+            return Err(SiteError::BadRequest("subject already exists".to_string()));
+        }
+        Err(error) => return Err(error),
+        Ok(()) => {}
+    }
+
+    Ok(Redirect::to("/admin/users?created=1"))
 }
 
 async fn admin_sites_new() -> Response {
@@ -2036,6 +2444,7 @@ async fn admin_user_profile(
     State(state): State<AdminState>,
     session: Session,
     Path(user_id): Path<Uuid>,
+    Query(query): Query<AdminUserProfileQuery>,
 ) -> Result<AdminUserProfileTemplate, SiteError> {
     let viewer = current_user(&session).await?;
     let target = get_user_by_id(state.db.as_ref(), user_id)
@@ -2049,53 +2458,218 @@ async fn admin_user_profile(
         ));
     }
 
+    build_admin_user_profile_template(
+        &state,
+        &session,
+        &viewer,
+        target,
+        AdminUserProfileViewState {
+            page_message: query.revoked.as_ref().map(|_| "Token revoked.".to_string()),
+            page_message_is_toast: query.revoked.is_some(),
+            clear_query_param: Some("revoked".to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+async fn admin_user_token_issue(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(user_id): Path<Uuid>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Result<Response, SiteError> {
+    let viewer = current_user(&session).await?;
+    let target = get_user_by_id(state.db.as_ref(), user_id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load user {user_id}: {error}")))?
+        .ok_or(SiteError::NotFound)?;
+    if !can_view_user_profile(&viewer, &target) {
+        return Err(SiteError::UnAuthorized(
+            "cannot manage another user's tokens".to_string(),
+        ));
+    }
+    let csrf_token = form
+        .get("csrf_token")
+        .map(String::as_str)
+        .ok_or_else(|| SiteError::BadRequest("missing csrf token".to_string()))?;
+    session
+        .validate_csrf_token(&user_token_issue_csrf_scope(user_id), csrf_token)
+        .await?;
+
+    let label = form
+        .get("label")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| SiteError::BadRequest("token label is required".to_string()))?;
+    let grant_mode = form
+        .get("grant_mode")
+        .map(String::as_str)
+        .unwrap_or("current");
     let memberships = list_memberships_for_user_id(state.db.as_ref(), target.id)
         .await
-        .map_err(|error| SiteError::internal(format!("failed to load memberships: {error}")))?;
-    let role_by_site = memberships
-        .into_iter()
-        .map(|membership| (membership.site_id, membership.role))
-        .collect::<HashMap<_, _>>();
-    let sites = list_sites_for_subject(state.db.as_ref(), &target.subject)
-        .await
         .map_err(|error| SiteError::internal(format!("failed to load sites: {error}")))?;
-    let membership_rows = sites
-        .into_iter()
-        .filter_map(|site| {
-            role_by_site
-                .get(&site.id)
-                .copied()
-                .map(|role| AdminUserMembershipRow {
-                    site_title: site.full_title,
-                    site_short_name: site.short_name,
-                    role,
-                    site_href: format!("/admin/site/{}/content", site.id),
+    let grants = match grant_mode {
+        "current" => None,
+        "restricted" => {
+            let mut restricted_sites = memberships
+                .into_iter()
+                .filter_map(|membership| {
+                    let enabled_key = format!("site_{}_enabled", membership.site_id);
+                    if !form.contains_key(&enabled_key) {
+                        return None;
+                    }
+
+                    let role_key = format!("site_{}_role", membership.site_id);
+                    Some((membership, role_key))
                 })
+                .map(
+                    |(membership, role_key)| -> Result<TokenSiteGrant, SiteError> {
+                        let selected_role = form
+                            .get(&role_key)
+                            .map(String::as_str)
+                            .ok_or_else(|| {
+                                SiteError::BadRequest("missing token grant role".to_string())
+                            })
+                            .and_then(|value| {
+                                <SiteRole as std::str::FromStr>::from_str(value)
+                                    .map_err(SiteError::BadRequest)
+                            })?;
+                        if selected_role.is_admin()
+                            || !role_satisfies(membership.role, selected_role)
+                        {
+                            return Err(SiteError::BadRequest(
+                                "requested token grant exceeds user permissions".to_string(),
+                            ));
+                        }
+                        Ok(TokenSiteGrant {
+                            site_id: membership.site_id,
+                            role: selected_role,
+                        })
+                    },
+                )
+                .collect::<Result<Vec<_>, _>>()?;
+            restricted_sites.sort_by_key(|grant| grant.site_id);
+            Some(TokenGrantSet {
+                admin: target.admin && form.contains_key("grant_admin"),
+                sites: restricted_sites,
+            })
+        }
+        _ => return Err(SiteError::BadRequest("invalid grant mode".to_string())),
+    };
+
+    let jwt_signer = state.jwt_signer.clone();
+    let jwt_issuer = state.jwt_issuer.clone();
+    let target_for_issue = target.clone();
+    let viewer_for_issue = viewer.clone();
+    let issued_result = state
+        .db
+        .transaction::<_, _, SiteError>(|txn| {
+            let grants = grants.clone();
+            let jwt_signer = jwt_signer.clone();
+            let jwt_issuer = jwt_issuer.clone();
+            let target_for_issue = target_for_issue.clone();
+            let viewer_for_issue = viewer_for_issue.clone();
+            let label = label.to_string();
+            Box::pin(async move {
+                let issued = issue_user_api_token(
+                    txn,
+                    jwt_signer.as_ref(),
+                    &jwt_issuer,
+                    &target_for_issue,
+                    &viewer_for_issue,
+                    &label,
+                    grants.clone(),
+                )
+                .await?;
+                log_audit_event(
+                    txn,
+                    &viewer_for_issue.subject,
+                    "issue_api_token",
+                    "user_api_token",
+                    issued.row.id,
+                    None,
+                    Some(json!({
+                        "user_id": target_for_issue.id,
+                        "label": issued.row.label,
+                        "grants": grants
+                    })),
+                )
+                .await?;
+                Ok(issued)
+            })
         })
-        .collect::<Vec<_>>();
+        .await;
+    let issued = map_transaction_error(issued_result)?;
 
-    Ok(AdminUserProfileTemplate {
-        template_shared: AdminTemplateData::new(format!(
-            "User Profile: {}",
-            target
-                .display_name
-                .as_deref()
-                .or(target.email.as_deref())
-                .unwrap_or(&target.subject)
-        )),
+    let template = build_admin_user_profile_template(
+        &state,
+        &session,
+        &viewer,
+        target,
+        AdminUserProfileViewState {
+            issued_token: Some(issued.token),
+            page_message: Some("Token issued. Copy it now; it won't be shown again.".to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    Ok(no_store_response(template))
+}
 
-        user_id: target.id,
-        display_name: target.display_name.unwrap_or_else(|| "n/a".to_string()),
-        subject: target.subject,
-        email: target.email.unwrap_or_else(|| "n/a".to_string()),
-        created_at: target.created_at.to_rfc3339(),
-        last_login_at: target
-            .last_login_at
-            .map(|value| value.to_rfc3339())
-            .unwrap_or_else(|| "n/a".to_string()),
-        is_admin: target.admin,
-        memberships: membership_rows,
-    })
+async fn admin_user_token_revoke(
+    State(state): State<AdminState>,
+    session: Session,
+    Path((user_id, token_id)): Path<(Uuid, Uuid)>,
+    Form(form): Form<CsrfTokenForm>,
+) -> Result<Redirect, SiteError> {
+    let viewer = current_user(&session).await?;
+    let target = get_user_by_id(state.db.as_ref(), user_id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load user {user_id}: {error}")))?
+        .ok_or(SiteError::NotFound)?;
+    if !can_view_user_profile(&viewer, &target) {
+        return Err(SiteError::UnAuthorized(
+            "cannot manage another user's tokens".to_string(),
+        ));
+    }
+    session
+        .validate_csrf_token(&user_token_revoke_csrf_scope(user_id), &form.csrf_token)
+        .await?;
+
+    let revoke_result = state
+        .db
+        .transaction::<_, _, SiteError>(|txn| {
+            let viewer = viewer.clone();
+            Box::pin(async move {
+                let token = token_auth::get_user_api_token_by_id(txn, token_id)
+                    .await?
+                    .ok_or(SiteError::NotFound)?;
+                if token.user_id != user_id {
+                    return Err(SiteError::NotFound);
+                }
+                let revoked = revoke_user_api_token(txn, token_id, viewer.id).await?;
+                log_audit_event(
+                    txn,
+                    &viewer.subject,
+                    "revoke_api_token",
+                    "user_api_token",
+                    revoked.id,
+                    None,
+                    Some(json!({
+                        "user_id": user_id,
+                        "label": revoked.label
+                    })),
+                )
+                .await?;
+                Ok(())
+            })
+        })
+        .await;
+    map_transaction_error(revoke_result)?;
+
+    Ok(Redirect::to(&format!("/admin/users/{user_id}?revoked=1")))
 }
 
 async fn admin_site_membership_create(
@@ -3578,6 +4152,9 @@ async fn build_admin_asset_rows<C: ConnectionTrait>(
         ("q" = String, Query, description = "Optional search query to filter assets by original filename or storage basename"),
         ("type" = String, Query, description = "Optional filter by image type (jpeg, png, gif, svg, webp)"),
     ),
+    security(
+        ("bearer_auth" = [])
+    ),
     responses(
         (status = 200, description = "A list of assets matching the query", body = AssetLibraryResponse),
         (status = 400, description = "Invalid request parameters", body = String),
@@ -3588,11 +4165,22 @@ async fn build_admin_asset_rows<C: ConnectionTrait>(
 )]
 async fn api_site_assets_library(
     State(state): State<AdminState>,
+    headers: HeaderMap,
     session: Session,
     Path(site_id): Path<Uuid>,
     Query(query): Query<AssetLibraryQuery>,
-) -> Result<Json<AssetLibraryResponse>, SiteError> {
-    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+) -> Result<Json<AssetLibraryResponse>, token_auth::ApiAuthError> {
+    let principal = authenticate_api_request(
+        state.db.as_ref(),
+        state.jwt_signer.as_ref(),
+        &state.jwt_issuer,
+        &headers,
+        &session,
+    )
+    .await?;
+    principal
+        .require_site_role(state.db.as_ref(), site_id, SiteRole::Author)
+        .await?;
 
     let query_text = query.q.unwrap_or_default();
     let query_text = query_text.trim();
@@ -3627,6 +4215,7 @@ async fn api_site_assets_library(
         .map_err(|error| SiteError::internal(format!("failed to list assets: {error}")))?;
 
     if assets.is_empty() {
+        principal.record_successful_use(state.db.as_ref()).await?;
         return Ok(Json(AssetLibraryResponse { assets: Vec::new() }));
     }
 
@@ -3664,6 +4253,7 @@ async fn api_site_assets_library(
         })
         .collect();
 
+    principal.record_successful_use(state.db.as_ref()).await?;
     Ok(Json(AssetLibraryResponse { assets: items }))
 }
 
@@ -4573,6 +5163,10 @@ mod tests {
     }
 
     fn test_admin_state(db: std::sync::Arc<DatabaseConnection>) -> AdminState {
+        let jwt_signer = signer_from_secret(&token_auth::JwtHs256SecretSetting {
+            secret_bytes: vec![7; 32],
+        })
+        .expect("failed to build test jwt signer");
         AdminState {
             db,
             oidc_client_id: ClientId::new("client".to_string()),
@@ -4583,6 +5177,8 @@ mod tests {
             oidc_client: std::sync::Arc::new(
                 build_http_client().expect("failed to build test oidc client"),
             ),
+            jwt_signer: Arc::new(jwt_signer),
+            jwt_issuer: "https://example.com".to_string(),
         }
     }
 

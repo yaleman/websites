@@ -8,6 +8,7 @@ import {
 	createContent,
 	createTag,
 	createUser,
+	seedSession,
 	setupHarness,
 } from "./support";
 import { defaultTimeout } from "./global_setup";
@@ -182,6 +183,7 @@ test.describe("content new editor", () => {
 			await createUser(harness, "membership-target", {
 				email: "membership-target@example.com",
 			});
+			await seedSession(harness, "membership-target");
 			const { context, page } = await createAuthenticatedPage(
 				browser,
 				harness,
@@ -200,11 +202,13 @@ test.describe("content new editor", () => {
 				}),
 			).toBeVisible();
 			await page.getByLabel("User").fill("membership-target@example");
-			const candidate = page.getByRole("option", {
+			await expect(page.getByRole("option", {
 				name: /membership-target membership-target@example.com/i,
-			});
-			await expect(candidate).toBeVisible();
-			await candidate.click();
+			})).toBeVisible();
+			await page.getByLabel("User").press("Enter");
+			await expect(page.getByLabel("User")).toHaveValue(
+				"membership-target@example.com (membership-target)",
+			);
 			await page.getByRole("button", { name: "Add member" }).click();
 			await expect(
 				page.locator('[aria-label="membership-target"]'),
@@ -408,8 +412,10 @@ test.describe("user profile", () => {
 				page.getByRole("cell", { name: "profile-user" }),
 			).toBeVisible();
 			await expect(page.getByRole("cell", { name: "No" })).toBeVisible();
-			await expect(page.getByRole("link", { name: "Test Site" })).toBeVisible();
-			await expect(page.getByRole("cell", { name: "Author" })).toBeVisible();
+			const membershipRow = page.getByRole("row", {
+				name: /Test Site test Author/,
+			});
+			await expect(membershipRow).toBeVisible();
 		} finally {
 			await cleanupHarness(harness);
 		}
@@ -442,7 +448,9 @@ test.describe("user profile", () => {
 			await expect(
 				page.getByRole("cell", { name: "target-user" }),
 			).toBeVisible();
-			await expect(page.getByRole("cell", { name: "Viewer" })).toBeVisible();
+			await expect(
+				page.getByRole("row", { name: /Test Site test Viewer/ }),
+			).toBeVisible();
 		} finally {
 			await cleanupHarness(harness);
 		}
