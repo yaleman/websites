@@ -4990,6 +4990,7 @@ async fn admin_site_export(
 mod tests {
     use super::*;
     use crate::constants::SESSION_USER;
+    use crate::db::test_db_start;
     use axum::Router;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
@@ -4999,11 +5000,9 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_site_owner_membership_is_idempotent() {
-        let db = crate::db::db_start("sqlite::memory:")
-            .await
-            .expect("failed to start db");
+        let db = test_db_start().await;
         let site = crate::create_site(
-            db.as_ref(),
+            &db,
             "test".to_string(),
             "Test Site".to_string(),
             DEFAULT_TEMPLATE_NAME.to_string(),
@@ -5011,7 +5010,7 @@ mod tests {
         .await
         .expect("failed to create site");
 
-        let first = match ensure_site_owner_membership(db.as_ref(), "tester", None, site.id).await {
+        let first = match ensure_site_owner_membership(&db, "tester", None, site.id).await {
             Ok(value) => value,
             Err(_) => panic!("failed to create membership"),
         };
@@ -5024,8 +5023,7 @@ mod tests {
             );
         }
 
-        let second = match ensure_site_owner_membership(db.as_ref(), "tester", None, site.id).await
-        {
+        let second = match ensure_site_owner_membership(&db, "tester", None, site.id).await {
             Ok(value) => value,
             Err(_) => panic!("failed to check membership"),
         };
@@ -5112,16 +5110,14 @@ mod tests {
 
     #[tokio::test]
     async fn can_view_user_profile_allows_self_and_admin_only() {
-        let db = crate::db::db_start("sqlite::memory:")
-            .await
-            .expect("failed to start db");
-        let viewer = crate::entities::user::create_user(db.as_ref(), "viewer", None, None, false)
+        let db = test_db_start().await;
+        let viewer = crate::entities::user::create_user(&db, "viewer", None, None, false)
             .await
             .expect("failed to create viewer");
-        let target = crate::entities::user::create_user(db.as_ref(), "target", None, None, false)
+        let target = crate::entities::user::create_user(&db, "target", None, None, false)
             .await
             .expect("failed to create target");
-        let admin = crate::entities::user::create_user(db.as_ref(), "admin", None, None, true)
+        let admin = crate::entities::user::create_user(&db, "admin", None, None, true)
             .await
             .expect("failed to create admin");
 
@@ -5209,12 +5205,30 @@ mod tests {
             .with_state(state)
     }
 
-    fn test_app_router(state: AdminState) -> Router {
+    pub(crate) struct TestRouter {
+        pub router: Router,
+        #[allow(dead_code)]
+        /// These are kept around for lifecycle reasons
+        assets_dir: tempfile::TempDir,
+        #[allow(dead_code)]
+        /// These are kept around for lifecycle reasons
+        upload_root: tempfile::TempDir,
+    }
+
+    fn test_app_router(state: AdminState) -> TestRouter {
         let session_layer = SessionManagerLayer::new(MemoryStore::default())
             .with_secure(false)
             .with_expiry(Expiry::OnSessionEnd);
+        let assets_dir = tempfile::tempdir().expect("failed to create temp assets dir");
+        let upload_root = tempfile::tempdir().expect("failed to create temp upload root");
 
-        build_admin_app(state, StdPath::new("."), StdPath::new(".")).layer(session_layer)
+        let router =
+            build_admin_app(state, assets_dir.path(), upload_root.path()).layer(session_layer);
+        TestRouter {
+            router,
+            assets_dir,
+            upload_root,
+        }
     }
 
     fn multipart_json_request_body(json: &str) -> (String, Vec<u8>) {
@@ -5227,11 +5241,11 @@ mod tests {
 
     #[tokio::test]
     async fn health_check_is_public_and_returns_json_ok() {
-        let db = crate::db::db_start("sqlite::memory:")
-            .await
-            .expect("failed to start db");
-        let router = test_app_router(test_admin_state(db.clone()));
-        let response = router
+        let db = test_db_start().await;
+        let test_router = test_app_router(test_admin_state(db.into()));
+
+        let response = test_router
+            .router
             .oneshot(
                 Request::builder()
                     .uri("/health")
@@ -5260,11 +5274,9 @@ mod tests {
 
     #[tokio::test]
     async fn admin_site_export_allows_owner_and_sets_download_headers() {
-        let db = crate::db::db_start("sqlite::memory:")
-            .await
-            .expect("failed to start db");
+        let db = test_db_start().await;
         let site = crate::create_site(
-            db.as_ref(),
+            &db,
             "export-site".to_string(),
             "Export Site".to_string(),
             DEFAULT_TEMPLATE_NAME.to_string(),
@@ -5272,7 +5284,7 @@ mod tests {
         .await
         .expect("failed to create site");
         let owner = crate::entities::user::create_user(
-            db.as_ref(),
+            &db,
             "owner",
             Some("owner@example.com"),
             Some("Owner"),
@@ -5281,7 +5293,7 @@ mod tests {
         .await
         .expect("failed to create owner");
         crate::create_membership(
-            db.as_ref(),
+            &db,
             crate::NewMembership {
                 site_id: site.id,
                 user_id: owner.id,
@@ -5291,7 +5303,7 @@ mod tests {
         .await
         .expect("failed to create owner membership");
 
-        let router = site_transfer_test_router(test_admin_state(db.clone()));
+        let router = site_transfer_test_router(test_admin_state(db.into()));
         let cookie = seed_session_cookie(router.clone(), owner.id).await;
         let response = router
             .oneshot(
@@ -5327,11 +5339,9 @@ mod tests {
 
     #[tokio::test]
     async fn admin_site_export_rejects_non_owner_members() {
-        let db = crate::db::db_start("sqlite::memory:")
-            .await
-            .expect("failed to start db");
+        let db = test_db_start().await;
         let site = crate::create_site(
-            db.as_ref(),
+            &db,
             "export-site".to_string(),
             "Export Site".to_string(),
             DEFAULT_TEMPLATE_NAME.to_string(),
@@ -5339,7 +5349,7 @@ mod tests {
         .await
         .expect("failed to create site");
         let viewer = crate::entities::user::create_user(
-            db.as_ref(),
+            &db,
             "viewer",
             Some("viewer@example.com"),
             Some("Viewer"),
@@ -5348,7 +5358,7 @@ mod tests {
         .await
         .expect("failed to create viewer");
         crate::create_membership(
-            db.as_ref(),
+            &db,
             crate::NewMembership {
                 site_id: site.id,
                 user_id: viewer.id,
@@ -5358,7 +5368,7 @@ mod tests {
         .await
         .expect("failed to create viewer membership");
 
-        let router = site_transfer_test_router(test_admin_state(db.clone()));
+        let router = site_transfer_test_router(test_admin_state(db.into()));
         let cookie = seed_session_cookie(router.clone(), viewer.id).await;
         let response = router
             .oneshot(
@@ -5376,9 +5386,7 @@ mod tests {
 
     #[tokio::test]
     async fn admin_site_import_allows_global_admin_and_creates_site() {
-        let db = crate::db::db_start("sqlite::memory:")
-            .await
-            .expect("failed to start db");
+        let db = Arc::new(test_db_start().await);
         let admin = crate::entities::user::create_user(
             db.as_ref(),
             "admin",
@@ -5449,9 +5457,7 @@ mod tests {
 
     #[tokio::test]
     async fn admin_site_import_rejects_non_admin_users() {
-        let db = crate::db::db_start("sqlite::memory:")
-            .await
-            .expect("failed to start db");
+        let db = Arc::new(test_db_start().await);
         let user = crate::entities::user::create_user(
             db.as_ref(),
             "viewer",
