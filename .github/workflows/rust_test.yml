@@ -1,32 +1,70 @@
 ---
-name: Rust Testing
+name: CI Checks
+
 "on":
-  push:
   pull_request:
-env:
-  SCCACHE_GHA_ENABLED: "true"
-  RUSTC_WRAPPER: "sccache"
+  push:
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
 jobs:
-  cargo_test:
+  rust_test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-      - name: Install Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install typical dependencies
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browser dependencies
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features --quiet -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --all --quiet
+
+      - name: Regenerate OpenAPI schema
+        run: cargo run -- dump-open-api-spec ./openapi.json
+
+      - name: Regenerate OpenAPI TypeScript types
         run: |
-          sudo apt-get update && \
-          sudo apt-get install -y \
-            libssl-dev
-      - name: "Run cargo test"
-        run: cargo test
-      - name: "Build the workspace"
-        run: cargo build --workspace
-      - name: Run sccache stat for check
-        shell: bash
-        run: ${SCCACHE_PATH} --show-stats
+          pnpm exec openapi-typescript \
+            ./openapi.json \
+            --dedupe-enums \
+            --enum \
+            --alphabetize \
+            --make-paths-enum \
+            --output assets/admin/openapi.ts
+
+      - name: Build admin assets
+        run: pnpm run build:admin
+
+      - name: Verify generated artifacts are committed
+        run: git diff --exit-code -- openapi.json assets/admin/openapi.ts admin-ui-assets
+
+      - name: Check frontend types
+        run: pnpm exec tsc --noEmit
+
+      - name: Run end-to-end tests
+        run: pnpm exec playwright test
