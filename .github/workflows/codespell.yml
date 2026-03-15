@@ -25,4 +25,4 @@ jobs:
           python -m pip install --upgrade pip codespell
           codespell \
             --check-filenames \
-            --skip="./docs/book,./node_modules,./target,./admin-ui-assets,./assets/admin/openapi.ts,./openapi.json,./pnpm-lock.yaml"
+            --skip="./Cargo.lock,./docs/book,./docs/*.js,./node_modules,./target,./admin-ui-assets,./assets/admin/openapi.ts,./openapi.json,./pnpm-lock.yaml"
