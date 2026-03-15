@@ -24,11 +24,11 @@ run = "cargo test --all --quiet"
 run = "pnpm install --frozen-lockfile"
 
 [tasks.frontend_build]
-depends = ["frontend_install"]
+depends = ["frontend_install", "openapi-to-ts"]
 run = "pnpm run build:admin"
 
 [tasks.frontend_check]
-depends = ["frontend_install"]
+depends = ["frontend_install", "frontend_build"]
 run = "pnpm exec tsc --noEmit"
 
 [tasks.frontend_e2e]
@@ -53,3 +53,13 @@ run = [
     "cargo tarpaulin --coveralls ${COVERALLS_REPO_TOKEN} --exclude-files src/cli.rs",
     "echo \"Coveralls repo information is at https://coveralls.io/github/yaleman/websites\"",
 ]
+
+
+[tasks.openapi-to-ts]
+description = "run openapi-to-ts to generate typescript types from the OpenAPI spec"
+run = ["cargo run -- dump-open-api-spec ./openapi.json", '''
+pnpm exec openapi-typescript \
+   ./openapi.json --dedupe-enums --enum \
+   --alphabetize --make-paths-enum \
+   --output assets/admin/openapi.ts
+''']

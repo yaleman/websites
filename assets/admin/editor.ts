@@ -5,6 +5,11 @@ import { Markdown } from "@tiptap/markdown";
 import StarterKit from "@tiptap/starter-kit";
 import "./editor.css";
 import "./styles.css";
+import type { Client } from "openapi-fetch";
+import createClient from "openapi-fetch";
+import { ApiPaths, type paths } from "./openapi";
+
+let OPENAPI_CLIENT: Client<paths, `${string}/${string}`>;
 
 type AssetLibraryItem = {
 	id: string;
@@ -171,24 +176,38 @@ const createAssetModal = (editor: Editor) => {
 		limit: number;
 		type: string;
 	}) => {
-		const url = new URL(
-			`/api/site/${siteId}/assets/library`,
-			window.location.origin,
+		// const url = new URL(
+		// 	`/api/site/${siteId}/assets/library`,
+		// 	window.location.origin,
+		// );
+		// if (options.query) {
+		// 	url.searchParams.set("q", options.query);
+		// }
+		// if (options.type) {
+		// 	url.searchParams.set("type", options.type);
+		// }
+		// url.searchParams.set("limit", options.limit.toString());
+		// const response = await fetch(url.toString(), {
+		// 	credentials: "same-origin",
+		// });
+		const { data, error } = await OPENAPI_CLIENT.GET(
+			ApiPaths.api_site_assets_library,
+			{
+				params: {
+					path: { site_id: siteId },
+					query: {
+						q: options.query || "",
+						type: options.type,
+						limit: options.limit,
+					},
+				},
+			},
 		);
-		if (options.query) {
-			url.searchParams.set("q", options.query);
+
+		if (error || !data) {
+			throw new Error(`Failed to fetch assets. ${error}`);
 		}
-		if (options.type) {
-			url.searchParams.set("type", options.type);
-		}
-		url.searchParams.set("limit", options.limit.toString());
-		const response = await fetch(url.toString(), {
-			credentials: "same-origin",
-		});
-		if (!response.ok) {
-			throw new Error("Failed to fetch assets.");
-		}
-		const payload = (await response.json()) as { assets: AssetLibraryItem[] };
+		const payload = data as { assets: AssetLibraryItem[] };
 		return payload.assets ?? [];
 	};
 
@@ -932,16 +951,20 @@ const initEditor = () => {
 	}
 };
 
-if (document.readyState === "loading") {
-	document.addEventListener("DOMContentLoaded", () => {
-		initTransientMessages();
-		initTagEditor();
-		initMembershipCreateForm();
-		initEditor();
-	});
-} else {
+function doPageStartup() {
 	initTransientMessages();
 	initTagEditor();
 	initMembershipCreateForm();
 	initEditor();
+
+	const apiUrl = new URL("/", window.location.origin).href;
+	OPENAPI_CLIENT = createClient<paths>({ baseUrl: apiUrl });
+}
+
+if (document.readyState === "loading") {
+	document.addEventListener("DOMContentLoaded", () => {
+		doPageStartup();
+	});
+} else {
+	doPageStartup();
 }
