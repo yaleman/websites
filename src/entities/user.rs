@@ -81,16 +81,16 @@ pub async fn upsert_user_login<C: ConnectionTrait>(
 
 #[cfg(test)]
 mod tests {
+    use crate::db::test_db_start;
+
     use super::*;
 
     #[tokio::test]
     async fn first_login_creates_admin_with_email() {
-        let db = crate::db::db_start("sqlite::memory:")
-            .await
-            .expect("failed to start db");
+        let db = test_db_start().await;
 
         let user = upsert_user_login(
-            db.as_ref(),
+            &db,
             "first-user",
             Some("first@example.com"),
             Some("First User"),
@@ -105,15 +105,12 @@ mod tests {
 
     #[tokio::test]
     async fn existing_login_refreshes_claims() {
-        let db = crate::db::db_start("sqlite::memory:")
-            .await
-            .expect("failed to start db");
-
-        let created = create_user(db.as_ref(), "subject", None, None, false)
+        let db = test_db_start().await;
+        let created = create_user(&db, "subject", None, None, false)
             .await
             .expect("failed to create user");
         let updated = upsert_user_login(
-            db.as_ref(),
+            &db,
             "subject",
             Some("subject@example.com"),
             Some("Subject User"),
