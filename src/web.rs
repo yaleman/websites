@@ -4157,8 +4157,9 @@ async fn build_admin_asset_rows<C: ConnectionTrait>(
     path = "/api/site/{site_id}/assets/library",
     params(
         ("site_id" = Uuid, Path, description = "The ID of the site to list assets for"),
-        ("q" = String, Query, description = "Optional search query to filter assets by original filename or storage basename"),
-        ("type" = String, Query, description = "Optional filter by image type (jpeg, png, gif, svg, webp)"),
+        ("q" = Option<String>, Query, description = "Optional search query to filter assets by original filename or storage basename"),
+        ("limit" = Option<u64>, Query, description = "Optional maximum number of assets to return"),
+        ("type" = Option<String>, Query, description = "Optional filter by image type (jpeg, png, gif, svg, webp)"),
     ),
     security(
         ("bearer_auth" = [])

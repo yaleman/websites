@@ -14,10 +14,11 @@ async fn main() {
         eprintln!("failed to initialize telemetry: {}", err);
         std::process::exit(1);
     }
-    let command = cli.command.unwrap_or(Commands::Serve {
-        command: ServeCommands::Admin {
-            listen: "127.0.0.1:9000".to_string(),
-        },
+    let command = cli.command.unwrap_or_else(|| {
+        let listen = std::env::var("WEBSITES_LISTEN_ADDR").unwrap_or("127.0.0.1:9000".to_string());
+        Commands::Serve {
+            command: ServeCommands::Admin { listen },
+        }
     });
 
     if let Err(error) = execute(command, &cli.db_path, &cli.oidc).await {

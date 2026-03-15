@@ -14,15 +14,25 @@ use crate::entities::audit_event::log_audit_event;
 use crate::entities::user::create_user;
 use crate::*;
 
-#[derive(Debug, Args, Clone)]
+#[derive(Debug, Clone)]
 pub struct OidcConfig {
+    pub tls_cert_path: PathBuf,
+    pub tls_key_path: PathBuf,
+    pub frontend_url: Url,
+    pub oidc_client_id: String,
+    pub oidc_discovery_url: String,
+    pub oidc_client_secret: Option<String>,
+}
+
+#[derive(Debug, Args, Clone, Default)]
+pub struct OidcConfigArgs {
     /// Path to the TLS certificate file.
     #[arg(
         long = "tls-cert-path",
         env = "WEBSITES_TLS_CERT_PATH",
         value_name = "FILE"
     )]
-    pub tls_cert_path: PathBuf,
+    pub tls_cert_path: Option<PathBuf>,
 
     /// Path to the TLS private key file.
     #[arg(
@@ -30,7 +40,7 @@ pub struct OidcConfig {
         env = "WEBSITES_TLS_KEY_PATH",
         value_name = "FILE"
     )]
-    pub tls_key_path: PathBuf,
+    pub tls_key_path: Option<PathBuf>,
 
     /// Public frontend URL for OIDC redirect and callback configuration.
     #[arg(
@@ -38,7 +48,7 @@ pub struct OidcConfig {
         env = "WEBSITES_FRONTEND_URL",
         value_name = "URL"
     )]
-    pub frontend_url: Url,
+    pub frontend_url: Option<Url>,
 
     /// OIDC client ID.
     #[arg(
@@ -46,7 +56,7 @@ pub struct OidcConfig {
         env = "WEBSITES_OIDC_CLIENT_ID",
         value_name = "STRING"
     )]
-    pub oidc_client_id: String,
+    pub oidc_client_id: Option<String>,
 
     /// OIDC discovery document URL.
     #[arg(
@@ -54,7 +64,7 @@ pub struct OidcConfig {
         env = "WEBSITES_OIDC_DISCOVERY_URL",
         value_name = "URL"
     )]
-    pub oidc_discovery_url: String,
+    pub oidc_discovery_url: Option<String>,
 
     /// OIDC client secret, this is optional. If not provided, the OIDC client will be configured without a secret which may be appropriate for public clients that don't have a secure way to store a secret.
     #[arg(
@@ -63,6 +73,34 @@ pub struct OidcConfig {
         value_name = "CLIENT_SECRET"
     )]
     pub oidc_client_secret: Option<String>,
+}
+
+impl OidcConfigArgs {
+    fn require_complete(&self) -> Result<OidcConfig, String> {
+        Ok(OidcConfig {
+            tls_cert_path: self
+                .tls_cert_path
+                .clone()
+                .ok_or_else(|| "missing required OIDC/TLS config: --tls-cert-path".to_string())?,
+            tls_key_path: self
+                .tls_key_path
+                .clone()
+                .ok_or_else(|| "missing required OIDC/TLS config: --tls-key-path".to_string())?,
+            frontend_url: self
+                .frontend_url
+                .clone()
+                .ok_or_else(|| "missing required OIDC/TLS config: --frontend-url".to_string())?,
+            oidc_client_id: self
+                .oidc_client_id
+                .clone()
+                .ok_or_else(|| "missing required OIDC/TLS config: --client-id".to_string())?,
+            oidc_discovery_url: self
+                .oidc_discovery_url
+                .clone()
+                .ok_or_else(|| "missing required OIDC/TLS config: --discovery-url".to_string())?,
+            oidc_client_secret: self.oidc_client_secret.clone(),
+        })
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -79,7 +117,7 @@ pub struct Cli {
     )]
     pub db_path: PathBuf,
     #[command(flatten)]
-    pub oidc: OidcConfig,
+    pub oidc: OidcConfigArgs,
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -386,7 +424,11 @@ pub enum ContentCommands {
     },
 }
 
-pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Result<(), String> {
+pub async fn execute(
+    command: Commands,
+    db_path: &Path,
+    oidc: &OidcConfigArgs,
+) -> Result<(), String> {
     let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
     let db = crate::db::db_start(&db_url)
         .await
@@ -398,11 +440,35 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
             Ok(())
         }
         Commands::ShowConfig => {
-            println!("tls_cert_path={:?}", &oidc.tls_cert_path.display());
-            println!("tls_key_path={:?}", &oidc.tls_key_path.display());
-            println!("frontend_url={}", &oidc.frontend_url);
-            println!("oidc_client_id={}", &oidc.oidc_client_id);
-            println!("oidc_discovery_url={}", &oidc.oidc_discovery_url);
+            let tls_cert_path = oidc
+                .tls_cert_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "<unset>".to_string());
+            let tls_key_path = oidc
+                .tls_key_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "<unset>".to_string());
+            let frontend_url = oidc
+                .frontend_url
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "<unset>".to_string());
+            let oidc_client_id = oidc
+                .oidc_client_id
+                .clone()
+                .unwrap_or_else(|| "<unset>".to_string());
+            let oidc_discovery_url = oidc
+                .oidc_discovery_url
+                .clone()
+                .unwrap_or_else(|| "<unset>".to_string());
+
+            println!("tls_cert_path={tls_cert_path}");
+            println!("tls_key_path={tls_key_path}");
+            println!("frontend_url={frontend_url}");
+            println!("oidc_client_id={oidc_client_id}");
+            println!("oidc_discovery_url={oidc_discovery_url}");
             Ok(())
         }
         Commands::Site { command } => match command {
@@ -824,7 +890,8 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
         },
         Commands::Serve { command } => match command {
             ServeCommands::Admin { listen } => {
-                crate::web::run_admin_server(db.clone(), &listen, oidc)
+                let oidc = oidc.require_complete()?;
+                crate::web::run_admin_server(db.clone(), &listen, &oidc)
                     .await
                     .map_err(|err| err.to_string())
             }
@@ -1318,24 +1385,9 @@ mod tests {
 
     #[test]
     fn site_import_command_requires_input_path() {
-        let cli = Cli::try_parse_from([
-            "websites",
-            "--tls-cert-path",
-            "cert.pem",
-            "--tls-key-path",
-            "key.pem",
-            "--frontend-url",
-            "https://example.com",
-            "--client-id",
-            "client-id",
-            "--discovery-url",
-            "https://issuer.example.com",
-            "site",
-            "import",
-            "--input",
-            "site-export.json",
-        ])
-        .expect("failed to parse site import command");
+        let cli =
+            Cli::try_parse_from(["websites", "site", "import", "--input", "site-export.json"])
+                .expect("failed to parse site import command");
 
         match cli.command.expect("missing command") {
             Commands::Site {
@@ -1343,5 +1395,27 @@ mod tests {
             } => assert_eq!(input, PathBuf::from("site-export.json")),
             other => panic!("unexpected parsed command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn dump_openapi_spec_command_parses_without_oidc_flags() {
+        let cli = Cli::try_parse_from(["websites", "dump-open-api-spec", "openapi.json"])
+            .expect("failed to parse dump-open-api-spec command");
+
+        match cli.command.expect("missing command") {
+            Commands::DumpOpenApiSpec { output } => {
+                assert_eq!(output, PathBuf::from("openapi.json"));
+            }
+            other => panic!("unexpected parsed command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn oidc_config_args_require_complete_values_for_serve() {
+        let error = OidcConfigArgs::default()
+            .require_complete()
+            .expect_err("expected missing OIDC config to fail");
+
+        assert_eq!(error, "missing required OIDC/TLS config: --tls-cert-path");
     }
 }
