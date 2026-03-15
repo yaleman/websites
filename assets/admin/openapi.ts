@@ -52,11 +52,13 @@ export type $defs = Record<string, never>;
 export interface operations {
     api_site_assets_library: {
         parameters: {
-            query: {
+            query?: {
+                /** @description Optional maximum number of assets to return */
+                limit?: number;
                 /** @description Optional search query to filter assets by original filename or storage basename */
-                q: string;
+                q?: string;
                 /** @description Optional filter by image type (jpeg, png, gif, svg, webp) */
-                type: string;
+                type?: string;
             };
             header?: never;
             path: {

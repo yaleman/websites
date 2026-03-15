@@ -28,16 +28,27 @@
             "name": "q",
             "in": "query",
             "description": "Optional search query to filter assets by original filename or storage basename",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Optional maximum number of assets to return",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
             }
           },
           {
             "name": "type",
             "in": "query",
             "description": "Optional filter by image type (jpeg, png, gif, svg, webp)",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             }
