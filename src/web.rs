@@ -1641,41 +1641,13 @@ async fn require_site_role(
     }
 }
 
-pub async fn run_admin_server(
-    db: Arc<DatabaseConnection>,
-    listen: &str,
-    oidc: &OidcConfig,
-) -> Result<(), anyhow::Error> {
-    let jwt_secret = ensure_jwt_hs256_secret(db.as_ref())
-        .await
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let jwt_signer =
-        signer_from_secret(&jwt_secret).map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let state = AdminState {
-        db: db.clone(),
-        oidc_client_id: ClientId::new(oidc.oidc_client_id.clone()),
-        oidc_client_secret: oidc.oidc_client_secret.clone().map(ClientSecret::new),
-        oidc_frontend_url: oidc.frontend_url.clone(),
-        oidc_discovery_url: IssuerUrl::new(oidc.oidc_discovery_url.clone())
-            .context("Failed to parse discovery URL")?,
-        oidc_client: Arc::new(build_http_client().context("Failed to build OIDC HTTP client")?),
-        jwt_signer: Arc::new(jwt_signer),
-        jwt_issuer: oidc.frontend_url.to_string(),
-    };
+async fn health_check() -> Json<&'static str> {
+    Json("ok")
+}
 
-    let pool = db.get_sqlite_connection_pool();
-    let session_store = SqliteStore::new((*pool).clone());
-
-    let assets_dir = resolve_admin_assets_dir();
-    let upload_root = resolve_upload_root();
-    session_store
-        .migrate()
-        .await
-        .context("Failed to migrate Session store")?;
-
-    let session_layer = SessionManagerLayer::new(session_store)
-        .with_secure(false)
-        .with_expiry(Expiry::OnSessionEnd);
+fn build_admin_app(state: AdminState, assets_dir: &StdPath, upload_root: &StdPath) -> Router {
+    let swagger_config =
+        utoipa_swagger_ui::Config::new(["/api-doc/openapi.json"]).validator_url("none");
 
     let admin_routes = Router::new()
         .route("/admin", get(get_index))
@@ -1793,13 +1765,66 @@ pub async fn run_admin_server(
             axum::routing::post(admin_site_template_override_reset),
         )
         .route("/admin/site/{site_id}/render", get(admin_site_render))
-        .nest_service("/admin/assets", ServeDir::new(&assets_dir))
-        .nest_service("/media/images", ServeDir::new(&upload_root))
+        .nest_service("/admin/assets", ServeDir::new(assets_dir))
+        .nest_service("/media/images", ServeDir::new(upload_root))
         .layer(from_fn(crate::middleware::require_session));
     let api_routes = Router::new().route(
         "/api/site/{site_id}/assets/library",
         get(api_site_assets_library),
     );
+
+    Router::new()
+        .route("/", get(admin_root))
+        .route("/health", get(health_check))
+        .route("/admin/login", get(admin_login))
+        .route("/oauth2/callback", get(admin_login_callback))
+        .route("/admin/logout", get(admin_logout))
+        .merge(
+            SwaggerUi::new("/api-docs")
+                .url("/api-doc/openapi.json", ApiDoc::openapi())
+                .config(swagger_config),
+        )
+        .merge(admin_routes)
+        .merge(api_routes)
+        .fallback(not_found)
+        .with_state(state)
+}
+
+pub async fn run_admin_server(
+    db: Arc<DatabaseConnection>,
+    listen: &str,
+    oidc: &OidcConfig,
+) -> Result<(), anyhow::Error> {
+    let jwt_secret = ensure_jwt_hs256_secret(db.as_ref())
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let jwt_signer =
+        signer_from_secret(&jwt_secret).map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let state = AdminState {
+        db: db.clone(),
+        oidc_client_id: ClientId::new(oidc.oidc_client_id.clone()),
+        oidc_client_secret: oidc.oidc_client_secret.clone().map(ClientSecret::new),
+        oidc_frontend_url: oidc.frontend_url.clone(),
+        oidc_discovery_url: IssuerUrl::new(oidc.oidc_discovery_url.clone())
+            .context("Failed to parse discovery URL")?,
+        oidc_client: Arc::new(build_http_client().context("Failed to build OIDC HTTP client")?),
+        jwt_signer: Arc::new(jwt_signer),
+        jwt_issuer: oidc.frontend_url.to_string(),
+    };
+
+    let pool = db.get_sqlite_connection_pool();
+    let session_store = SqliteStore::new((*pool).clone());
+
+    let assets_dir = resolve_admin_assets_dir();
+    let upload_root = resolve_upload_root();
+    session_store
+        .migrate()
+        .await
+        .context("Failed to migrate Session store")?;
+
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_secure(false)
+        .with_expiry(Expiry::OnSessionEnd);
 
     info!(
         "admin server listening on http://{listen} / {}",
@@ -1813,27 +1838,10 @@ pub async fn run_admin_server(
         ));
     }
 
-    // disable the validator since it won't work locally etc.
-    let swagger_config =
-        utoipa_swagger_ui::Config::new(["/api-doc/openapi.json"]).validator_url("none");
-
-    let app = Router::new()
-        .route("/", get(admin_root))
-        .route("/admin/login", get(admin_login))
-        .route("/oauth2/callback", get(admin_login_callback))
-        .route("/admin/logout", get(admin_logout))
-        .merge(
-            SwaggerUi::new("/api-docs")
-                .url("/api-doc/openapi.json", ApiDoc::openapi())
-                .config(swagger_config),
-        )
-        .merge(admin_routes)
-        .merge(api_routes)
-        .fallback(not_found)
+    let app = build_admin_app(state, &assets_dir, &upload_root)
         .layer(session_layer)
         .layer(from_fn(log_requests))
-        .layer(from_fn(crate::middleware::set_cache))
-        .with_state(state);
+        .layer(from_fn(crate::middleware::set_cache));
 
     let tls_config = build_tls_config(&oidc.tls_cert_path, &oidc.tls_key_path).await?;
     let bind_addr: SocketAddr = SocketAddr::from_str(listen)
@@ -4982,8 +4990,9 @@ async fn admin_site_export(
 mod tests {
     use super::*;
     use crate::constants::SESSION_USER;
+    use crate::db::test_db_start;
     use axum::Router;
-    use axum::body::Body;
+    use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use axum::routing::get;
     use tower::ServiceExt;
@@ -4991,11 +5000,9 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_site_owner_membership_is_idempotent() {
-        let db = crate::db::db_start("sqlite::memory:")
-            .await
-            .expect("failed to start db");
+        let db = test_db_start().await;
         let site = crate::create_site(
-            db.as_ref(),
+            &db,
             "test".to_string(),
             "Test Site".to_string(),
             DEFAULT_TEMPLATE_NAME.to_string(),
@@ -5003,7 +5010,7 @@ mod tests {
         .await
         .expect("failed to create site");
 
-        let first = match ensure_site_owner_membership(db.as_ref(), "tester", None, site.id).await {
+        let first = match ensure_site_owner_membership(&db, "tester", None, site.id).await {
             Ok(value) => value,
             Err(_) => panic!("failed to create membership"),
         };
@@ -5016,8 +5023,7 @@ mod tests {
             );
         }
 
-        let second = match ensure_site_owner_membership(db.as_ref(), "tester", None, site.id).await
-        {
+        let second = match ensure_site_owner_membership(&db, "tester", None, site.id).await {
             Ok(value) => value,
             Err(_) => panic!("failed to check membership"),
         };
@@ -5104,16 +5110,14 @@ mod tests {
 
     #[tokio::test]
     async fn can_view_user_profile_allows_self_and_admin_only() {
-        let db = crate::db::db_start("sqlite::memory:")
-            .await
-            .expect("failed to start db");
-        let viewer = crate::entities::user::create_user(db.as_ref(), "viewer", None, None, false)
+        let db = test_db_start().await;
+        let viewer = crate::entities::user::create_user(&db, "viewer", None, None, false)
             .await
             .expect("failed to create viewer");
-        let target = crate::entities::user::create_user(db.as_ref(), "target", None, None, false)
+        let target = crate::entities::user::create_user(&db, "target", None, None, false)
             .await
             .expect("failed to create target");
-        let admin = crate::entities::user::create_user(db.as_ref(), "admin", None, None, true)
+        let admin = crate::entities::user::create_user(&db, "admin", None, None, true)
             .await
             .expect("failed to create admin");
 
@@ -5201,6 +5205,32 @@ mod tests {
             .with_state(state)
     }
 
+    pub(crate) struct TestRouter {
+        pub router: Router,
+        #[allow(dead_code)]
+        /// These are kept around for lifecycle reasons
+        assets_dir: tempfile::TempDir,
+        #[allow(dead_code)]
+        /// These are kept around for lifecycle reasons
+        upload_root: tempfile::TempDir,
+    }
+
+    fn test_app_router(state: AdminState) -> TestRouter {
+        let session_layer = SessionManagerLayer::new(MemoryStore::default())
+            .with_secure(false)
+            .with_expiry(Expiry::OnSessionEnd);
+        let assets_dir = tempfile::tempdir().expect("failed to create temp assets dir");
+        let upload_root = tempfile::tempdir().expect("failed to create temp upload root");
+
+        let router =
+            build_admin_app(state, assets_dir.path(), upload_root.path()).layer(session_layer);
+        TestRouter {
+            router,
+            assets_dir,
+            upload_root,
+        }
+    }
+
     fn multipart_json_request_body(json: &str) -> (String, Vec<u8>) {
         let boundary = "site-import-boundary";
         let body = format!(
@@ -5210,12 +5240,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn admin_site_export_allows_owner_and_sets_download_headers() {
-        let db = crate::db::db_start("sqlite::memory:")
+    async fn health_check_is_public_and_returns_json_ok() {
+        let db = test_db_start().await;
+        let test_router = test_app_router(test_admin_state(db.into()));
+
+        let response = test_router
+            .router
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .expect("failed to build health request"),
+            )
             .await
-            .expect("failed to start db");
+            .expect("failed to call health route");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .expect("missing content-type")
+                .to_str()
+                .expect("invalid content-type"),
+            "application/json"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("failed to read health response body");
+        assert_eq!(body, "\"ok\"");
+    }
+
+    #[tokio::test]
+    async fn admin_site_export_allows_owner_and_sets_download_headers() {
+        let db = test_db_start().await;
         let site = crate::create_site(
-            db.as_ref(),
+            &db,
             "export-site".to_string(),
             "Export Site".to_string(),
             DEFAULT_TEMPLATE_NAME.to_string(),
@@ -5223,7 +5284,7 @@ mod tests {
         .await
         .expect("failed to create site");
         let owner = crate::entities::user::create_user(
-            db.as_ref(),
+            &db,
             "owner",
             Some("owner@example.com"),
             Some("Owner"),
@@ -5232,7 +5293,7 @@ mod tests {
         .await
         .expect("failed to create owner");
         crate::create_membership(
-            db.as_ref(),
+            &db,
             crate::NewMembership {
                 site_id: site.id,
                 user_id: owner.id,
@@ -5242,7 +5303,7 @@ mod tests {
         .await
         .expect("failed to create owner membership");
 
-        let router = site_transfer_test_router(test_admin_state(db.clone()));
+        let router = site_transfer_test_router(test_admin_state(db.into()));
         let cookie = seed_session_cookie(router.clone(), owner.id).await;
         let response = router
             .oneshot(
@@ -5278,11 +5339,9 @@ mod tests {
 
     #[tokio::test]
     async fn admin_site_export_rejects_non_owner_members() {
-        let db = crate::db::db_start("sqlite::memory:")
-            .await
-            .expect("failed to start db");
+        let db = test_db_start().await;
         let site = crate::create_site(
-            db.as_ref(),
+            &db,
             "export-site".to_string(),
             "Export Site".to_string(),
             DEFAULT_TEMPLATE_NAME.to_string(),
@@ -5290,7 +5349,7 @@ mod tests {
         .await
         .expect("failed to create site");
         let viewer = crate::entities::user::create_user(
-            db.as_ref(),
+            &db,
             "viewer",
             Some("viewer@example.com"),
             Some("Viewer"),
@@ -5299,7 +5358,7 @@ mod tests {
         .await
         .expect("failed to create viewer");
         crate::create_membership(
-            db.as_ref(),
+            &db,
             crate::NewMembership {
                 site_id: site.id,
                 user_id: viewer.id,
@@ -5309,7 +5368,7 @@ mod tests {
         .await
         .expect("failed to create viewer membership");
 
-        let router = site_transfer_test_router(test_admin_state(db.clone()));
+        let router = site_transfer_test_router(test_admin_state(db.into()));
         let cookie = seed_session_cookie(router.clone(), viewer.id).await;
         let response = router
             .oneshot(
@@ -5327,9 +5386,7 @@ mod tests {
 
     #[tokio::test]
     async fn admin_site_import_allows_global_admin_and_creates_site() {
-        let db = crate::db::db_start("sqlite::memory:")
-            .await
-            .expect("failed to start db");
+        let db = Arc::new(test_db_start().await);
         let admin = crate::entities::user::create_user(
             db.as_ref(),
             "admin",
@@ -5400,9 +5457,7 @@ mod tests {
 
     #[tokio::test]
     async fn admin_site_import_rejects_non_admin_users() {
-        let db = crate::db::db_start("sqlite::memory:")
-            .await
-            .expect("failed to start db");
+        let db = Arc::new(test_db_start().await);
         let user = crate::entities::user::create_user(
             db.as_ref(),
             "viewer",

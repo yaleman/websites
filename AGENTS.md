@@ -15,7 +15,7 @@ The system manages site metadata, content, tags, assets, and memberships in a SQ
 - Any change to system design must update docs/src/System-Design-Updates.md.
 - A task is not complete until `mise check` passes.
 - Commit changes once a user request is confirmed complete.
-- Tests must use run-specific temporary directories for filesystem-emulated state; use OS temp locations (for example /tmp via tempfile/mkdtemp) and never create test temp workspaces inside the repository tree. For database-backed tests, prefer in-memory databases when feasible. Per test, use one fresh instance of every mutable dependency (filesystem roots, database, and service process) and never reuse local persistent state.
+- Tests must use run-specific temporary directories for filesystem-emulated state; use OS temp locations (for example /tmp via tempfile/mkdtemp) and never create test temp workspaces inside the repository tree. For database-backed tests, use `crate::db::test_db_start()` to get an in-memory database instance. Per test, use one fresh instance of every mutable dependency (filesystem roots, database, and service process) and never reuse local persistent state.
 - Never use inline JavaScript, inline TypeScript, or inline CSS in frontend files; use external `.ts/.tsx/.js` and `.css` assets only.
 - Fill page data primarily through Askama templates rendered on the server; frontend JavaScript should be used for client-side actions and progressive enhancement, not initial content hydration when template rendering can provide the content.
 - Runtime logging must use `tracing` only, include timestamps, and write to stdout.
@@ -24,5 +24,4 @@ The system manages site metadata, content, tags, assets, and memberships in a SQ
 - All askama templates should derive `askama_web::WebTemplate` so we don't have to manually implement `IntoResponse`
 - All admin templates should be based on `base_template.html` to keep navigation/UI consistent.
 - Each admin view should have its own template file (no shared admin view template).
-
 @docs/src/System-Design-Updates.md
