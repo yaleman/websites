@@ -131,7 +131,7 @@ pub enum Commands {
 pub enum ServeCommands {
     /// Start the admin web UI server.
     Admin {
-        #[arg(long, default_value = "127.0.0.1:9000")]
+        #[arg(long, default_value = "127.0.0.1:9000", env = "WEBSITES_LISTEN_ADDR")]
         listen: String,
     },
 }
