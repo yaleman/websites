@@ -7,34 +7,22 @@ import "./editor.css";
 import "./styles.css";
 import type { Client } from "openapi-fetch";
 import createClient from "openapi-fetch";
-import { ApiPaths, type paths } from "./openapi";
+import { ApiPaths, type components, type paths } from "./openapi";
 
 let OPENAPI_CLIENT: Client<paths, `${string}/${string}`>;
-
-type AssetLibraryItem = {
-	id: string;
-	original_filename: string;
-	mime_type: string;
-	width: number | null;
-	height: number | null;
-	created_at: string;
-	original_url: string;
-	thumbnail_url: string | null;
-	has_thumbnail: boolean;
-};
 
 const inferAltFromFilename = (filename: string) => {
 	const trimmed = filename.replace(/\.[^/.]+$/, "");
 	return trimmed.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
 };
 
-const formatAssetMeta = (asset: AssetLibraryItem) => {
+const formatAssetMeta = (asset: components["schemas"]["AssetLibraryItem"]) => {
 	const dimensions =
 		asset.width && asset.height ? `${asset.width}×${asset.height}` : "size n/a";
 	return `${asset.mime_type} • ${dimensions}`;
 };
 
-const createAssetCard = (asset: AssetLibraryItem) => {
+const createAssetCard = (asset: components["schemas"]["AssetLibraryItem"]) => {
 	const button = document.createElement("button");
 	button.type = "button";
 	button.className = "asset-card";
@@ -65,7 +53,7 @@ const createAssetCard = (asset: AssetLibraryItem) => {
 
 const renderAssetGrid = (
 	container: HTMLElement,
-	assets: AssetLibraryItem[],
+	assets: components["schemas"]["AssetLibraryItem"][],
 	message: string,
 ) => {
 	container.innerHTML = "";
@@ -116,7 +104,7 @@ const createAssetModal = (editor: Editor) => {
 		"[data-asset-insert]",
 	);
 
-	let selectedAsset: AssetLibraryItem | null = null;
+	let selectedAsset: components["schemas"]["AssetLibraryItem"] | null = null;
 	let searchTimeout: number | null = null;
 
 	const setModalOpen = (open: boolean) => {
@@ -148,7 +136,9 @@ const createAssetModal = (editor: Editor) => {
 		setInsertEnabled();
 	};
 
-	const setSelectedAsset = (asset: AssetLibraryItem | null) => {
+	const setSelectedAsset = (
+		asset: components["schemas"]["AssetLibraryItem"] | null,
+	) => {
 		selectedAsset = asset;
 		modal.querySelectorAll(".asset-card").forEach((card) => {
 			card.classList.toggle(
@@ -176,20 +166,6 @@ const createAssetModal = (editor: Editor) => {
 		limit: number;
 		type: string;
 	}) => {
-		// const url = new URL(
-		// 	`/api/site/${siteId}/assets/library`,
-		// 	window.location.origin,
-		// );
-		// if (options.query) {
-		// 	url.searchParams.set("q", options.query);
-		// }
-		// if (options.type) {
-		// 	url.searchParams.set("type", options.type);
-		// }
-		// url.searchParams.set("limit", options.limit.toString());
-		// const response = await fetch(url.toString(), {
-		// 	credentials: "same-origin",
-		// });
 		const { data, error } = await OPENAPI_CLIENT.GET(
 			ApiPaths.api_site_assets_library,
 			{
@@ -207,7 +183,7 @@ const createAssetModal = (editor: Editor) => {
 		if (error || !data) {
 			throw new Error(`Failed to fetch assets. ${error}`);
 		}
-		const payload = data as { assets: AssetLibraryItem[] };
+		const payload = data as components["schemas"]["AssetLibraryResponse"];
 		return payload.assets ?? [];
 	};
 
@@ -279,7 +255,9 @@ const createAssetModal = (editor: Editor) => {
 		if (!payload) {
 			return;
 		}
-		const asset = JSON.parse(payload) as AssetLibraryItem;
+		const asset = JSON.parse(
+			payload,
+		) as components["schemas"]["AssetLibraryItem"];
 		setSelectedAsset(asset);
 	};
 
