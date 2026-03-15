@@ -24,6 +24,8 @@
     "@tiptap/extension-link": "^3.20.1",
     "@tiptap/markdown": "^3.20.1",
     "@tiptap/starter-kit": "^3.20.1",
-    "@types/node": "^25.3.5"
+    "@types/node": "^25.3.5",
+    "openapi-fetch": "^0.17.0",
+    "openapi-typescript": "^7.13.0"
   }
 }

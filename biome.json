@@ -7,7 +7,8 @@
 			"!!node_modules/",
 			"!!target/*",
 			"!!rendered/*",
-			"!!admin-ui-assets/*"
+			"!!admin-ui-assets/*",
+			"!!assets/admin/openapi.ts"
 		],
 
 		"ignoreUnknown": true,

@@ -9,6 +9,7 @@ use tokio::fs;
 use url::Url;
 use uuid::Uuid;
 
+use crate::api_docs::dump_openapi_spec;
 use crate::entities::audit_event::log_audit_event;
 use crate::entities::user::create_user;
 use crate::*;
@@ -118,6 +119,11 @@ pub enum Commands {
     Content {
         #[command(subcommand)]
         command: ContentCommands,
+    },
+    /// Dump the OpenAPI spec to a file
+    DumpOpenApiSpec {
+        #[arg(value_name = "FILE")]
+        output: PathBuf,
     },
 }
 
@@ -1253,6 +1259,13 @@ pub async fn execute(command: Commands, db_path: &Path, oidc: &OidcConfig) -> Re
                 Ok(())
             }
         },
+        Commands::DumpOpenApiSpec { output } => {
+            dump_openapi_spec(&output)
+                .await
+                .map_err(|error| format!("failed to dump OpenAPI spec: {error}"))?;
+
+            Ok(())
+        }
     }
 }
 
