@@ -24,7 +24,7 @@ jobs:
         with:
           components: clippy
       - name: "Run clippy"
-        run: cargo clippy --all-targets
+        run: cargo clippy --all-targets --locked
       - name: Run sccache stat for check
         shell: bash
         run: ${SCCACHE_PATH} --show-stats
