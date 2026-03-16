@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::web::*;
+use crate::api::*;
 use anyhow::Context;
 use utoipa::OpenApi;
 use utoipa::openapi::security::{Http, HttpAuthScheme, SecurityScheme};
@@ -8,10 +8,34 @@ use utoipa::openapi::security::{Http, HttpAuthScheme, SecurityScheme};
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        api_site_content_list,
+        api_site_content_search,
+        api_site_content_create,
+        api_site_content_get,
+        api_site_content_update,
+        api_site_content_delete,
+        api_site_assets_list,
+        api_site_asset_create,
+        api_site_asset_get,
+        api_site_asset_delete,
         api_site_assets_library
     ),
     components(
         schemas(
+            ApiErrorResponse,
+            ApiCreateContentRequest,
+            ApiUpdateContentRequest,
+            ApiContentListResponse,
+            ApiContentResponse,
+            ApiContentListItem,
+            ApiContentDetail,
+            AssetUploadRequest,
+            ApiAssetListResponse,
+            ApiAssetResponse,
+            ApiAssetSummary,
+            ApiAssetDetail,
+            ApiAssetVariant,
+            AssetLibraryResponse,
             AssetLibraryItem
         )
     ),
@@ -57,4 +81,22 @@ pub async fn dump_openapi_spec(path: &PathBuf) -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to write OpenAPI spec to {}", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openapi_spec_includes_issue_4_paths() {
+        let spec = ApiDoc::openapi();
+        let paths = spec.paths.paths;
+
+        assert!(paths.contains_key("/api/site/{site_id}/content"));
+        assert!(paths.contains_key("/api/site/{site_id}/content/search"));
+        assert!(paths.contains_key("/api/site/{site_id}/content/{content_id}"));
+        assert!(paths.contains_key("/api/site/{site_id}/assets"));
+        assert!(paths.contains_key("/api/site/{site_id}/assets/{asset_id}"));
+        assert!(paths.contains_key("/api/site/{site_id}/assets/library"));
+    }
 }
