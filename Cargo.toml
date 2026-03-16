@@ -17,7 +17,7 @@ chrono = "0.4.44"
 clap = { version = "4.5.60", features = ["derive", "env"] }
 compact_jwt = "0.5.5"
 glob = "0.3.3"
-image = "0.25.9"
+image = "0.25.10"
 markdown = "1.0.0"
 mime_guess = "2.0.5"
 openidconnect = { version = "4.0.1", features = ["reqwest"] }
