@@ -327,8 +327,7 @@ const routeCases: RouteCase[] = [
 	{
 		name: "asset library",
 		method: "GET",
-		requiredRole: "author",
-		lowerRole: "viewer",
+		requiredRole: "viewer",
 		successStatus: 200,
 		prepare: async (harness, fixtures) => ({
 			path: `/api/site/${harness.siteId}/assets/library`,

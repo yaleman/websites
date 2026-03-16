@@ -1,3 +1,4 @@
+use crate::api;
 use crate::api_docs::ApiDoc;
 use crate::constants::{
     CUSTOMIZABLE_TEMPLATE_FILES, DEFAULT_TEMPLATE_NAME, SESSION_OIDC_NONCE_KEY,
@@ -13,26 +14,23 @@ use crate::entities::site::get_by_id;
 use crate::entities::user::upsert_user_login;
 use crate::entities::{self, PageType};
 use crate::errors::SiteError;
-use crate::images::{generate_thumbnail, mime_from_extension};
 use crate::middleware::log_requests;
 use crate::oidc::{admin_login_callback, build_http_client, build_oidc_client};
 use crate::tls::build_tls_config;
 use crate::token_auth::{
-    self, TokenGrantSet, TokenSiteGrant, authenticate_api_request, deserialize_grants_json,
-    ensure_jwt_hs256_secret, issue_user_api_token, revoke_user_api_token, signer_from_secret,
-    summarize_grants,
+    self, TokenGrantSet, TokenSiteGrant, deserialize_grants_json, ensure_jwt_hs256_secret,
+    issue_user_api_token, revoke_user_api_token, signer_from_secret, summarize_grants,
 };
 use crate::{
-    NewAsset, NewAssetVariant, NewContent, cli::OidcConfig, content_primary_route, create_asset,
-    create_asset_variant, create_content, create_membership, create_site, create_tag,
-    delete_membership, delete_site, delete_tag, export_site, get_membership_by_id,
-    get_membership_for_subject, get_revision, get_revision_by_number, get_user_by_id,
-    import_site_json, list_aliases, list_assets, list_content, list_content_tags, list_memberships,
-    list_memberships_for_user_id, list_revisions, list_sites, list_sites_for_subject, list_tags,
-    list_users, list_users_by_ids, render_content_preview, render_site,
-    resolve_site_template_override_root, resolve_upload_root, search_all_content, search_content,
-    serialize_site_export_pretty, sync_tags_to_content, update_content, update_membership_role,
-    update_site_settings,
+    NewContent, cli::OidcConfig, content_primary_route, create_content, create_membership,
+    create_site, create_tag, delete_membership, delete_site, delete_tag, export_site,
+    get_membership_by_id, get_membership_for_subject, get_revision, get_revision_by_number,
+    get_user_by_id, import_site_json, list_aliases, list_assets, list_content, list_content_tags,
+    list_memberships, list_memberships_for_user_id, list_revisions, list_sites,
+    list_sites_for_subject, list_tags, list_users, list_users_by_ids, render_content_preview,
+    render_site, resolve_site_template_override_root, resolve_upload_root, search_all_content,
+    search_content, serialize_site_export_pretty, store_uploaded_asset, sync_tags_to_content,
+    update_content, update_membership_role, update_site_settings,
 };
 use anyhow::Context;
 use askama::Template;
@@ -42,7 +40,7 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{Form, Multipart, OriginalUri, Path, Query, RawForm, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
     routing::get,
 };
@@ -55,7 +53,7 @@ use sea_orm::prelude::StringLen;
 
 use sea_orm::{
     ColumnTrait as _, Condition, ConnectionTrait, DatabaseConnection, DeriveActiveEnum,
-    EntityTrait, EnumIter, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+    EntityTrait, EnumIter, QueryFilter, QueryOrder, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -67,13 +65,12 @@ use std::path::{Component, Path as StdPath, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::fs;
-use tokio::io::AsyncWriteExt;
 use tower_http::services::ServeDir;
 use tower_sessions::{Expiry, Session, SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
 use tracing::{error, info};
 use url::Url;
-use utoipa::{OpenApi, ToSchema};
+use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
@@ -169,6 +166,7 @@ pub(crate) struct AdminState {
     pub(crate) oidc_client: Arc<reqwest::Client>,
     pub(crate) jwt_signer: Arc<compact_jwt::JwsHs256Signer>,
     pub(crate) jwt_issuer: String,
+    pub(crate) upload_root: PathBuf,
 }
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
@@ -1314,31 +1312,6 @@ fn deserialize_string_set(raw: Option<&str>) -> Result<HashSet<String>, SiteErro
     Ok(values.into_iter().collect())
 }
 
-#[derive(Debug, Deserialize)]
-struct AssetLibraryQuery {
-    q: Option<String>,
-    limit: Option<u64>,
-    r#type: Option<String>,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-struct AssetLibraryResponse {
-    assets: Vec<AssetLibraryItem>,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub(crate) struct AssetLibraryItem {
-    id: Uuid,
-    original_filename: String,
-    mime_type: String,
-    width: Option<i32>,
-    height: Option<i32>,
-    created_at: String,
-    original_url: String,
-    thumbnail_url: Option<String>,
-    has_thumbnail: bool,
-}
-
 #[derive(
     EnumIter,
     DeriveActiveEnum,
@@ -1819,11 +1792,6 @@ fn build_admin_app(state: AdminState, assets_dir: &StdPath, upload_root: &StdPat
         .nest_service("/admin/assets", ServeDir::new(assets_dir))
         .nest_service("/media/images", ServeDir::new(upload_root))
         .layer(from_fn(crate::middleware::require_session));
-    let api_routes = Router::new().route(
-        "/api/site/{site_id}/assets/library",
-        get(api_site_assets_library),
-    );
-
     Router::new()
         .route("/", get(admin_root))
         .route("/health", get(health_check))
@@ -1836,7 +1804,7 @@ fn build_admin_app(state: AdminState, assets_dir: &StdPath, upload_root: &StdPat
                 .config(swagger_config),
         )
         .merge(admin_routes)
-        .merge(api_routes)
+        .merge(api::routes())
         .fallback(not_found)
         .with_state(state)
 }
@@ -1851,6 +1819,7 @@ pub async fn run_admin_server(
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let jwt_signer =
         signer_from_secret(&jwt_secret).map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let upload_root = resolve_upload_root();
     let state = AdminState {
         db: db.clone(),
         oidc_client_id: ClientId::new(oidc.oidc_client_id.clone()),
@@ -1861,13 +1830,13 @@ pub async fn run_admin_server(
         oidc_client: Arc::new(build_http_client().context("Failed to build OIDC HTTP client")?),
         jwt_signer: Arc::new(jwt_signer),
         jwt_issuer: oidc.frontend_url.to_string(),
+        upload_root: upload_root.clone(),
     };
 
     let pool = db.get_sqlite_connection_pool();
     let session_store = SqliteStore::new((*pool).clone());
 
     let assets_dir = resolve_admin_assets_dir();
-    let upload_root = resolve_upload_root();
     session_store
         .migrate()
         .await
@@ -3894,18 +3863,6 @@ async fn admin_site_tag_delete(
     Ok(Redirect::to(&format!("/admin/site/{site_id}/tags")))
 }
 
-fn normalize_asset_mime_filter(value: &str) -> Option<&'static str> {
-    match value {
-        "jpeg" | "jpg" => Some("image/jpeg"),
-        "png" => Some("image/png"),
-        "gif" => Some("image/gif"),
-        "svg" => Some("image/svg+xml"),
-        "webp" => Some("image/webp"),
-        "all" => None,
-        _ => None,
-    }
-}
-
 fn format_optional_datetime(value: Option<DateTime<Utc>>) -> String {
     value
         .map(|timestamp| timestamp.to_rfc3339())
@@ -4021,112 +3978,6 @@ async fn fetch_remote_asset(
     Ok((bytes.to_vec(), original_filename, mime_type))
 }
 
-async fn store_image_asset<C: ConnectionTrait>(
-    db: &C,
-    site_id: Uuid,
-    uploader_sub: &str,
-    bytes: Vec<u8>,
-    original_filename: String,
-    mime_type: Option<String>,
-) -> Result<entities::asset::Model, SiteError> {
-    let extension = StdPath::new(&original_filename)
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("bin")
-        .to_lowercase();
-    let storage_basename = format!("{}.{}", Uuid::now_v7(), extension);
-    let upload_root = resolve_upload_root();
-    let storage_path = upload_root.join(&storage_basename);
-
-    fs::create_dir_all(&upload_root).await.map_err(|error| {
-        SiteError::internal(format!("failed to create upload directory: {error}"))
-    })?;
-    let mut file = fs::File::create(&storage_path)
-        .await
-        .map_err(|error| SiteError::internal(format!("failed to create upload file: {error}")))?;
-    file.write_all(&bytes)
-        .await
-        .map_err(|error| SiteError::internal(format!("failed to write upload file: {error}")))?;
-
-    let byte_length = i32::try_from(bytes.len()).unwrap_or(i32::MAX);
-    let (dimensions, thumbnail) = generate_thumbnail(bytes, &extension)
-        .await
-        .map_err(|error| SiteError::internal(format!("failed to process image: {error}")))?;
-    let (width, height) = dimensions.unwrap_or((0, 0));
-    let width_i32 = if width > 0 {
-        i32::try_from(width).ok()
-    } else {
-        None
-    };
-    let height_i32 = if height > 0 {
-        i32::try_from(height).ok()
-    } else {
-        None
-    };
-    let mime_type = mime_type.unwrap_or_else(|| mime_from_extension(&extension).to_string());
-
-    let asset = create_asset(
-        db,
-        NewAsset {
-            site_id,
-            uploader_sub: uploader_sub.to_string(),
-            original_filename,
-            storage_basename: storage_basename.clone(),
-            mime_type: mime_type.clone(),
-            byte_length,
-            width: width_i32,
-            height: height_i32,
-        },
-    )
-    .await
-    .map_err(|error| SiteError::internal(format!("failed to create asset: {error}")))?;
-
-    create_asset_variant(
-        db,
-        NewAssetVariant {
-            asset_id: asset.id,
-            variant_kind: "original".to_string(),
-            filename: storage_basename,
-            mime_type: mime_type.clone(),
-            byte_length,
-            width: width_i32,
-            height: height_i32,
-        },
-    )
-    .await
-    .map_err(|error| SiteError::internal(format!("failed to create asset variant: {error}")))?;
-
-    if let Some(thumbnail) = thumbnail {
-        let stem = StdPath::new(&asset.storage_basename)
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or("asset");
-        let filename = format!("{stem}_thumb.{}", thumbnail.extension);
-        let thumb_path = upload_root.join(&filename);
-        fs::write(&thumb_path, &thumbnail.bytes)
-            .await
-            .map_err(|error| SiteError::internal(format!("failed to write thumbnail: {error}")))?;
-        create_asset_variant(
-            db,
-            NewAssetVariant {
-                asset_id: asset.id,
-                variant_kind: "thumbnail".to_string(),
-                filename,
-                mime_type: thumbnail.mime_type,
-                byte_length: thumbnail.byte_length,
-                width: thumbnail.width,
-                height: thumbnail.height,
-            },
-        )
-        .await
-        .map_err(|error| {
-            SiteError::internal(format!("failed to create asset thumbnail: {error}"))
-        })?;
-    }
-
-    Ok(asset)
-}
-
 async fn import_remote_scan_asset<C: ConnectionTrait>(
     db: &C,
     client: &reqwest::Client,
@@ -4137,8 +3988,10 @@ async fn import_remote_scan_asset<C: ConnectionTrait>(
     let url = normalize_remote_asset_url(remote_url.to_string())?
         .ok_or_else(|| SiteError::BadRequest("missing remote asset url".to_string()))?;
     let (bytes, original_filename, mime_type) = fetch_remote_asset(client, url).await?;
-    let asset = store_image_asset(
+    let upload_root = resolve_upload_root();
+    let asset = store_uploaded_asset(
         db,
+        &upload_root,
         site_id,
         uploader_sub,
         bytes,
@@ -4204,120 +4057,6 @@ async fn build_admin_asset_rows<C: ConnectionTrait>(
             }
         })
         .collect())
-}
-
-#[utoipa::path(
-    get,
-    path = "/api/site/{site_id}/assets/library",
-    params(
-        ("site_id" = Uuid, Path, description = "The ID of the site to list assets for"),
-        ("q" = Option<String>, Query, description = "Optional search query to filter assets by original filename or storage basename"),
-        ("limit" = Option<u64>, Query, description = "Optional maximum number of assets to return"),
-        ("type" = Option<String>, Query, description = "Optional filter by image type (jpeg, png, gif, svg, webp)"),
-    ),
-    security(
-        ("bearer_auth" = [])
-    ),
-    responses(
-        (status = 200, description = "A list of assets matching the query", body = AssetLibraryResponse),
-        (status = 400, description = "Invalid request parameters", body = String),
-        (status = 401, description = "Unauthorized access", body = String),
-        (status = 403, description = "Forbidden - insufficient permissions", body = String),
-        (status = 500, description = "Internal server error", body = String),
-    ),
-)]
-async fn api_site_assets_library(
-    State(state): State<AdminState>,
-    headers: HeaderMap,
-    session: Session,
-    Path(site_id): Path<Uuid>,
-    Query(query): Query<AssetLibraryQuery>,
-) -> Result<Json<AssetLibraryResponse>, token_auth::ApiAuthError> {
-    let principal = authenticate_api_request(
-        state.db.as_ref(),
-        state.jwt_signer.as_ref(),
-        &state.jwt_issuer,
-        &headers,
-        &session,
-    )
-    .await?;
-    principal
-        .require_site_role(state.db.as_ref(), site_id, SiteRole::Author)
-        .await?;
-
-    let query_text = query.q.unwrap_or_default();
-    let query_text = query_text.trim();
-    let has_query = !query_text.is_empty();
-    let default_limit = if has_query { 50 } else { 12 };
-    let limit = query.limit.unwrap_or(default_limit).clamp(1, 200);
-
-    let mut asset_query = entities::asset::Entity::find()
-        .filter(entities::asset::Column::SiteId.eq(site_id))
-        .filter(entities::asset::Column::MimeType.like("image/%"));
-
-    if let Some(type_filter) = query
-        .r#type
-        .as_deref()
-        .and_then(normalize_asset_mime_filter)
-    {
-        asset_query = asset_query.filter(entities::asset::Column::MimeType.eq(type_filter));
-    }
-
-    if has_query {
-        let condition = Condition::any()
-            .add(entities::asset::Column::OriginalFilename.contains(query_text))
-            .add(entities::asset::Column::StorageBasename.contains(query_text));
-        asset_query = asset_query.filter(condition);
-    }
-
-    let assets = asset_query
-        .order_by_desc(entities::asset::Column::CreatedAt)
-        .limit(limit)
-        .all(state.db.as_ref())
-        .await
-        .map_err(|error| SiteError::internal(format!("failed to list assets: {error}")))?;
-
-    if assets.is_empty() {
-        principal.record_successful_use(state.db.as_ref()).await?;
-        return Ok(Json(AssetLibraryResponse { assets: Vec::new() }));
-    }
-
-    let asset_ids = assets.iter().map(|asset| asset.id).collect::<Vec<_>>();
-    let thumbnails = entities::asset_variant::Entity::find()
-        .filter(entities::asset_variant::Column::AssetId.is_in(asset_ids))
-        .filter(entities::asset_variant::Column::VariantKind.eq("thumbnail"))
-        .all(state.db.as_ref())
-        .await
-        .map_err(|error| SiteError::internal(format!("failed to load asset variants: {error}")))?;
-
-    let mut thumbnails_by_asset: HashMap<Uuid, entities::asset_variant::Model> = HashMap::new();
-    for variant in thumbnails {
-        thumbnails_by_asset.insert(variant.asset_id, variant);
-    }
-
-    let items = assets
-        .into_iter()
-        .map(|asset| {
-            let thumbnail_url = thumbnails_by_asset
-                .get(&asset.id)
-                .map(|variant| format!("/media/images/{}", variant.filename));
-            let has_thumbnail = thumbnail_url.is_some();
-            AssetLibraryItem {
-                id: asset.id,
-                original_filename: asset.original_filename,
-                mime_type: asset.mime_type,
-                width: asset.width,
-                height: asset.height,
-                created_at: asset.created_at.to_rfc3339(),
-                original_url: format!("/media/images/{}", asset.storage_basename),
-                thumbnail_url,
-                has_thumbnail,
-            }
-        })
-        .collect();
-
-    principal.record_successful_use(state.db.as_ref()).await?;
-    Ok(Json(AssetLibraryResponse { assets: items }))
 }
 
 async fn admin_site_assets(
@@ -4466,8 +4205,9 @@ async fn admin_site_assets_create(
     };
 
     let db_txn = state.db.begin().await?;
-    let asset = store_image_asset(
+    let asset = store_uploaded_asset(
         &db_txn,
+        &state.upload_root,
         site.id,
         &actor.subject,
         bytes,
@@ -5238,6 +4978,7 @@ mod tests {
             ),
             jwt_signer: Arc::new(jwt_signer),
             jwt_issuer: "https://example.com".to_string(),
+            upload_root: std::env::temp_dir().join(format!("websites-test-{}", Uuid::now_v7())),
         }
     }
 
@@ -5270,12 +5011,13 @@ mod tests {
         upload_root: tempfile::TempDir,
     }
 
-    fn test_app_router(state: AdminState) -> TestRouter {
+    fn test_app_router(mut state: AdminState) -> TestRouter {
         let session_layer = SessionManagerLayer::new(MemoryStore::default())
             .with_secure(false)
             .with_expiry(Expiry::OnSessionEnd);
         let assets_dir = tempfile::tempdir().expect("failed to create temp assets dir");
         let upload_root = tempfile::tempdir().expect("failed to create temp upload root");
+        state.upload_root = upload_root.path().to_path_buf();
 
         let router =
             build_admin_app(state, assets_dir.path(), upload_root.path()).layer(session_layer);

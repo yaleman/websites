@@ -1,5 +1,6 @@
 use crate::constants::{CUSTOMIZABLE_TEMPLATE_FILES, REQUIRED_TEMPLATES, SITE_TEMPLATES_DIR};
 use crate::content_scan::expand_asset_shortcodes;
+use crate::images::{generate_thumbnail, mime_from_extension};
 use crate::web::SiteRole;
 use crate::{entities::PageType, errors::SiteError};
 use chrono::{DateTime, Datelike, Utc};
@@ -18,10 +19,12 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tera::{Context, Tera};
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;
 
+pub mod api;
 pub mod api_docs;
 pub mod cli;
 pub mod constants;
@@ -1076,6 +1079,41 @@ pub async fn list_content(
     let content = query.all(db).await.map_err(|error| error.to_string())?;
 
     Ok(content)
+}
+
+/// Returns a single content record scoped to a site.
+pub async fn get_content_for_site(
+    db: &DatabaseConnection,
+    site_id: Uuid,
+    content_id: Uuid,
+) -> Result<Option<entities::content_item::Model>, SiteError> {
+    entities::content_item::Entity::find_by_id(content_id)
+        .filter(entities::content_item::Column::SiteId.eq(site_id))
+        .one(db)
+        .await
+        .map_err(SiteError::from)
+}
+
+/// Deletes a content record scoped to a site.
+pub async fn delete_content<C: ConnectionTrait>(
+    db: &C,
+    site_id: Uuid,
+    content_id: Uuid,
+) -> Result<(), SiteError> {
+    let existing = entities::content_item::Entity::find_by_id(content_id)
+        .filter(entities::content_item::Column::SiteId.eq(site_id))
+        .one(db)
+        .await
+        .map_err(SiteError::from)?;
+    if existing.is_none() {
+        return Err(SiteError::ContentNotFound(content_id));
+    }
+
+    entities::content_item::Entity::delete_by_id(content_id)
+        .exec(db)
+        .await
+        .map_err(SiteError::from)?;
+    Ok(())
 }
 
 /// Search content for a site by title, slug, or body substring.
@@ -2147,6 +2185,147 @@ pub async fn list_assets(
         .map_err(SiteError::from)
 }
 
+/// Returns a single asset scoped to a site.
+pub async fn get_asset_for_site(
+    db: &DatabaseConnection,
+    site_id: Uuid,
+    asset_id: Uuid,
+) -> Result<Option<entities::asset::Model>, SiteError> {
+    entities::asset::Entity::find_by_id(asset_id)
+        .filter(entities::asset::Column::SiteId.eq(site_id))
+        .one(db)
+        .await
+        .map_err(SiteError::from)
+}
+
+/// Creates an uploaded image asset and derivative thumbnail files under the provided upload root.
+pub async fn store_uploaded_asset<C: ConnectionTrait>(
+    db: &C,
+    upload_root: &Path,
+    site_id: Uuid,
+    uploader_sub: &str,
+    bytes: Vec<u8>,
+    original_filename: String,
+    mime_type: Option<String>,
+) -> Result<entities::asset::Model, SiteError> {
+    let extension = Path::new(&original_filename)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("bin")
+        .to_lowercase();
+    let storage_basename = format!("{}.{}", Uuid::now_v7(), extension);
+    let storage_path = upload_root.join(&storage_basename);
+
+    fs::create_dir_all(upload_root).await.map_err(|error| {
+        SiteError::internal(format!("failed to create upload directory: {error}"))
+    })?;
+    let mut file = fs::File::create(&storage_path)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to create upload file: {error}")))?;
+    file.write_all(&bytes)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to write upload file: {error}")))?;
+
+    let byte_length = i32::try_from(bytes.len()).unwrap_or(i32::MAX);
+    let (dimensions, thumbnail) = generate_thumbnail(bytes, &extension)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to process image: {error}")))?;
+    let (width, height) = dimensions.unwrap_or((0, 0));
+    let width_i32 = if width > 0 {
+        i32::try_from(width).ok()
+    } else {
+        None
+    };
+    let height_i32 = if height > 0 {
+        i32::try_from(height).ok()
+    } else {
+        None
+    };
+    let mime_type = mime_type.unwrap_or_else(|| mime_from_extension(&extension).to_string());
+
+    let asset = create_asset(
+        db,
+        NewAsset {
+            site_id,
+            uploader_sub: uploader_sub.to_string(),
+            original_filename,
+            storage_basename: storage_basename.clone(),
+            mime_type: mime_type.clone(),
+            byte_length,
+            width: width_i32,
+            height: height_i32,
+        },
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to create asset: {error}")))?;
+
+    create_asset_variant(
+        db,
+        NewAssetVariant {
+            asset_id: asset.id,
+            variant_kind: "original".to_string(),
+            filename: storage_basename,
+            mime_type: mime_type.clone(),
+            byte_length,
+            width: width_i32,
+            height: height_i32,
+        },
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to create asset variant: {error}")))?;
+
+    if let Some(thumbnail) = thumbnail {
+        let stem = Path::new(&asset.storage_basename)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("asset");
+        let filename = format!("{stem}_thumb.{}", thumbnail.extension);
+        let thumb_path = upload_root.join(&filename);
+        fs::write(&thumb_path, &thumbnail.bytes)
+            .await
+            .map_err(|error| SiteError::internal(format!("failed to write thumbnail: {error}")))?;
+        create_asset_variant(
+            db,
+            NewAssetVariant {
+                asset_id: asset.id,
+                variant_kind: "thumbnail".to_string(),
+                filename,
+                mime_type: thumbnail.mime_type,
+                byte_length: thumbnail.byte_length,
+                width: thumbnail.width,
+                height: thumbnail.height,
+            },
+        )
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!("failed to create asset thumbnail: {error}"))
+        })?;
+    }
+
+    Ok(asset)
+}
+
+/// Returns every stored filename used by an asset and its variants.
+pub async fn collect_asset_filenames<C: ConnectionTrait>(
+    db: &C,
+    asset_id: Uuid,
+) -> Result<Vec<String>, SiteError> {
+    let asset = entities::asset::Entity::find_by_id(asset_id)
+        .one(db)
+        .await
+        .map_err(SiteError::from)?
+        .ok_or_else(|| SiteError::NotFound)?;
+    let variants = list_asset_variants(db, asset_id)
+        .await
+        .map_err(SiteError::internal)?;
+
+    let mut filenames = vec![asset.storage_basename];
+    filenames.extend(variants.into_iter().map(|variant| variant.filename));
+    filenames.sort();
+    filenames.dedup();
+    Ok(filenames)
+}
+
 /// Creates an asset variant entry.
 pub async fn create_asset_variant<C: ConnectionTrait>(
     db: &C,
@@ -2169,8 +2348,8 @@ pub async fn create_asset_variant<C: ConnectionTrait>(
 }
 
 /// Returns all variants for an asset.
-pub async fn list_asset_variants(
-    db: &DatabaseConnection,
+pub async fn list_asset_variants<C: ConnectionTrait>(
+    db: &C,
     asset_id: Uuid,
 ) -> Result<Vec<entities::asset_variant::Model>, String> {
     let variants = entities::asset_variant::Entity::find()
@@ -2180,6 +2359,28 @@ pub async fn list_asset_variants(
         .map_err(|error| error.to_string())?;
 
     Ok(variants)
+}
+
+/// Deletes an asset record scoped to a site.
+pub async fn delete_asset<C: ConnectionTrait>(
+    db: &C,
+    site_id: Uuid,
+    asset_id: Uuid,
+) -> Result<(), SiteError> {
+    let existing = entities::asset::Entity::find_by_id(asset_id)
+        .filter(entities::asset::Column::SiteId.eq(site_id))
+        .one(db)
+        .await
+        .map_err(SiteError::from)?;
+    if existing.is_none() {
+        return Err(SiteError::NotFound);
+    }
+
+    entities::asset::Entity::delete_by_id(asset_id)
+        .exec(db)
+        .await
+        .map_err(SiteError::from)?;
+    Ok(())
 }
 
 #[cfg(test)]
