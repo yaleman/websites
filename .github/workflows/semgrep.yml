@@ -27,7 +27,7 @@ jobs:
           semgrep scan \
             --config auto \
             --error \
-            --exclude templates \
+            --exclude-rule python.django.security.django-no-csrf-token.django-no-csrf-token \
             --exclude docs \
             --exclude node_modules \
             --exclude target \
