@@ -407,7 +407,16 @@ const bindToolbar = (
 		if (!previewBody) {
 			return;
 		}
-		previewBody.innerHTML = editor.getHTML();
+		const previewContent = editor.view.dom.cloneNode(true);
+		if (previewContent instanceof HTMLElement) {
+			previewContent.removeAttribute("contenteditable");
+			previewContent
+				.querySelectorAll<HTMLElement>("[contenteditable]")
+				.forEach((element) => {
+					element.removeAttribute("contenteditable");
+				});
+		}
+		previewBody.replaceChildren(previewContent);
 	};
 
 	const setPreviewVisible = (visible: boolean) => {
