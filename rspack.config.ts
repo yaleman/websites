@@ -38,4 +38,7 @@ export default defineConfig({
 		css: true,
 	},
 	mode: "production",
+	resolve: {
+		extensions: [".ts", ".js"],
+	},
 });
