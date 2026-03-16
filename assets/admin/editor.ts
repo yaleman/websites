@@ -266,20 +266,26 @@ const createAssetModal = (editor: Editor) => {
 		alt?: string;
 		href?: string;
 	}) => {
-		const image = document.createElement("img");
-		image.src = options.src;
-		if (options.alt) {
-			image.alt = options.alt;
-		}
-		if (!options.href) {
-			editor.chain().focus().insertContent(image.outerHTML).run();
-			return;
-		}
-
-		const link = document.createElement("a");
-		link.href = options.href;
-		link.appendChild(image);
-		editor.chain().focus().insertContent(link.outerHTML).run();
+		const imageNode = {
+			type: "image",
+			attrs: {
+				src: options.src,
+				...(options.alt ? { alt: options.alt } : {}),
+			},
+			...(options.href
+				? {
+						marks: [
+							{
+								type: "link",
+								attrs: {
+									href: options.href,
+								},
+							},
+						],
+					}
+				: {}),
+		};
+		editor.chain().focus().insertContent(imageNode).run();
 	};
 
 	const insertSelection = () => {
@@ -407,9 +413,20 @@ const bindToolbar = (
 		if (!previewBody) {
 			return;
 		}
+		const previewVisible = !previewContainer?.hasAttribute("hidden");
+		const sourceVisible = !sourcePanel?.hasAttribute("hidden");
+		if (!previewVisible && !sourceVisible) {
+			return;
+		}
 		const previewContent = editor.view.dom.cloneNode(true);
 		if (previewContent instanceof HTMLElement) {
 			previewContent.removeAttribute("contenteditable");
+			previewContent.classList.remove("ProseMirror");
+			previewContent
+				.querySelectorAll<HTMLElement>(".ProseMirror")
+				.forEach((element) => {
+					element.classList.remove("ProseMirror");
+				});
 			previewContent
 				.querySelectorAll<HTMLElement>("[contenteditable]")
 				.forEach((element) => {
@@ -467,6 +484,9 @@ const bindToolbar = (
 		}
 		const willShow = sourcePanel.hasAttribute("hidden");
 		setSourceVisible(willShow);
+		if (willShow) {
+			updatePreview();
+		}
 	};
 
 	if (!toolbar) {

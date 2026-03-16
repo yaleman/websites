@@ -80,7 +80,7 @@ test.describe("content new editor", () => {
 			await expect(modal).toBeHidden();
 			await expect(
 				page.locator(
-					`.ProseMirror a[href="/media/images/${asset.storageBasename}"] img[src="/media/images/${asset.thumbnailFilename}"]`,
+					`#editor .ProseMirror a[href="/media/images/${asset.storageBasename}"] img[src="/media/images/${asset.thumbnailFilename}"]`,
 				),
 			).toBeVisible();
 			expect(
