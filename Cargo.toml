@@ -44,7 +44,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 similar = "2.7.0"
 sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "sqlite"] }
-tempfile = "3.26.0"
+tempfile = "3.27.0"
 tera = "1.20.1"
 tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros"] }
 tower-http = { version = "0.6.8", features = ["fs"] }
@@ -69,5 +69,5 @@ utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"] }
 uuid = { version = "1.22.0", features = ["v7"] }
 
 [dev-dependencies]
-tempfile = "3.26.0"
+tempfile = "3.27.0"
 tower = "0.5.2"
