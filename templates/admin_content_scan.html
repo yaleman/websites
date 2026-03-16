@@ -157,7 +157,11 @@
               <button type="button" class="editor-button" data-pick-asset>Choose asset</button>
               {% if issue.can_import_remote %}
               <label class="scan-issue__remote">
-                <input type="checkbox" value="{{ issue.issue_id }}" data-remote-import />
+                <input
+                  type="checkbox"
+                  name="remote_import_issue_id"
+                  value="{{ issue.issue_id }}"
+                  data-remote-import />
                 Import remote image
               </label>
               <span class="scan-issue__remote-url">{{ issue.remote_url }}</span>
