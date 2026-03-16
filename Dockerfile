@@ -38,4 +38,5 @@ ENV WEBSITES_TLS_CERT_PATH="/certs/tls.crt"
 ENV WEBSITES_TLS_KEY_PATH="/certs/tls.key"
 
 EXPOSE 9000
+USER nonroot
 ENTRYPOINT ["/websites"]

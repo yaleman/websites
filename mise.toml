@@ -1,5 +1,6 @@
 [tools]
 pnpm = "latest"
+semgrep = "latest"
 
 [tasks.check]
 depends = [
@@ -63,3 +64,11 @@ pnpm exec openapi-typescript \
    --alphabetize --make-paths-enum \
    --output assets/admin/openapi.ts
 ''']
+
+[tasks.docker_build]
+description = "build the Docker image for the application"
+run = "docker build -t websites:latest ."
+
+[tasks.docker_run]
+description = "run the Docker container for the application"
+run = "docker run --rm -it -p 9000:9000 --env-file .env --name websites_container websites:latest"

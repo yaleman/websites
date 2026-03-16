@@ -28,8 +28,6 @@ jobs:
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          install: true
       - name: Build container image
         id: build_and_export
         uses: docker/build-push-action@v6
