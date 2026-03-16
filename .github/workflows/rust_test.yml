@@ -1,32 +1,140 @@
 ---
-name: Rust Testing
+name: CI Checks
+
 "on":
-  push:
   pull_request:
-env:
-  SCCACHE_GHA_ENABLED: "true"
-  RUSTC_WRAPPER: "sccache"
+  push:
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
 jobs:
-  cargo_test:
+  rust_test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-      - name: Install Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install typical dependencies
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Generate self-signed TLS certs
         run: |
-          sudo apt-get update && \
-          sudo apt-get install -y \
-            libssl-dev
-      - name: "Run cargo test"
-        run: cargo test
-      - name: "Build the workspace"
-        run: cargo build --workspace
-      - name: Run sccache stat for check
-        shell: bash
-        run: ${SCCACHE_PATH} --show-stats
+          python -m pip install --upgrade pip cryptography
+          cert_dir="${RUNNER_TEMP}/tls"
+          mkdir -p "${cert_dir}"
+          cert_path="${cert_dir}/tls.crt"
+          key_path="${cert_dir}/tls.key"
+
+          python - <<'PY'
+          import ipaddress
+          import os
+          from datetime import datetime, timedelta, timezone
+
+          from cryptography import x509
+          from cryptography.hazmat.primitives import hashes, serialization
+          from cryptography.hazmat.primitives.asymmetric import rsa
+          from cryptography.x509.oid import NameOID
+
+          cert_path = os.environ["CERT_PATH"]
+          key_path = os.environ["KEY_PATH"]
+
+          key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+          subject = issuer = x509.Name(
+              [x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")]
+          )
+          san = x509.SubjectAlternativeName(
+              [
+                  x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+                  x509.DNSName("localhost"),
+              ]
+          )
+          now = datetime.now(timezone.utc)
+          cert = (
+              x509.CertificateBuilder()
+              .subject_name(subject)
+              .issuer_name(issuer)
+              .public_key(key.public_key())
+              .serial_number(x509.random_serial_number())
+              .not_valid_before(now - timedelta(minutes=5))
+              .not_valid_after(now + timedelta(days=7))
+              .add_extension(san, critical=False)
+              .sign(key, hashes.SHA256())
+          )
+
+          with open(key_path, "wb") as key_file:
+              key_file.write(
+                  key.private_bytes(
+                      encoding=serialization.Encoding.PEM,
+                      format=serialization.PrivateFormat.TraditionalOpenSSL,
+                      encryption_algorithm=serialization.NoEncryption(),
+                  )
+              )
+
+          with open(cert_path, "wb") as cert_file:
+              cert_file.write(cert.public_bytes(serialization.Encoding.PEM))
+          PY
+        env:
+          CERT_PATH: ${{ runner.temp }}/tls/tls.crt
+          KEY_PATH: ${{ runner.temp }}/tls/tls.key
+
+      - name: Export TLS env vars
+        run: |
+          echo "WEBSITES_TLS_CERT_PATH=${RUNNER_TEMP}/tls/tls.crt" >> "${GITHUB_ENV}"
+          echo "WEBSITES_TLS_KEY_PATH=${RUNNER_TEMP}/tls/tls.key" >> "${GITHUB_ENV}"
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browser dependencies
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features --quiet -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --all --quiet
+
+      - name: Regenerate OpenAPI schema
+        run: cargo run -- dump-open-api-spec ./openapi.json
+
+      - name: Regenerate OpenAPI TypeScript types
+        run: |
+          pnpm exec openapi-typescript \
+            ./openapi.json \
+            --dedupe-enums \
+            --enum \
+            --alphabetize \
+            --make-paths-enum \
+            --output assets/admin/openapi.ts
+
+      - name: Build admin assets
+        run: pnpm run build:admin
+
+      - name: Verify generated artifacts are committed
+        run: git diff --exit-code -- openapi.json assets/admin/openapi.ts admin-ui-assets
+
+      - name: Check frontend types
+        run: pnpm exec tsc --noEmit
+
+      - name: Run end-to-end tests
+        run: pnpm exec playwright test

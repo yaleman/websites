@@ -1,16 +1,9 @@
 import "./remediation.css";
+import type { Client } from "openapi-fetch";
+import createClient from "openapi-fetch";
+import { ApiPaths, type components, type paths } from "./openapi";
 
-type AssetLibraryItem = {
-	id: string;
-	original_filename: string;
-	mime_type: string;
-	width: number | null;
-	height: number | null;
-	created_at: string;
-	original_url: string;
-	thumbnail_url: string | null;
-	has_thumbnail: boolean;
-};
+let OPENAPI_CLIENT: Client<paths, `${string}/${string}`>;
 
 type ManualAssetSelection = {
 	asset_id: string;
@@ -18,7 +11,7 @@ type ManualAssetSelection = {
 	asset_label: string;
 };
 
-const createAssetCard = (asset: AssetLibraryItem) => {
+const createAssetCard = (asset: components["schemas"]["AssetLibraryItem"]) => {
 	const button = document.createElement("button");
 	button.type = "button";
 	button.className = "asset-card";
@@ -48,7 +41,7 @@ const createAssetCard = (asset: AssetLibraryItem) => {
 
 const renderAssetGrid = (
 	container: HTMLElement,
-	assets: AssetLibraryItem[],
+	assets: components["schemas"]["AssetLibraryItem"][],
 	message: string,
 ) => {
 	container.innerHTML = "";
@@ -65,6 +58,9 @@ const renderAssetGrid = (
 };
 
 const initRemediation = () => {
+	const apiUrl = new URL("/", window.location.origin).href;
+	OPENAPI_CLIENT = createClient<paths>({ baseUrl: apiUrl });
+
 	const root = document.querySelector<HTMLElement>("[data-remediation-root]");
 	if (!root) {
 		return;
@@ -127,7 +123,7 @@ const initRemediation = () => {
 	}
 
 	let currentIssue: HTMLElement | null = null;
-	let selectedAsset: AssetLibraryItem | null = null;
+	let selectedAsset: components["schemas"]["AssetLibraryItem"] | null = null;
 	let searchTimeout: number | null = null;
 	const selections: Record<string, ManualAssetSelection> = {};
 
@@ -153,27 +149,25 @@ const initRemediation = () => {
 	};
 
 	const fetchAssets = async (query?: string) => {
-		const url = new URL(
-			`/api/site/${siteId}/assets/library`,
-			window.location.origin,
+		const { data, error } = await OPENAPI_CLIENT.GET(
+			ApiPaths.api_site_assets_library,
+			{
+				params: {
+					path: {
+						site_id: siteId,
+					},
+					query: {
+						q: query || "",
+						limit: query ? 50 : 12,
+						type: typeSelect.value || "",
+					},
+				},
+			},
 		);
-		const type = typeSelect.value;
-		if (query) {
-			url.searchParams.set("q", query);
-			url.searchParams.set("limit", "50");
-		} else {
-			url.searchParams.set("limit", "12");
-		}
-		if (type) {
-			url.searchParams.set("type", type);
-		}
-		const response = await fetch(url.toString(), {
-			credentials: "same-origin",
-		});
-		if (!response.ok) {
+		if (error || !data) {
 			throw new Error("failed to load assets");
 		}
-		const payload = (await response.json()) as { assets: AssetLibraryItem[] };
+		const payload = data as components["schemas"]["AssetLibraryResponse"];
 		return payload.assets ?? [];
 	};
 
@@ -197,7 +191,9 @@ const initRemediation = () => {
 		}
 	};
 
-	const setSelectedAsset = (asset: AssetLibraryItem | null) => {
+	const setSelectedAsset = (
+		asset: components["schemas"]["AssetLibraryItem"] | null,
+	) => {
 		selectedAsset = asset;
 		modal.querySelectorAll(".asset-card").forEach((card) => {
 			card.classList.toggle(
@@ -337,7 +333,9 @@ const initRemediation = () => {
 		if (!payload) {
 			return;
 		}
-		const parsed = JSON.parse(payload) as AssetLibraryItem;
+		const parsed = JSON.parse(
+			payload,
+		) as components["schemas"]["AssetLibraryItem"];
 		setSelectedAsset(parsed);
 	});
 

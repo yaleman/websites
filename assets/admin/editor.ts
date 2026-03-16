@@ -5,31 +5,24 @@ import { Markdown } from "@tiptap/markdown";
 import StarterKit from "@tiptap/starter-kit";
 import "./editor.css";
 import "./styles.css";
+import type { Client } from "openapi-fetch";
+import createClient from "openapi-fetch";
+import { ApiPaths, type components, type paths } from "./openapi";
 
-type AssetLibraryItem = {
-	id: string;
-	original_filename: string;
-	mime_type: string;
-	width: number | null;
-	height: number | null;
-	created_at: string;
-	original_url: string;
-	thumbnail_url: string | null;
-	has_thumbnail: boolean;
-};
+let OPENAPI_CLIENT: Client<paths, `${string}/${string}`>;
 
 const inferAltFromFilename = (filename: string) => {
 	const trimmed = filename.replace(/\.[^/.]+$/, "");
 	return trimmed.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
 };
 
-const formatAssetMeta = (asset: AssetLibraryItem) => {
+const formatAssetMeta = (asset: components["schemas"]["AssetLibraryItem"]) => {
 	const dimensions =
 		asset.width && asset.height ? `${asset.width}×${asset.height}` : "size n/a";
 	return `${asset.mime_type} • ${dimensions}`;
 };
 
-const createAssetCard = (asset: AssetLibraryItem) => {
+const createAssetCard = (asset: components["schemas"]["AssetLibraryItem"]) => {
 	const button = document.createElement("button");
 	button.type = "button";
 	button.className = "asset-card";
@@ -60,7 +53,7 @@ const createAssetCard = (asset: AssetLibraryItem) => {
 
 const renderAssetGrid = (
 	container: HTMLElement,
-	assets: AssetLibraryItem[],
+	assets: components["schemas"]["AssetLibraryItem"][],
 	message: string,
 ) => {
 	container.innerHTML = "";
@@ -111,7 +104,7 @@ const createAssetModal = (editor: Editor) => {
 		"[data-asset-insert]",
 	);
 
-	let selectedAsset: AssetLibraryItem | null = null;
+	let selectedAsset: components["schemas"]["AssetLibraryItem"] | null = null;
 	let searchTimeout: number | null = null;
 
 	const setModalOpen = (open: boolean) => {
@@ -143,7 +136,9 @@ const createAssetModal = (editor: Editor) => {
 		setInsertEnabled();
 	};
 
-	const setSelectedAsset = (asset: AssetLibraryItem | null) => {
+	const setSelectedAsset = (
+		asset: components["schemas"]["AssetLibraryItem"] | null,
+	) => {
 		selectedAsset = asset;
 		modal.querySelectorAll(".asset-card").forEach((card) => {
 			card.classList.toggle(
@@ -171,24 +166,24 @@ const createAssetModal = (editor: Editor) => {
 		limit: number;
 		type: string;
 	}) => {
-		const url = new URL(
-			`/api/site/${siteId}/assets/library`,
-			window.location.origin,
+		const { data, error } = await OPENAPI_CLIENT.GET(
+			ApiPaths.api_site_assets_library,
+			{
+				params: {
+					path: { site_id: siteId },
+					query: {
+						q: options.query || "",
+						type: options.type,
+						limit: options.limit,
+					},
+				},
+			},
 		);
-		if (options.query) {
-			url.searchParams.set("q", options.query);
+
+		if (error || !data) {
+			throw new Error(`Failed to fetch assets. ${error}`);
 		}
-		if (options.type) {
-			url.searchParams.set("type", options.type);
-		}
-		url.searchParams.set("limit", options.limit.toString());
-		const response = await fetch(url.toString(), {
-			credentials: "same-origin",
-		});
-		if (!response.ok) {
-			throw new Error("Failed to fetch assets.");
-		}
-		const payload = (await response.json()) as { assets: AssetLibraryItem[] };
+		const payload = data as components["schemas"]["AssetLibraryResponse"];
 		return payload.assets ?? [];
 	};
 
@@ -260,7 +255,9 @@ const createAssetModal = (editor: Editor) => {
 		if (!payload) {
 			return;
 		}
-		const asset = JSON.parse(payload) as AssetLibraryItem;
+		const asset = JSON.parse(
+			payload,
+		) as components["schemas"]["AssetLibraryItem"];
 		setSelectedAsset(asset);
 	};
 
@@ -269,20 +266,26 @@ const createAssetModal = (editor: Editor) => {
 		alt?: string;
 		href?: string;
 	}) => {
-		const image = document.createElement("img");
-		image.src = options.src;
-		if (options.alt) {
-			image.alt = options.alt;
-		}
-		if (!options.href) {
-			editor.chain().focus().insertContent(image.outerHTML).run();
-			return;
-		}
-
-		const link = document.createElement("a");
-		link.href = options.href;
-		link.appendChild(image);
-		editor.chain().focus().insertContent(link.outerHTML).run();
+		const imageNode = {
+			type: "image",
+			attrs: {
+				src: options.src,
+				...(options.alt ? { alt: options.alt } : {}),
+			},
+			...(options.href
+				? {
+						marks: [
+							{
+								type: "link",
+								attrs: {
+									href: options.href,
+								},
+							},
+						],
+					}
+				: {}),
+		};
+		editor.chain().focus().insertContent(imageNode).run();
 	};
 
 	const insertSelection = () => {
@@ -410,7 +413,27 @@ const bindToolbar = (
 		if (!previewBody) {
 			return;
 		}
-		previewBody.innerHTML = editor.getHTML();
+		const previewVisible = !previewContainer?.hasAttribute("hidden");
+		const sourceVisible = !sourcePanel?.hasAttribute("hidden");
+		if (!previewVisible && !sourceVisible) {
+			return;
+		}
+		const previewContent = editor.view.dom.cloneNode(true);
+		if (previewContent instanceof HTMLElement) {
+			previewContent.removeAttribute("contenteditable");
+			previewContent.classList.remove("ProseMirror");
+			previewContent
+				.querySelectorAll<HTMLElement>(".ProseMirror")
+				.forEach((element) => {
+					element.classList.remove("ProseMirror");
+				});
+			previewContent
+				.querySelectorAll<HTMLElement>("[contenteditable]")
+				.forEach((element) => {
+					element.removeAttribute("contenteditable");
+				});
+		}
+		previewBody.replaceChildren(previewContent);
 	};
 
 	const setPreviewVisible = (visible: boolean) => {
@@ -461,6 +484,9 @@ const bindToolbar = (
 		}
 		const willShow = sourcePanel.hasAttribute("hidden");
 		setSourceVisible(willShow);
+		if (willShow) {
+			updatePreview();
+		}
 	};
 
 	if (!toolbar) {
@@ -932,16 +958,20 @@ const initEditor = () => {
 	}
 };
 
-if (document.readyState === "loading") {
-	document.addEventListener("DOMContentLoaded", () => {
-		initTransientMessages();
-		initTagEditor();
-		initMembershipCreateForm();
-		initEditor();
-	});
-} else {
+function doPageStartup() {
 	initTransientMessages();
 	initTagEditor();
 	initMembershipCreateForm();
 	initEditor();
+
+	const apiUrl = new URL("/", window.location.origin).href;
+	OPENAPI_CLIENT = createClient<paths>({ baseUrl: apiUrl });
+}
+
+if (document.readyState === "loading") {
+	document.addEventListener("DOMContentLoaded", () => {
+		doPageStartup();
+	});
+} else {
+	doPageStartup();
 }

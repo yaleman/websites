@@ -41,7 +41,7 @@ use axum::middleware::from_fn;
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Form, Multipart, OriginalUri, Path, Query, State},
+    extract::{Form, Multipart, OriginalUri, Path, Query, RawForm, State},
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
     routing::get,
@@ -746,13 +746,14 @@ struct ContentScanForm {
     content_id: Option<Uuid>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct ContentScanApplyForm {
     domains: String,
     scan_limit: Option<usize>,
     filter: Option<String>,
     selected_issue_ids_json: Option<String>,
     remote_import_issue_ids_json: Option<String>,
+    remote_import_issue_id: Vec<String>,
     asset_selections_json: Option<String>,
 }
 
@@ -1471,6 +1472,56 @@ fn map_transaction_error<T>(
     result.map_err(|error| match error {
         sea_orm::TransactionError::Connection(error) => SiteError::from(error),
         sea_orm::TransactionError::Transaction(error) => error,
+    })
+}
+
+fn collect_form_values(raw: &[u8]) -> HashMap<String, Vec<String>> {
+    let mut values = HashMap::new();
+    for (key, value) in url::form_urlencoded::parse(raw) {
+        values
+            .entry(key.into_owned())
+            .or_insert_with(Vec::new)
+            .push(value.into_owned());
+    }
+    values
+}
+
+fn first_form_value(values: &HashMap<String, Vec<String>>, key: &str) -> Option<String> {
+    values.get(key).and_then(|items| items.first().cloned())
+}
+
+fn parse_optional_usize(
+    value: Option<String>,
+    field_name: &str,
+) -> Result<Option<usize>, SiteError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    trimmed
+        .parse::<usize>()
+        .map(Some)
+        .map_err(|error| SiteError::BadRequest(format!("invalid {field_name} value: {error}")))
+}
+
+fn parse_content_scan_apply_form(raw: &[u8]) -> Result<ContentScanApplyForm, SiteError> {
+    let values = collect_form_values(raw);
+    let domains = first_form_value(&values, "domains")
+        .ok_or_else(|| SiteError::BadRequest("missing domains field".to_string()))?;
+    Ok(ContentScanApplyForm {
+        domains,
+        scan_limit: parse_optional_usize(first_form_value(&values, "scan_limit"), "scan_limit")?,
+        filter: first_form_value(&values, "filter"),
+        selected_issue_ids_json: first_form_value(&values, "selected_issue_ids_json"),
+        remote_import_issue_ids_json: first_form_value(&values, "remote_import_issue_ids_json"),
+        remote_import_issue_id: values
+            .get("remote_import_issue_id")
+            .cloned()
+            .unwrap_or_default(),
+        asset_selections_json: first_form_value(&values, "asset_selections_json"),
     })
 }
 
@@ -2958,15 +3009,18 @@ async fn admin_site_content_scan_apply(
     State(state): State<AdminState>,
     session: Session,
     Path(site_id): Path<Uuid>,
-    Form(form): Form<ContentScanApplyForm>,
+    RawForm(raw_form): RawForm,
 ) -> Result<AdminContentScanTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Author).await?;
     let actor = current_user(&session).await?;
     let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let form = parse_content_scan_apply_form(&raw_form)?;
     let scan_limit = normalize_content_scan_limit(form.scan_limit);
-    let selected_issue_ids = deserialize_string_set(form.selected_issue_ids_json.as_deref())?;
-    let remote_import_issue_ids =
+    let mut selected_issue_ids = deserialize_string_set(form.selected_issue_ids_json.as_deref())?;
+    let mut remote_import_issue_ids =
         deserialize_string_set(form.remote_import_issue_ids_json.as_deref())?;
+    remote_import_issue_ids.extend(form.remote_import_issue_id);
+    selected_issue_ids.extend(remote_import_issue_ids.iter().cloned());
     let manual_asset_map = deserialize_manual_asset_map(form.asset_selections_json.as_deref())?;
     let scan_reports =
         load_content_scan_reports(state.db.as_ref(), site_id, None, &form.domains, scan_limit)
@@ -4157,8 +4211,9 @@ async fn build_admin_asset_rows<C: ConnectionTrait>(
     path = "/api/site/{site_id}/assets/library",
     params(
         ("site_id" = Uuid, Path, description = "The ID of the site to list assets for"),
-        ("q" = String, Query, description = "Optional search query to filter assets by original filename or storage basename"),
-        ("type" = String, Query, description = "Optional filter by image type (jpeg, png, gif, svg, webp)"),
+        ("q" = Option<String>, Query, description = "Optional search query to filter assets by original filename or storage basename"),
+        ("limit" = Option<u64>, Query, description = "Optional maximum number of assets to return"),
+        ("type" = Option<String>, Query, description = "Optional filter by image type (jpeg, png, gif, svg, webp)"),
     ),
     security(
         ("bearer_auth" = [])
