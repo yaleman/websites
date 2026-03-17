@@ -11,11 +11,13 @@ from dateutil.parser import isoparse
 
 from ..types import UNSET, Unset
 
-T = TypeVar("T", bound="ApiAssetSummary")
+T = TypeVar("T", bound="Asset")
 
 
 @_attrs_define
-class ApiAssetSummary:
+class Asset:
+    """An uploaded asset, such as an image or file."""
+
     byte_length: int
     created_at: datetime.datetime
     id: UUID
@@ -24,11 +26,8 @@ class ApiAssetSummary:
     site_id: UUID
     storage_basename: str
     uploader_sub: str
-    has_thumbnail: bool
-    original_url: str
     height: int | None | Unset = UNSET
     width: int | None | Unset = UNSET
-    thumbnail_url: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -48,10 +47,6 @@ class ApiAssetSummary:
 
         uploader_sub = self.uploader_sub
 
-        has_thumbnail = self.has_thumbnail
-
-        original_url = self.original_url
-
         height: int | None | Unset
         if isinstance(self.height, Unset):
             height = UNSET
@@ -63,12 +58,6 @@ class ApiAssetSummary:
             width = UNSET
         else:
             width = self.width
-
-        thumbnail_url: None | str | Unset
-        if isinstance(self.thumbnail_url, Unset):
-            thumbnail_url = UNSET
-        else:
-            thumbnail_url = self.thumbnail_url
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -82,16 +71,12 @@ class ApiAssetSummary:
                 "site_id": site_id,
                 "storage_basename": storage_basename,
                 "uploader_sub": uploader_sub,
-                "has_thumbnail": has_thumbnail,
-                "original_url": original_url,
             }
         )
         if height is not UNSET:
             field_dict["height"] = height
         if width is not UNSET:
             field_dict["width"] = width
-        if thumbnail_url is not UNSET:
-            field_dict["thumbnail_url"] = thumbnail_url
 
         return field_dict
 
@@ -114,10 +99,6 @@ class ApiAssetSummary:
 
         uploader_sub = d.pop("uploader_sub")
 
-        has_thumbnail = d.pop("has_thumbnail")
-
-        original_url = d.pop("original_url")
-
         def _parse_height(data: object) -> int | None | Unset:
             if data is None:
                 return data
@@ -136,16 +117,7 @@ class ApiAssetSummary:
 
         width = _parse_width(d.pop("width", UNSET))
 
-        def _parse_thumbnail_url(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        thumbnail_url = _parse_thumbnail_url(d.pop("thumbnail_url", UNSET))
-
-        api_asset_summary = cls(
+        asset = cls(
             byte_length=byte_length,
             created_at=created_at,
             id=id,
@@ -154,15 +126,12 @@ class ApiAssetSummary:
             site_id=site_id,
             storage_basename=storage_basename,
             uploader_sub=uploader_sub,
-            has_thumbnail=has_thumbnail,
-            original_url=original_url,
             height=height,
             width=width,
-            thumbnail_url=thumbnail_url,
         )
 
-        api_asset_summary.additional_properties = d
-        return api_asset_summary
+        asset.additional_properties = d
+        return asset
 
     @property
     def additional_keys(self) -> list[str]:

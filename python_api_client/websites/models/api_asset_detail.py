@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import datetime
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
+from dateutil.parser import isoparse
 
 from ..types import UNSET, Unset
 
@@ -19,27 +21,25 @@ T = TypeVar("T", bound="ApiAssetDetail")
 @_attrs_define
 class ApiAssetDetail:
     byte_length: int
-    created_at: str
-    has_thumbnail: bool
+    created_at: datetime.datetime
     id: UUID
     mime_type: str
     original_filename: str
-    original_url: str
     site_id: UUID
     storage_basename: str
     uploader_sub: str
+    has_thumbnail: bool
+    original_url: str
     variants: list[ApiAssetVariant]
     height: int | None | Unset = UNSET
-    thumbnail_url: None | str | Unset = UNSET
     width: int | None | Unset = UNSET
+    thumbnail_url: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         byte_length = self.byte_length
 
-        created_at = self.created_at
-
-        has_thumbnail = self.has_thumbnail
+        created_at = self.created_at.isoformat()
 
         id = str(self.id)
 
@@ -47,13 +47,15 @@ class ApiAssetDetail:
 
         original_filename = self.original_filename
 
-        original_url = self.original_url
-
         site_id = str(self.site_id)
 
         storage_basename = self.storage_basename
 
         uploader_sub = self.uploader_sub
+
+        has_thumbnail = self.has_thumbnail
+
+        original_url = self.original_url
 
         variants = []
         for variants_item_data in self.variants:
@@ -66,17 +68,17 @@ class ApiAssetDetail:
         else:
             height = self.height
 
-        thumbnail_url: None | str | Unset
-        if isinstance(self.thumbnail_url, Unset):
-            thumbnail_url = UNSET
-        else:
-            thumbnail_url = self.thumbnail_url
-
         width: int | None | Unset
         if isinstance(self.width, Unset):
             width = UNSET
         else:
             width = self.width
+
+        thumbnail_url: None | str | Unset
+        if isinstance(self.thumbnail_url, Unset):
+            thumbnail_url = UNSET
+        else:
+            thumbnail_url = self.thumbnail_url
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -84,23 +86,23 @@ class ApiAssetDetail:
             {
                 "byte_length": byte_length,
                 "created_at": created_at,
-                "has_thumbnail": has_thumbnail,
                 "id": id,
                 "mime_type": mime_type,
                 "original_filename": original_filename,
-                "original_url": original_url,
                 "site_id": site_id,
                 "storage_basename": storage_basename,
                 "uploader_sub": uploader_sub,
+                "has_thumbnail": has_thumbnail,
+                "original_url": original_url,
                 "variants": variants,
             }
         )
         if height is not UNSET:
             field_dict["height"] = height
-        if thumbnail_url is not UNSET:
-            field_dict["thumbnail_url"] = thumbnail_url
         if width is not UNSET:
             field_dict["width"] = width
+        if thumbnail_url is not UNSET:
+            field_dict["thumbnail_url"] = thumbnail_url
 
         return field_dict
 
@@ -111,9 +113,7 @@ class ApiAssetDetail:
         d = dict(src_dict)
         byte_length = d.pop("byte_length")
 
-        created_at = d.pop("created_at")
-
-        has_thumbnail = d.pop("has_thumbnail")
+        created_at = isoparse(d.pop("created_at"))
 
         id = UUID(d.pop("id"))
 
@@ -121,13 +121,15 @@ class ApiAssetDetail:
 
         original_filename = d.pop("original_filename")
 
-        original_url = d.pop("original_url")
-
         site_id = UUID(d.pop("site_id"))
 
         storage_basename = d.pop("storage_basename")
 
         uploader_sub = d.pop("uploader_sub")
+
+        has_thumbnail = d.pop("has_thumbnail")
+
+        original_url = d.pop("original_url")
 
         variants = []
         _variants = d.pop("variants")
@@ -145,15 +147,6 @@ class ApiAssetDetail:
 
         height = _parse_height(d.pop("height", UNSET))
 
-        def _parse_thumbnail_url(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        thumbnail_url = _parse_thumbnail_url(d.pop("thumbnail_url", UNSET))
-
         def _parse_width(data: object) -> int | None | Unset:
             if data is None:
                 return data
@@ -163,21 +156,30 @@ class ApiAssetDetail:
 
         width = _parse_width(d.pop("width", UNSET))
 
+        def _parse_thumbnail_url(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        thumbnail_url = _parse_thumbnail_url(d.pop("thumbnail_url", UNSET))
+
         api_asset_detail = cls(
             byte_length=byte_length,
             created_at=created_at,
-            has_thumbnail=has_thumbnail,
             id=id,
             mime_type=mime_type,
             original_filename=original_filename,
-            original_url=original_url,
             site_id=site_id,
             storage_basename=storage_basename,
             uploader_sub=uploader_sub,
+            has_thumbnail=has_thumbnail,
+            original_url=original_url,
             variants=variants,
             height=height,
-            thumbnail_url=thumbnail_url,
             width=width,
+            thumbnail_url=thumbnail_url,
         )
 
         api_asset_detail.additional_properties = d

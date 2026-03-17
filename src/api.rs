@@ -15,7 +15,8 @@ use axum::routing::get;
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -205,43 +206,26 @@ pub(crate) struct ApiUpdateContentRequest {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct ApiContentListResponse {
-    items: Vec<ApiContentListItem>,
+    items: Vec<ContentItemWithTags>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
-pub(crate) struct ApiContentResponse {
-    content: ApiContentDetail,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub(crate) struct ApiContentListItem {
-    id: Uuid,
-    site_id: Uuid,
-    page_type: String,
-    title: String,
-    slug: String,
-    draft: bool,
-    creator_sub: String,
-    created_at: String,
-    last_updated: Option<String>,
-    published_at: Option<String>,
+pub(crate) struct ContentItemWithTags {
+    #[serde(flatten)]
+    entity: entities::content_item::Model,
     tags: Vec<String>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
-pub(crate) struct ApiContentDetail {
-    id: Uuid,
-    site_id: Uuid,
-    page_type: String,
-    title: String,
-    slug: String,
-    page_content: String,
-    draft: bool,
-    creator_sub: String,
-    created_at: String,
-    last_updated: Option<String>,
-    published_at: Option<String>,
-    tags: Vec<String>,
+impl ContentItemWithTags {
+    async fn from_content_item(
+        entity: entities::content_item::Model,
+        db: &DatabaseConnection,
+    ) -> Result<Self, ApiError> {
+        Ok(Self {
+            tags: content_tags_for(db, entity.id).await?,
+            entity,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -279,15 +263,8 @@ pub(crate) struct ApiAssetResponse {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct ApiAssetSummary {
-    id: Uuid,
-    site_id: Uuid,
-    original_filename: String,
-    storage_basename: String,
-    mime_type: String,
-    byte_length: i32,
-    width: Option<i32>,
-    height: Option<i32>,
-    created_at: String,
+    #[serde(flatten)]
+    entity: entities::asset::Model,
     original_url: String,
     thumbnail_url: Option<String>,
     has_thumbnail: bool,
@@ -295,16 +272,8 @@ pub(crate) struct ApiAssetSummary {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct ApiAssetDetail {
-    id: Uuid,
-    site_id: Uuid,
-    uploader_sub: String,
-    original_filename: String,
-    storage_basename: String,
-    mime_type: String,
-    byte_length: i32,
-    width: Option<i32>,
-    height: Option<i32>,
-    created_at: String,
+    #[serde(flatten)]
+    entity: entities::asset::Model,
     original_url: String,
     thumbnail_url: Option<String>,
     has_thumbnail: bool,
@@ -393,39 +362,10 @@ async fn content_tags_for(
 async fn to_content_list_item(
     db: &sea_orm::DatabaseConnection,
     content: entities::content_item::Model,
-) -> Result<ApiContentListItem, ApiError> {
-    Ok(ApiContentListItem {
-        id: content.id,
-        site_id: content.site_id,
-        page_type: content.page_type.to_string(),
-        title: content.title,
-        slug: content.slug,
-        draft: content.draft,
-        creator_sub: content.creator_sub,
-        created_at: content.created_at.to_rfc3339(),
-        last_updated: content.last_updated.map(|value| value.to_rfc3339()),
-        published_at: content.published_at.map(|value| value.to_rfc3339()),
+) -> Result<ContentItemWithTags, ApiError> {
+    Ok(ContentItemWithTags {
         tags: content_tags_for(db, content.id).await?,
-    })
-}
-
-async fn to_content_detail(
-    db: &sea_orm::DatabaseConnection,
-    content: entities::content_item::Model,
-) -> Result<ApiContentDetail, ApiError> {
-    Ok(ApiContentDetail {
-        id: content.id,
-        site_id: content.site_id,
-        page_type: content.page_type.to_string(),
-        title: content.title,
-        slug: content.slug,
-        page_content: content.page_content,
-        draft: content.draft,
-        creator_sub: content.creator_sub,
-        created_at: content.created_at.to_rfc3339(),
-        last_updated: content.last_updated.map(|value| value.to_rfc3339()),
-        published_at: content.published_at.map(|value| value.to_rfc3339()),
-        tags: content_tags_for(db, content.id).await?,
+        entity: content,
     })
 }
 
@@ -460,15 +400,7 @@ async fn to_asset_summary(
 ) -> Result<ApiAssetSummary, ApiError> {
     let thumbnail_url = thumbnails.get(&asset.id).cloned();
     Ok(ApiAssetSummary {
-        id: asset.id,
-        site_id: asset.site_id,
-        original_filename: asset.original_filename,
-        storage_basename: asset.storage_basename.clone(),
-        mime_type: asset.mime_type,
-        byte_length: asset.byte_length,
-        width: asset.width,
-        height: asset.height,
-        created_at: asset.created_at.to_rfc3339(),
+        entity: asset.clone(),
         original_url: format!("/media/images/{}", asset.storage_basename),
         has_thumbnail: thumbnail_url.is_some(),
         thumbnail_url,
@@ -488,16 +420,7 @@ async fn to_asset_detail(
         .map(|variant| format!("/media/images/{}", variant.filename));
     let has_thumbnail = thumbnail_url.is_some();
     Ok(ApiAssetDetail {
-        id: asset.id,
-        site_id: asset.site_id,
-        uploader_sub: asset.uploader_sub,
-        original_filename: asset.original_filename,
-        storage_basename: asset.storage_basename.clone(),
-        mime_type: asset.mime_type,
-        byte_length: asset.byte_length,
-        width: asset.width,
-        height: asset.height,
-        created_at: asset.created_at.to_rfc3339(),
+        entity: asset.clone(),
         original_url: format!("/media/images/{}", asset.storage_basename),
         thumbnail_url,
         has_thumbnail,
@@ -668,7 +591,7 @@ pub(crate) async fn api_site_content_search(
         ("bearer_auth" = [])
     ),
     responses(
-        (status = 200, description = "The created content item", body = ApiContentResponse),
+        (status = 200, description = "The created content item", body = ContentItemWithTags),
         (status = 400, description = "Invalid request body", body = ApiErrorResponse),
         (status = 401, description = "Unauthorized access", body = ApiErrorResponse),
         (status = 403, description = "Forbidden - insufficient permissions", body = ApiErrorResponse),
@@ -681,7 +604,7 @@ pub(crate) async fn api_site_content_create(
     session: Session,
     Path(site_id): Path<Uuid>,
     Json(request): Json<ApiCreateContentRequest>,
-) -> Result<Json<ApiContentResponse>, ApiError> {
+) -> Result<Json<ContentItemWithTags>, ApiError> {
     let principal =
         authenticate_and_require(&state, &headers, &session, site_id, SiteRole::Author).await?;
     let page_type = PageType::from_str(&request.page_type).map_err(ApiError::BadRequest)?;
@@ -739,9 +662,9 @@ pub(crate) async fn api_site_content_create(
             ApiError::NotFound(format!("content not found after create: {}", content.id))
         })?;
     principal.record_successful_use(state.db.as_ref()).await?;
-    Ok(Json(ApiContentResponse {
-        content: to_content_detail(state.db.as_ref(), content).await?,
-    }))
+    Ok(Json(
+        ContentItemWithTags::from_content_item(content, state.db.as_ref()).await?,
+    ))
 }
 
 #[utoipa::path(
@@ -755,7 +678,7 @@ pub(crate) async fn api_site_content_create(
         ("bearer_auth" = [])
     ),
     responses(
-        (status = 200, description = "The requested content item", body = ApiContentResponse),
+        (status = 200, description = "The requested content item", body = ContentItemWithTags),
         (status = 401, description = "Unauthorized access", body = ApiErrorResponse),
         (status = 403, description = "Forbidden - insufficient permissions", body = ApiErrorResponse),
         (status = 404, description = "Content not found", body = ApiErrorResponse),
@@ -767,16 +690,16 @@ pub(crate) async fn api_site_content_get(
     headers: HeaderMap,
     session: Session,
     Path((site_id, content_id)): Path<(Uuid, Uuid)>,
-) -> Result<Json<ApiContentResponse>, ApiError> {
-    let principal =
+) -> Result<Json<ContentItemWithTags>, ApiError> {
+    let principal: token_auth::ApiPrincipal =
         authenticate_and_require(&state, &headers, &session, site_id, SiteRole::Viewer).await?;
     let content = get_content_for_site(state.db.as_ref(), site_id, content_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("content not found: {content_id}")))?;
     principal.record_successful_use(state.db.as_ref()).await?;
-    Ok(Json(ApiContentResponse {
-        content: to_content_detail(state.db.as_ref(), content).await?,
-    }))
+    Ok(Json(
+        ContentItemWithTags::from_content_item(content, state.db.as_ref()).await?,
+    ))
 }
 
 #[utoipa::path(
@@ -791,7 +714,7 @@ pub(crate) async fn api_site_content_get(
         ("bearer_auth" = [])
     ),
     responses(
-        (status = 200, description = "The updated content item", body = ApiContentResponse),
+        (status = 200, description = "The updated content item", body = ContentItemWithTags),
         (status = 400, description = "Invalid request body", body = ApiErrorResponse),
         (status = 401, description = "Unauthorized access", body = ApiErrorResponse),
         (status = 403, description = "Forbidden - insufficient permissions", body = ApiErrorResponse),
@@ -805,7 +728,7 @@ pub(crate) async fn api_site_content_update(
     session: Session,
     Path((site_id, content_id)): Path<(Uuid, Uuid)>,
     Json(request): Json<ApiUpdateContentRequest>,
-) -> Result<Json<ApiContentResponse>, ApiError> {
+) -> Result<Json<ContentItemWithTags>, ApiError> {
     let principal =
         authenticate_and_require(&state, &headers, &session, site_id, SiteRole::Author).await?;
     if get_content_for_site(state.db.as_ref(), site_id, content_id)
@@ -893,9 +816,9 @@ pub(crate) async fn api_site_content_update(
             ApiError::NotFound(format!("content not found after update: {content_id}"))
         })?;
     principal.record_successful_use(state.db.as_ref()).await?;
-    Ok(Json(ApiContentResponse {
-        content: to_content_detail(state.db.as_ref(), content).await?,
-    }))
+    Ok(Json(
+        ContentItemWithTags::from_content_item(content, state.db.as_ref()).await?,
+    ))
 }
 
 #[utoipa::path(
@@ -1462,9 +1385,7 @@ mod tests {
             .expect("failed to call create route");
         assert_eq!(create_response.status(), StatusCode::OK);
         let create_body = json_body(create_response).await;
-        let content_id = create_body["content"]["id"]
-            .as_str()
-            .expect("missing content id");
+        let content_id = create_body["id"].as_str().expect("missing content id");
 
         let get_response = router
             .clone()
@@ -1479,8 +1400,8 @@ mod tests {
             .expect("failed to call get route");
         assert_eq!(get_response.status(), StatusCode::OK);
         let get_body = json_body(get_response).await;
-        assert_eq!(get_body["content"]["title"], "API Draft");
-        assert_eq!(get_body["content"]["tags"][0], "alpha");
+        assert_eq!(get_body["title"], "API Draft");
+        assert_eq!(get_body["tags"][0], "alpha");
 
         let update_response = router
             .clone()
@@ -1504,9 +1425,9 @@ mod tests {
             .expect("failed to call update route");
         assert_eq!(update_response.status(), StatusCode::OK);
         let update_body = json_body(update_response).await;
-        assert_eq!(update_body["content"]["title"], "API Published");
-        assert_eq!(update_body["content"]["draft"], false);
-        assert_eq!(update_body["content"]["tags"][0], "gamma");
+        assert_eq!(update_body["title"], "API Published");
+        assert_eq!(update_body["draft"], false);
+        assert_eq!(update_body["tags"][0], "gamma");
 
         let search_response = router
             .clone()

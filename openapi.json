@@ -578,7 +578,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiContentResponse"
+                  "$ref": "#/components/schemas/ContentItemWithTags"
                 }
               }
             }
@@ -764,7 +764,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiContentResponse"
+                  "$ref": "#/components/schemas/ContentItemWithTags"
                 }
               }
             }
@@ -933,7 +933,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiContentResponse"
+                  "$ref": "#/components/schemas/ContentItemWithTags"
                 }
               }
             }
@@ -1000,81 +1000,39 @@
   "components": {
     "schemas": {
       "ApiAssetDetail": {
-        "type": "object",
-        "required": [
-          "id",
-          "site_id",
-          "uploader_sub",
-          "original_filename",
-          "storage_basename",
-          "mime_type",
-          "byte_length",
-          "created_at",
-          "original_url",
-          "has_thumbnail",
-          "variants"
-        ],
-        "properties": {
-          "byte_length": {
-            "type": "integer",
-            "format": "int32"
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/crate.entities.asset.Model"
           },
-          "created_at": {
-            "type": "string"
-          },
-          "has_thumbnail": {
-            "type": "boolean"
-          },
-          "height": {
-            "type": [
-              "integer",
-              "null"
+          {
+            "type": "object",
+            "required": [
+              "original_url",
+              "has_thumbnail",
+              "variants"
             ],
-            "format": "int32"
-          },
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "mime_type": {
-            "type": "string"
-          },
-          "original_filename": {
-            "type": "string"
-          },
-          "original_url": {
-            "type": "string"
-          },
-          "site_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "storage_basename": {
-            "type": "string"
-          },
-          "thumbnail_url": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "uploader_sub": {
-            "type": "string"
-          },
-          "variants": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ApiAssetVariant"
+            "properties": {
+              "has_thumbnail": {
+                "type": "boolean"
+              },
+              "original_url": {
+                "type": "string"
+              },
+              "thumbnail_url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "variants": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ApiAssetVariant"
+                }
+              }
             }
-          },
-          "width": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32"
           }
-        }
+        ]
       },
       "ApiAssetListResponse": {
         "type": "object",
@@ -1102,70 +1060,32 @@
         }
       },
       "ApiAssetSummary": {
-        "type": "object",
-        "required": [
-          "id",
-          "site_id",
-          "original_filename",
-          "storage_basename",
-          "mime_type",
-          "byte_length",
-          "created_at",
-          "original_url",
-          "has_thumbnail"
-        ],
-        "properties": {
-          "byte_length": {
-            "type": "integer",
-            "format": "int32"
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/crate.entities.asset.Model"
           },
-          "created_at": {
-            "type": "string"
-          },
-          "has_thumbnail": {
-            "type": "boolean"
-          },
-          "height": {
-            "type": [
-              "integer",
-              "null"
+          {
+            "type": "object",
+            "required": [
+              "original_url",
+              "has_thumbnail"
             ],
-            "format": "int32"
-          },
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "mime_type": {
-            "type": "string"
-          },
-          "original_filename": {
-            "type": "string"
-          },
-          "original_url": {
-            "type": "string"
-          },
-          "site_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "storage_basename": {
-            "type": "string"
-          },
-          "thumbnail_url": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "width": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32"
+            "properties": {
+              "has_thumbnail": {
+                "type": "boolean"
+              },
+              "original_url": {
+                "type": "string"
+              },
+              "thumbnail_url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
           }
-        }
+        ]
       },
       "ApiAssetVariant": {
         "type": "object",
@@ -1209,130 +1129,6 @@
           }
         }
       },
-      "ApiContentDetail": {
-        "type": "object",
-        "required": [
-          "id",
-          "site_id",
-          "page_type",
-          "title",
-          "slug",
-          "page_content",
-          "draft",
-          "creator_sub",
-          "created_at",
-          "tags"
-        ],
-        "properties": {
-          "created_at": {
-            "type": "string"
-          },
-          "creator_sub": {
-            "type": "string"
-          },
-          "draft": {
-            "type": "boolean"
-          },
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "last_updated": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "page_content": {
-            "type": "string"
-          },
-          "page_type": {
-            "type": "string"
-          },
-          "published_at": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "site_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "slug": {
-            "type": "string"
-          },
-          "tags": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "title": {
-            "type": "string"
-          }
-        }
-      },
-      "ApiContentListItem": {
-        "type": "object",
-        "required": [
-          "id",
-          "site_id",
-          "page_type",
-          "title",
-          "slug",
-          "draft",
-          "creator_sub",
-          "created_at",
-          "tags"
-        ],
-        "properties": {
-          "created_at": {
-            "type": "string"
-          },
-          "creator_sub": {
-            "type": "string"
-          },
-          "draft": {
-            "type": "boolean"
-          },
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "last_updated": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "page_type": {
-            "type": "string"
-          },
-          "published_at": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "site_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "slug": {
-            "type": "string"
-          },
-          "tags": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "title": {
-            "type": "string"
-          }
-        }
-      },
       "ApiContentListResponse": {
         "type": "object",
         "required": [
@@ -1342,19 +1138,8 @@
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ApiContentListItem"
+              "$ref": "#/components/schemas/ContentItemWithTags"
             }
-          }
-        }
-      },
-      "ApiContentResponse": {
-        "type": "object",
-        "required": [
-          "content"
-        ],
-        "properties": {
-          "content": {
-            "$ref": "#/components/schemas/ApiContentDetail"
           }
         }
       },
@@ -1539,6 +1324,155 @@
           "file": {
             "type": "string",
             "format": "binary"
+          }
+        }
+      },
+      "ContentItemWithTags": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/crate.entities.content_item.Model"
+          },
+          {
+            "type": "object",
+            "required": [
+              "tags"
+            ],
+            "properties": {
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "PageType": {
+        "type": "string",
+        "enum": [
+          "post",
+          "page"
+        ]
+      },
+      "crate.entities.asset.Model": {
+        "type": "object",
+        "title": "Asset",
+        "description": "An uploaded asset, such as an image or file.",
+        "required": [
+          "id",
+          "site_id",
+          "uploader_sub",
+          "original_filename",
+          "storage_basename",
+          "mime_type",
+          "byte_length",
+          "created_at"
+        ],
+        "properties": {
+          "byte_length": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "original_filename": {
+            "type": "string"
+          },
+          "site_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "storage_basename": {
+            "type": "string"
+          },
+          "uploader_sub": {
+            "type": "string"
+          },
+          "width": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "crate.entities.content_item.Model": {
+        "type": "object",
+        "title": "ContentItem",
+        "description": "A content item, such as a page or blog post.",
+        "required": [
+          "id",
+          "site_id",
+          "page_type",
+          "title",
+          "slug",
+          "page_content",
+          "draft",
+          "creator_sub",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "creator_sub": {
+            "type": "string"
+          },
+          "draft": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_updated": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "page_content": {
+            "type": "string"
+          },
+          "page_type": {
+            "$ref": "#/components/schemas/PageType"
+          },
+          "published_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "site_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
           }
         }
       }

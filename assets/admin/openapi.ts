@@ -104,26 +104,11 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        ApiAssetDetail: {
-            /** Format: int32 */
-            byte_length: number;
-            created_at: string;
+        ApiAssetDetail: components["schemas"]["crate.entities.asset.Model"] & {
             has_thumbnail: boolean;
-            /** Format: int32 */
-            height?: number | null;
-            /** Format: uuid */
-            id: string;
-            mime_type: string;
-            original_filename: string;
             original_url: string;
-            /** Format: uuid */
-            site_id: string;
-            storage_basename: string;
             thumbnail_url?: string | null;
-            uploader_sub: string;
             variants: components["schemas"]["ApiAssetVariant"][];
-            /** Format: int32 */
-            width?: number | null;
         };
         ApiAssetListResponse: {
             assets: components["schemas"]["ApiAssetSummary"][];
@@ -131,24 +116,10 @@ export interface components {
         ApiAssetResponse: {
             asset: components["schemas"]["ApiAssetDetail"];
         };
-        ApiAssetSummary: {
-            /** Format: int32 */
-            byte_length: number;
-            created_at: string;
+        ApiAssetSummary: components["schemas"]["crate.entities.asset.Model"] & {
             has_thumbnail: boolean;
-            /** Format: int32 */
-            height?: number | null;
-            /** Format: uuid */
-            id: string;
-            mime_type: string;
-            original_filename: string;
             original_url: string;
-            /** Format: uuid */
-            site_id: string;
-            storage_basename: string;
             thumbnail_url?: string | null;
-            /** Format: int32 */
-            width?: number | null;
         };
         ApiAssetVariant: {
             /** Format: int32 */
@@ -162,42 +133,8 @@ export interface components {
             /** Format: int32 */
             width?: number | null;
         };
-        ApiContentDetail: {
-            created_at: string;
-            creator_sub: string;
-            draft: boolean;
-            /** Format: uuid */
-            id: string;
-            last_updated?: string | null;
-            page_content: string;
-            page_type: string;
-            published_at?: string | null;
-            /** Format: uuid */
-            site_id: string;
-            slug: string;
-            tags: string[];
-            title: string;
-        };
-        ApiContentListItem: {
-            created_at: string;
-            creator_sub: string;
-            draft: boolean;
-            /** Format: uuid */
-            id: string;
-            last_updated?: string | null;
-            page_type: string;
-            published_at?: string | null;
-            /** Format: uuid */
-            site_id: string;
-            slug: string;
-            tags: string[];
-            title: string;
-        };
         ApiContentListResponse: {
-            items: components["schemas"]["ApiContentListItem"][];
-        };
-        ApiContentResponse: {
-            content: components["schemas"]["ApiContentDetail"];
+            items: components["schemas"]["ContentItemWithTags"][];
         };
         ApiCreateContentRequest: {
             draft: boolean;
@@ -242,6 +179,55 @@ export interface components {
             /** Format: binary */
             file: string;
         };
+        ContentItemWithTags: components["schemas"]["crate.entities.content_item.Model"] & {
+            tags: string[];
+        };
+        /**
+         * Asset
+         * @description An uploaded asset, such as an image or file.
+         */
+        "crate.entities.asset.Model": {
+            /** Format: int32 */
+            byte_length: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: int32 */
+            height?: number | null;
+            /** Format: uuid */
+            id: string;
+            mime_type: string;
+            original_filename: string;
+            /** Format: uuid */
+            site_id: string;
+            storage_basename: string;
+            uploader_sub: string;
+            /** Format: int32 */
+            width?: number | null;
+        };
+        /**
+         * ContentItem
+         * @description A content item, such as a page or blog post.
+         */
+        "crate.entities.content_item.Model": {
+            /** Format: date-time */
+            created_at: string;
+            creator_sub: string;
+            draft: boolean;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            last_updated?: string | null;
+            page_content: string;
+            page_type: components["schemas"]["PageType"];
+            /** Format: date-time */
+            published_at?: string | null;
+            /** Format: uuid */
+            site_id: string;
+            slug: string;
+            title: string;
+        };
+        /** @enum {string} */
+        PageType: PageType;
     };
     responses: never;
     parameters: never;
@@ -644,7 +630,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiContentResponse"];
+                    "application/json": components["schemas"]["ContentItemWithTags"];
                 };
             };
             /** @description Invalid request body */
@@ -705,7 +691,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiContentResponse"];
+                    "application/json": components["schemas"]["ContentItemWithTags"];
                 };
             };
             /** @description Unauthorized access */
@@ -829,7 +815,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiContentResponse"];
+                    "application/json": components["schemas"]["ContentItemWithTags"];
                 };
             };
             /** @description Invalid request body */
@@ -942,6 +928,10 @@ export interface operations {
             };
         };
     };
+}
+export enum PageType {
+    post = "post",
+    page = "page"
 }
 export enum ApiPaths {
     api_site_assets_list = "/api/site/{site_id}/assets",

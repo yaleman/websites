@@ -1,34 +1,38 @@
 from __future__ import annotations
 
+import datetime
 from collections.abc import Mapping
 from typing import Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
+from dateutil.parser import isoparse
 
+from ..models.page_type import PageType
 from ..types import UNSET, Unset
 
-T = TypeVar("T", bound="ApiContentListItem")
+T = TypeVar("T", bound="ContentItemWithTags")
 
 
 @_attrs_define
-class ApiContentListItem:
-    created_at: str
+class ContentItemWithTags:
+    created_at: datetime.datetime
     creator_sub: str
     draft: bool
     id: UUID
-    page_type: str
+    page_content: str
+    page_type: PageType
     site_id: UUID
     slug: str
-    tags: list[str]
     title: str
-    last_updated: None | str | Unset = UNSET
-    published_at: None | str | Unset = UNSET
+    tags: list[str]
+    last_updated: datetime.datetime | None | Unset = UNSET
+    published_at: datetime.datetime | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        created_at = self.created_at
+        created_at = self.created_at.isoformat()
 
         creator_sub = self.creator_sub
 
@@ -36,25 +40,31 @@ class ApiContentListItem:
 
         id = str(self.id)
 
-        page_type = self.page_type
+        page_content = self.page_content
+
+        page_type = self.page_type.value
 
         site_id = str(self.site_id)
 
         slug = self.slug
 
-        tags = self.tags
-
         title = self.title
+
+        tags = self.tags
 
         last_updated: None | str | Unset
         if isinstance(self.last_updated, Unset):
             last_updated = UNSET
+        elif isinstance(self.last_updated, datetime.datetime):
+            last_updated = self.last_updated.isoformat()
         else:
             last_updated = self.last_updated
 
         published_at: None | str | Unset
         if isinstance(self.published_at, Unset):
             published_at = UNSET
+        elif isinstance(self.published_at, datetime.datetime):
+            published_at = self.published_at.isoformat()
         else:
             published_at = self.published_at
 
@@ -66,11 +76,12 @@ class ApiContentListItem:
                 "creator_sub": creator_sub,
                 "draft": draft,
                 "id": id,
+                "page_content": page_content,
                 "page_type": page_type,
                 "site_id": site_id,
                 "slug": slug,
-                "tags": tags,
                 "title": title,
+                "tags": tags,
             }
         )
         if last_updated is not UNSET:
@@ -83,7 +94,7 @@ class ApiContentListItem:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        created_at = d.pop("created_at")
+        created_at = isoparse(d.pop("created_at"))
 
         creator_sub = d.pop("creator_sub")
 
@@ -91,50 +102,69 @@ class ApiContentListItem:
 
         id = UUID(d.pop("id"))
 
-        page_type = d.pop("page_type")
+        page_content = d.pop("page_content")
+
+        page_type = PageType(d.pop("page_type"))
 
         site_id = UUID(d.pop("site_id"))
 
         slug = d.pop("slug")
 
-        tags = cast(list[str], d.pop("tags"))
-
         title = d.pop("title")
 
-        def _parse_last_updated(data: object) -> None | str | Unset:
+        tags = cast(list[str], d.pop("tags"))
+
+        def _parse_last_updated(data: object) -> datetime.datetime | None | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
                 return data
-            return cast(None | str | Unset, data)
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                last_updated_type_0 = isoparse(data)
+
+                return last_updated_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(datetime.datetime | None | Unset, data)
 
         last_updated = _parse_last_updated(d.pop("last_updated", UNSET))
 
-        def _parse_published_at(data: object) -> None | str | Unset:
+        def _parse_published_at(data: object) -> datetime.datetime | None | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
                 return data
-            return cast(None | str | Unset, data)
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                published_at_type_0 = isoparse(data)
+
+                return published_at_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(datetime.datetime | None | Unset, data)
 
         published_at = _parse_published_at(d.pop("published_at", UNSET))
 
-        api_content_list_item = cls(
+        content_item_with_tags = cls(
             created_at=created_at,
             creator_sub=creator_sub,
             draft=draft,
             id=id,
+            page_content=page_content,
             page_type=page_type,
             site_id=site_id,
             slug=slug,
-            tags=tags,
             title=title,
+            tags=tags,
             last_updated=last_updated,
             published_at=published_at,
         )
 
-        api_content_list_item.additional_properties = d
-        return api_content_list_item
+        content_item_with_tags.additional_properties = d
+        return content_item_with_tags
 
     @property
     def additional_keys(self) -> list[str]:
