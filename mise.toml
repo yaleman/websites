@@ -80,11 +80,11 @@ description = "run the Docker container for the application"
 run = "docker run --rm -it -p 9000:9000 --env-file .env --name websites_container websites:latest"
 
 [tasks.python_ruff]
-depends = ["python_client_install"]
+depends = ["python_gen"]
 run = "cd python_api_client && uv run ruff check"
 
 [tasks.python_ty]
-depends = ["python_client_install"]
+depends = ["python_gen"]
 run = "cd python_api_client && uv run ty check"
 
 [tasks.python_checks]
