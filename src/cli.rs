@@ -112,6 +112,7 @@ impl OidcConfigArgs {
 pub struct Cli {
     #[arg(
         long = "database-url",
+        env = "WEBSITES_DB_PATH",
         default_value = "./database.sqlite",
         help = "SQLite database path for the management database"
     )]
@@ -1366,6 +1367,12 @@ async fn write_site_export_output(output: Option<&Path>, json: &str) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[tokio::test]
     async fn write_site_export_output_writes_requested_file() {
@@ -1407,6 +1414,30 @@ mod tests {
                 assert_eq!(output, PathBuf::from("openapi.json"));
             }
             other => panic!("unexpected parsed command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn database_path_can_be_loaded_from_env() {
+        let _guard = env_lock().lock().expect("failed to lock env");
+        let original = std::env::var_os("WEBSITES_DB_PATH");
+
+        unsafe {
+            std::env::set_var("WEBSITES_DB_PATH", "/tmp/websites-from-env.sqlite");
+        }
+
+        let cli = Cli::try_parse_from(["websites"])
+            .expect("failed to parse CLI arguments with env override");
+
+        assert_eq!(cli.db_path, PathBuf::from("/tmp/websites-from-env.sqlite"));
+
+        match original {
+            Some(value) => unsafe {
+                std::env::set_var("WEBSITES_DB_PATH", value);
+            },
+            None => unsafe {
+                std::env::remove_var("WEBSITES_DB_PATH");
+            },
         }
     }
 
