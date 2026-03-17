@@ -1,6 +1,7 @@
 use sea_orm::prelude::StringLen;
 use sea_orm::{DeriveActiveEnum, EnumIter};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 pub mod asset;
 pub mod asset_variant;
 pub mod audit_event;
@@ -17,7 +18,9 @@ pub mod tag;
 pub mod user;
 pub mod user_api_token;
 
-#[derive(EnumIter, DeriveActiveEnum, Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(
+    EnumIter, DeriveActiveEnum, Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize, ToSchema,
+)]
 #[sea_orm(
     rs_type = "String",
     db_type = "String(StringLen::None)",

@@ -127,6 +127,15 @@ jobs:
       - name: Build admin assets
         run: pnpm run build:admin
 
+      - name: Install Python client test package
+        run: python -m pip install --upgrade pip uv
+
+      - name: Build Rust binaries for Python client tests
+        run: cargo build --quiet --bin websites --bin session_seed
+
+      - name: Run Python generated-client tests
+        run: cd ./python_api_client && uv run pytest
+
       - name: Verify generated artifacts are committed
         run: git diff --exit-code -- openapi.json assets/admin/openapi.ts admin-ui-assets
 

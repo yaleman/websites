@@ -4,6 +4,38 @@
  */
 
 export interface paths {
+    "/api/site/{site_id}/assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_site_assets_list"];
+        put?: never;
+        post: operations["api_site_asset_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/site/{site_id}/assets/{asset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_site_asset_get"];
+        put?: never;
+        post?: never;
+        delete: operations["api_site_asset_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/site/{site_id}/assets/library": {
         parameters: {
             query?: never;
@@ -20,10 +52,112 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/site/{site_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_site_content_list"];
+        put?: never;
+        post: operations["api_site_content_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/site/{site_id}/content/{content_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_site_content_get"];
+        put?: never;
+        post?: never;
+        delete: operations["api_site_content_delete"];
+        options?: never;
+        head?: never;
+        patch: operations["api_site_content_update"];
+        trace?: never;
+    };
+    "/api/site/{site_id}/content/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_site_content_search"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        ApiAssetDetail: components["schemas"]["crate.entities.asset.Model"] & {
+            has_thumbnail: boolean;
+            original_url: string;
+            thumbnail_url?: string | null;
+            variants: components["schemas"]["ApiAssetVariant"][];
+        };
+        ApiAssetListResponse: {
+            assets: components["schemas"]["ApiAssetSummary"][];
+        };
+        ApiAssetResponse: {
+            asset: components["schemas"]["ApiAssetDetail"];
+        };
+        ApiAssetSummary: components["schemas"]["crate.entities.asset.Model"] & {
+            has_thumbnail: boolean;
+            original_url: string;
+            thumbnail_url?: string | null;
+        };
+        ApiAssetVariant: {
+            /** Format: int32 */
+            byte_length: number;
+            filename: string;
+            /** Format: int32 */
+            height?: number | null;
+            mime_type: string;
+            url: string;
+            variant_kind: string;
+            /** Format: int32 */
+            width?: number | null;
+        };
+        ApiContentListResponse: {
+            items: components["schemas"]["ContentItemWithTags"][];
+        };
+        ApiCreateContentRequest: {
+            draft: boolean;
+            page_content: string;
+            page_type: string;
+            published_at?: string | null;
+            slug: string;
+            tags?: string[];
+            title: string;
+        };
+        ApiErrorResponse: {
+            details?: string | null;
+            message: string;
+        };
+        ApiUpdateContentRequest: {
+            draft?: boolean | null;
+            page_content?: string | null;
+            page_type?: string | null;
+            published_at?: string | null;
+            slug?: string | null;
+            tags?: string[] | null;
+            title?: string | null;
+        };
         AssetLibraryItem: {
             created_at: string;
             has_thumbnail: boolean;
@@ -41,6 +175,59 @@ export interface components {
         AssetLibraryResponse: {
             assets: components["schemas"]["AssetLibraryItem"][];
         };
+        AssetUploadRequest: {
+            /** Format: binary */
+            file: string;
+        };
+        ContentItemWithTags: components["schemas"]["crate.entities.content_item.Model"] & {
+            tags: string[];
+        };
+        /**
+         * Asset
+         * @description An uploaded asset, such as an image or file.
+         */
+        "crate.entities.asset.Model": {
+            /** Format: int32 */
+            byte_length: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: int32 */
+            height?: number | null;
+            /** Format: uuid */
+            id: string;
+            mime_type: string;
+            original_filename: string;
+            /** Format: uuid */
+            site_id: string;
+            storage_basename: string;
+            uploader_sub: string;
+            /** Format: int32 */
+            width?: number | null;
+        };
+        /**
+         * ContentItem
+         * @description A content item, such as a page or blog post.
+         */
+        "crate.entities.content_item.Model": {
+            /** Format: date-time */
+            created_at: string;
+            creator_sub: string;
+            draft: boolean;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            last_updated?: string | null;
+            page_content: string;
+            page_type: components["schemas"]["PageType"];
+            /** Format: date-time */
+            published_at?: string | null;
+            /** Format: uuid */
+            site_id: string;
+            slug: string;
+            title: string;
+        };
+        /** @enum {string} */
+        PageType: PageType;
     };
     responses: never;
     parameters: never;
@@ -50,14 +237,257 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    api_site_assets_list: {
+        parameters: {
+            query?: {
+                limit?: number;
+                q?: string;
+                type?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The ID of the site to list assets for */
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A list of assets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiAssetListResponse"];
+                };
+            };
+            /** @description Invalid request parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unauthorized access */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Forbidden - insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    api_site_asset_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ID of the site to create an asset for */
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["AssetUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description The created asset */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiAssetResponse"];
+                };
+            };
+            /** @description Invalid request body */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unauthorized access */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Forbidden - insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    api_site_asset_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ID of the asset */
+                asset_id: string;
+                /** @description The ID of the site */
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The requested asset */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiAssetResponse"];
+                };
+            };
+            /** @description Unauthorized access */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Forbidden - insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Asset not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    api_site_asset_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ID of the asset */
+                asset_id: string;
+                /** @description The ID of the site */
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The asset was deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthorized access */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Forbidden - insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Asset not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
     api_site_assets_library: {
         parameters: {
             query?: {
-                /** @description Optional maximum number of assets to return */
                 limit?: number;
-                /** @description Optional search query to filter assets by original filename or storage basename */
                 q?: string;
-                /** @description Optional filter by image type (jpeg, png, gif, svg, webp) */
                 type?: string;
             };
             header?: never;
@@ -84,7 +514,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/plain": string;
+                    "application/json": components["schemas"]["ApiErrorResponse"];
                 };
             };
             /** @description Unauthorized access */
@@ -93,7 +523,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/plain": string;
+                    "application/json": components["schemas"]["ApiErrorResponse"];
                 };
             };
             /** @description Forbidden - insufficient permissions */
@@ -102,7 +532,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/plain": string;
+                    "application/json": components["schemas"]["ApiErrorResponse"];
                 };
             };
             /** @description Internal server error */
@@ -111,12 +541,408 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/plain": string;
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    api_site_content_list: {
+        parameters: {
+            query?: {
+                limit?: number;
+                page_type?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The ID of the site to list content for */
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A list of content items */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiContentListResponse"];
+                };
+            };
+            /** @description Invalid request parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unauthorized access */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Forbidden - insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    api_site_content_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ID of the site to create content for */
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApiCreateContentRequest"];
+            };
+        };
+        responses: {
+            /** @description The created content item */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContentItemWithTags"];
+                };
+            };
+            /** @description Invalid request body */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unauthorized access */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Forbidden - insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    api_site_content_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ID of the content item */
+                content_id: string;
+                /** @description The ID of the site */
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The requested content item */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContentItemWithTags"];
+                };
+            };
+            /** @description Unauthorized access */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Forbidden - insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Content not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    api_site_content_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ID of the content item */
+                content_id: string;
+                /** @description The ID of the site */
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The content item was deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthorized access */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Forbidden - insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Content not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    api_site_content_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ID of the content item */
+                content_id: string;
+                /** @description The ID of the site */
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApiUpdateContentRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated content item */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContentItemWithTags"];
+                };
+            };
+            /** @description Invalid request body */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unauthorized access */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Forbidden - insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Content not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    api_site_content_search: {
+        parameters: {
+            query: {
+                limit?: number;
+                page_type?: string;
+                q: string;
+            };
+            header?: never;
+            path: {
+                /** @description The ID of the site to search content for */
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A list of matching content items */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiContentListResponse"];
+                };
+            };
+            /** @description Invalid request parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unauthorized access */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Forbidden - insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
                 };
             };
         };
     };
 }
+export enum PageType {
+    post = "post",
+    page = "page"
+}
 export enum ApiPaths {
-    api_site_assets_library = "/api/site/{site_id}/assets/library"
+    api_site_assets_list = "/api/site/{site_id}/assets",
+    api_site_asset_create = "/api/site/{site_id}/assets",
+    api_site_assets_library = "/api/site/{site_id}/assets/library",
+    api_site_asset_get = "/api/site/{site_id}/assets/{asset_id}",
+    api_site_asset_delete = "/api/site/{site_id}/assets/{asset_id}",
+    api_site_content_list = "/api/site/{site_id}/content",
+    api_site_content_create = "/api/site/{site_id}/content",
+    api_site_content_search = "/api/site/{site_id}/content/search",
+    api_site_content_get = "/api/site/{site_id}/content/{content_id}",
+    api_site_content_delete = "/api/site/{site_id}/content/{content_id}",
+    api_site_content_update = "/api/site/{site_id}/content/{content_id}"
 }

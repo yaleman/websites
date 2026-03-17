@@ -1,9 +1,16 @@
 use sea_orm::entity::prelude::*;
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::entities::PageType;
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema, DeriveEntityModel)]
 #[sea_orm(table_name = "content_item")]
+#[schema(
+    title = "ContentItem",
+    description = "A content item, such as a page or blog post.",
+    as = crate::entities::content_item::Model
+)]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
