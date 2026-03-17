@@ -349,9 +349,9 @@ def test_generated_client_crud_and_search():
             )
             assert created_content is not None
             assert not isinstance(created_content, error_response_model.ApiErrorResponse)
-            content_id = created_content.content.id
-            assert created_content.content.title == "Python Client Body"
-            assert created_content.content.tags == ["alpha", "beta"]
+            content_id = created_content.id
+            assert created_content.title == "Python Client Body"
+            assert created_content.tags == ["alpha", "beta"]
 
             listed = content_list_module.sync(site_id=harness.site_id, client=client)
             assert listed is not None
@@ -365,7 +365,7 @@ def test_generated_client_crud_and_search():
             )
             assert fetched is not None
             assert not isinstance(fetched, error_response_model.ApiErrorResponse)
-            assert fetched.content.page_content == "Python client body"
+            assert fetched.page_content == "Python client body"
 
             updated = content_update_module.sync(
                 site_id=harness.site_id,
@@ -379,8 +379,8 @@ def test_generated_client_crud_and_search():
             )
             assert updated is not None
             assert not isinstance(updated, error_response_model.ApiErrorResponse)
-            assert updated.content.title == "Python Client Published"
-            assert updated.content.tags == ["gamma"]
+            assert updated.title == "Python Client Published"
+            assert updated.tags == ["gamma"]
 
             searched = content_search_module.sync(
                 site_id=harness.site_id,
