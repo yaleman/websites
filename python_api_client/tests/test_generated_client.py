@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import importlib
 import io
 import os
@@ -10,6 +8,7 @@ import sys
 import tempfile
 import time
 import uuid
+from typing import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -207,7 +206,7 @@ class Harness:
 
 
 @contextmanager
-def running_server() -> Harness:
+def running_server() -> Generator[Harness, None, None]:
     with tempfile.TemporaryDirectory(prefix="websites-api-client-") as tmp_dir:
         temp_root = Path(tmp_dir)
         db_path = temp_root / "database.sqlite"
