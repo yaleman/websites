@@ -38,12 +38,6 @@ run = "pnpm exec tsc --noEmit"
 depends = ["frontend_build"]
 run = "pnpm exec playwright test"
 
-[tasks.python_client_test]
-depends = ["frontend_build"]
-run = [
-    "cargo build --quiet --bin websites --bin session_seed",
-    "cd python_api_client && uv run pytest -q tests",
-]
 
 [tasks.start]
 depends = ["frontend_build"]
@@ -64,10 +58,13 @@ run = [
     "echo \"Coveralls repo information is at https://coveralls.io/github/yaleman/websites\"",
 ]
 
+[tasks.openapi-dump]
+run = "cargo run -- dump-open-api-spec ./openapi.json"
 
 [tasks.openapi-to-ts]
 description = "run openapi-to-ts to generate typescript types from the OpenAPI spec"
-run = ["cargo run -- dump-open-api-spec ./openapi.json", '''
+depends = ["openapi-dump"]
+run = ['''
 pnpm exec openapi-typescript \
    ./openapi.json --dedupe-enums --enum \
    --alphabetize --make-paths-enum \
@@ -93,3 +90,18 @@ run = "cd python_api_client && uv run ty check"
 [tasks.python_checks]
 description = "run all checks for the Python client"
 depends = ["python_client_test", "python_ruff", "python_ty"]
+
+[tasks.python_gen]
+description = "generate the Python client code from the OpenAPI spec"
+depends = ["openapi-dump"]
+run = [
+    "uv run openapi-python-client generate --path openapi.json --output-path python_api_client --overwrite --meta uv --config python_api_client/openapi_config.yml",
+    "cd python_api_client && uv sync",
+]
+
+[tasks.python_client_test]
+depends = ["frontend_build", "python_gen"]
+run = [
+    "cargo build --quiet --bin websites --bin session_seed",
+    "cd python_api_client && uv run pytest",
+]
