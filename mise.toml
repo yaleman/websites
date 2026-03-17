@@ -75,10 +75,6 @@ pnpm exec openapi-typescript \
 description = "build the Docker image for the application"
 run = "docker build -t websites:latest ."
 
-[tasks.docker_run]
-description = "run the Docker container for the application"
-run = "docker run --rm -it -p 9000:9000 --env-file .env --name websites_container websites:latest"
-
 [tasks.python_ruff]
 depends = ["python_gen"]
 run = "cd python_api_client && uv run ruff check"
@@ -105,3 +101,16 @@ run = [
     "cargo build --quiet --bin websites --bin session_seed",
     "cd python_api_client && uv run pytest",
 ]
+
+[tasks.docker_run]
+run = '''
+docker run --rm -it \
+    --init \
+    --mount "type=bind,src=$(pwd)/database.sqlite,target=/data/websites.sqlite" \
+    --mount "type=bind,src=${WEBSITES_TLS_CERT_PATH},target=/certs/tls.crt" \
+    --mount "type=bind,src=${WEBSITES_TLS_KEY_PATH},target=/certs/tls.key" \
+    -e "WEBSITES_FRONTEND_URL=${WEBSITES_FRONTEND_URL}" \
+    -e "WEBSITES_OIDC_CLIENT_ID=${WEBSITES_OIDC_CLIENT_ID}" \
+    -e "WEBSITES_OIDC_DISCOVERY_URL=${WEBSITES_OIDC_DISCOVERY_URL} \
+    docker.io/library/websites:test
+'''

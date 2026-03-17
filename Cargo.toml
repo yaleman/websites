@@ -46,7 +46,11 @@ similar = "2.7.0"
 sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "sqlite"] }
 tempfile = "3.27.0"
 tera = "1.20.1"
-tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.50.0", features = [
+    "rt-multi-thread",
+    "macros",
+    "signal",
+] }
 tower-http = { version = "0.6.8", features = ["fs"] }
 tower-sessions = "0.14.0"
 tower-sessions-sqlx-store = { version = "0.15.0", features = ["sqlite"] }
