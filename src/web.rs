@@ -65,6 +65,8 @@ use std::path::{Component, Path as StdPath, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::fs;
+#[cfg(unix)]
+use tokio::signal::unix::{SignalKind, signal};
 use tower_http::services::ServeDir;
 use tower_sessions::{Expiry, Session, SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
@@ -1847,7 +1849,7 @@ pub async fn run_admin_server(
         .with_expiry(Expiry::OnSessionEnd);
 
     info!(
-        "admin server listening on http://{listen} / {}",
+        "admin server listening on https://{listen} / {}",
         state.oidc_frontend_url
     );
     info!("admin assets dir: {}", assets_dir.display());
@@ -1866,11 +1868,71 @@ pub async fn run_admin_server(
     let tls_config = build_tls_config(&oidc.tls_cert_path, &oidc.tls_key_path).await?;
     let bind_addr: SocketAddr = SocketAddr::from_str(listen)
         .with_context(|| format!("failed to parse bind address {}", listen))?;
-    axum_server::bind_rustls(bind_addr, tls_config)
-        .serve(app.into_make_service())
-        .await
-        .inspect_err(|err| error!("admin server error: {err}"))
-        .context("axum rustls server exited unexpectedly")
+
+    #[cfg(unix)]
+    let mut sigterm =
+        signal(SignalKind::terminate()).context("failed to register SIGTERM handler")?;
+    #[cfg(unix)]
+    let mut sigquit = signal(SignalKind::quit()).context("failed to register SIGQUIT handler")?;
+    #[cfg(unix)]
+    let mut sighup = signal(SignalKind::hangup()).context("failed to register SIGHUP handler")?;
+
+    let mut reload_generation = 0_u64;
+    let shutdown_reason = loop {
+        #[cfg(unix)]
+        {
+            use tracing::warn;
+
+            tokio::select! {
+                res = axum_server::bind_rustls(bind_addr, tls_config.clone())
+                    .serve(app.clone().into_make_service()) => {
+                        return res .inspect_err(|err| error!("admin server error: {err}"))
+                    .context("axum rustls server exited unexpectedly")
+                    },
+                ctrl_c = tokio::signal::ctrl_c() => {
+                    ctrl_c.context("failed waiting for ctrl-c")?;
+                    info!("ctrl-c received; shutting down services");
+                    break "SIGINT";
+                }
+                maybe_term = sigterm.recv() => {
+                    if maybe_term.is_none() {
+                        warn!("SIGTERM signal stream closed unexpectedly");
+                        continue;
+                    }
+                    info!("SIGTERM received; shutting down services");
+                    break "SIGTERM";
+                }
+                maybe_quit = sigquit.recv() => {
+                    if maybe_quit.is_none() {
+                        warn!("SIGQUIT signal stream closed unexpectedly");
+                        continue;
+                    }
+                    info!("SIGQUIT received; shutting down services");
+                    break "SIGQUIT";
+                }
+                maybe_hup = sighup.recv() => {
+                    if maybe_hup.is_none() {
+                        warn!("SIGHUP signal stream closed unexpectedly");
+                        continue;
+                    }
+                    reload_generation = reload_generation.wrapping_add(1);
+                    info!(reload_generation, "SIGHUP received; gracefully reloading all services");
+                }
+            }
+            continue;
+        }
+
+        #[cfg(not(unix))]
+        {
+            tokio::signal::ctrl_c()
+                .await
+                .context("failed waiting for ctrl-c")?;
+            info!("ctrl-c received; shutting down services");
+            break "SIGINT";
+        }
+    };
+    info!("shutdown signal received ({shutdown_reason}); exiting");
+    Ok(())
 }
 
 fn resolve_admin_assets_dir() -> PathBuf {
