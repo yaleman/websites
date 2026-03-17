@@ -7,7 +7,7 @@ from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
 if TYPE_CHECKING:
-    from ..models.api_content_list_item import ApiContentListItem
+    from ..models.content_item_with_tags import ContentItemWithTags
 
 
 T = TypeVar("T", bound="ApiContentListResponse")
@@ -15,7 +15,7 @@ T = TypeVar("T", bound="ApiContentListResponse")
 
 @_attrs_define
 class ApiContentListResponse:
-    items: list[ApiContentListItem]
+    items: list[ContentItemWithTags]
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -36,13 +36,13 @@ class ApiContentListResponse:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.api_content_list_item import ApiContentListItem
+        from ..models.content_item_with_tags import ContentItemWithTags
 
         d = dict(src_dict)
         items = []
         _items = d.pop("items")
         for items_item_data in _items:
-            items_item = ApiContentListItem.from_dict(items_item_data)
+            items_item = ContentItemWithTags.from_dict(items_item_data)
 
             items.append(items_item)
 
