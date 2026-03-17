@@ -34,6 +34,7 @@ ADD ./admin-ui-assets /admin-ui-assets
 ADD ./site_templates /site_templates
 
 ENV WEBSITES_LISTEN_ADDR="0.0.0.0:9000"
+ENV WEBSITES_DB_PATH="/data/websites.sqlite"
 ENV WEBSITES_TLS_CERT_PATH="/certs/tls.crt"
 ENV WEBSITES_TLS_KEY_PATH="/certs/tls.key"
 
