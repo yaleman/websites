@@ -1,0 +1,10 @@
+---
+docstrings_on_attributes: true
+generate_all_tags: true
+project_name_override: websites
+package_name_override: websites
+post_hooks:
+  - "uv add --group dev ty ruff"
+  - "uv sync --upgrade"
+  - "uv run ruff check . --fix-only"
+  - "uv run ruff format ."

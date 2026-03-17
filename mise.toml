@@ -1,5 +1,6 @@
 [tools]
 pnpm = "latest"
+python = "3.13"
 semgrep = "latest"
 
 [tasks.check]
@@ -37,14 +38,11 @@ run = "pnpm exec tsc --noEmit"
 depends = ["frontend_build"]
 run = "pnpm exec playwright test"
 
-[tasks.python_client_install]
-run = "python3 -m pip install --quiet ./python_api_client"
-
 [tasks.python_client_test]
-depends = ["frontend_build", "python_client_install"]
+depends = ["frontend_build"]
 run = [
     "cargo build --quiet --bin websites --bin session_seed",
-    "python3 -m pytest -q python_api_client/tests",
+    "cd python_api_client && uv run pytest -q tests",
 ]
 
 [tasks.start]
@@ -83,3 +81,15 @@ run = "docker build -t websites:latest ."
 [tasks.docker_run]
 description = "run the Docker container for the application"
 run = "docker run --rm -it -p 9000:9000 --env-file .env --name websites_container websites:latest"
+
+[tasks.python_ruff]
+depends = ["python_client_install"]
+run = "cd python_api_client && uv run ruff check"
+
+[tasks.python_ty]
+depends = ["python_client_install"]
+run = "cd python_api_client && uv run ty check"
+
+[tasks.python_checks]
+description = "run all checks for the Python client"
+depends = ["python_client_test", "python_ruff", "python_ty"]
