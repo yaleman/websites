@@ -22,7 +22,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 RUN mv /root/.cargo/bin/* /usr/local/bin/
 # do the build bits
 ENV CC="/usr/bin/clang"
-RUN cargo build --release
+RUN cargo build --release --quiet --locked
 
 # ----------------
 FROM gcr.io/distroless/cc-debian12 AS final
