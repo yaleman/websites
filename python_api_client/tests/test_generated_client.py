@@ -4,16 +4,16 @@ import os
 import re
 import socket
 import subprocess
-import sys
 import tempfile
 import time
 import uuid
-from typing import Generator
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import httpx
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -175,27 +175,6 @@ def generate_tls_material(temp_root: Path) -> tuple[Path, Path]:
     return cert_path, key_path
 
 
-def generate_client(temp_root: Path):
-    generated_root = temp_root / "generated_client"
-    run_command(
-        [
-            sys.executable,
-            "-m",
-            "openapi_python_client",
-            "generate",
-            "--path",
-            str(OPENAPI_PATH),
-            "--meta",
-            "none",
-            "--output-path",
-            str(generated_root),
-            "--overwrite",
-        ]
-    )
-    sys.path.insert(0, str(temp_root))
-    return importlib.import_module("generated_client")
-
-
 @dataclass
 class Harness:
     base_url: str
@@ -203,6 +182,21 @@ class Harness:
     session_id: str
     upload_root: Path
     process: subprocess.Popen[str]
+
+
+def build_session_client(client_module, harness: Harness):
+    return client_module.AuthenticatedClient(
+        base_url=harness.base_url,
+        token="unused-session-token",
+        verify_ssl=False,
+        raise_on_unexpected_status=True,
+    ).set_httpx_client(
+        httpx.Client(
+            base_url=harness.base_url,
+            cookies={"id": harness.session_id},
+            verify=False,
+        )
+    )
 
 
 @contextmanager
@@ -321,166 +315,140 @@ def running_server() -> Generator[Harness, None, None]:
 
 
 def test_generated_client_crud_and_search():
-    with tempfile.TemporaryDirectory(prefix="websites-generated-client-") as client_tmp, running_server() as harness:
-        generate_client(Path(client_tmp))
+    with running_server() as harness:
+        client_module = importlib.import_module("websites.client")
+        content_create_module = importlib.import_module("websites.api.default.api_site_content_create")
+        content_get_module = importlib.import_module("websites.api.default.api_site_content_get")
+        content_list_module = importlib.import_module("websites.api.default.api_site_content_list")
+        content_search_module = importlib.import_module("websites.api.default.api_site_content_search")
+        content_update_module = importlib.import_module("websites.api.default.api_site_content_update")
+        content_delete_module = importlib.import_module("websites.api.default.api_site_content_delete")
+        asset_create_module = importlib.import_module("websites.api.default.api_site_asset_create")
+        asset_get_module = importlib.import_module("websites.api.default.api_site_asset_get")
+        asset_list_module = importlib.import_module("websites.api.default.api_site_assets_list")
+        asset_library_module = importlib.import_module("websites.api.default.api_site_assets_library")
+        asset_delete_module = importlib.import_module("websites.api.default.api_site_asset_delete")
+        create_content_model = importlib.import_module("websites.models.api_create_content_request")
+        update_content_model = importlib.import_module("websites.models.api_update_content_request")
+        error_response_model = importlib.import_module("websites.models.api_error_response")
+        asset_upload_model = importlib.import_module("websites.models.asset_upload_request")
+        types_module = importlib.import_module("websites.types")
 
-        client_module = importlib.import_module("generated_client.client")
-        types_module = importlib.import_module("generated_client.types")
-        content_create_module = importlib.import_module(
-            "generated_client.api.default.api_site_content_create"
-        )
-        content_get_module = importlib.import_module(
-            "generated_client.api.default.api_site_content_get"
-        )
-        content_list_module = importlib.import_module(
-            "generated_client.api.default.api_site_content_list"
-        )
-        content_search_module = importlib.import_module(
-            "generated_client.api.default.api_site_content_search"
-        )
-        content_update_module = importlib.import_module(
-            "generated_client.api.default.api_site_content_update"
-        )
-        content_delete_module = importlib.import_module(
-            "generated_client.api.default.api_site_content_delete"
-        )
-        asset_create_module = importlib.import_module(
-            "generated_client.api.default.api_site_asset_create"
-        )
-        asset_get_module = importlib.import_module(
-            "generated_client.api.default.api_site_asset_get"
-        )
-        asset_list_module = importlib.import_module(
-            "generated_client.api.default.api_site_assets_list"
-        )
-        asset_library_module = importlib.import_module(
-            "generated_client.api.default.api_site_assets_library"
-        )
-        asset_delete_module = importlib.import_module(
-            "generated_client.api.default.api_site_asset_delete"
-        )
-        create_content_model = importlib.import_module(
-            "generated_client.models.api_create_content_request"
-        )
-        update_content_model = importlib.import_module(
-            "generated_client.models.api_update_content_request"
-        )
-        asset_upload_model = importlib.import_module(
-            "generated_client.models.asset_upload_request"
-        )
+        with build_session_client(client_module, harness) as client:
+            created_content = content_create_module.sync(
+                site_id=harness.site_id,
+                client=client,
+                body=create_content_model.ApiCreateContentRequest(
+                    draft=True,
+                    page_content="Python client body",
+                    page_type="page",
+                    slug="python-client-body",
+                    title="Python Client Body",
+                    tags=["alpha", "beta"],
+                ),
+            )
+            assert created_content is not None
+            assert not isinstance(created_content, error_response_model.ApiErrorResponse)
+            content_id = created_content.content.id
+            assert created_content.content.title == "Python Client Body"
+            assert created_content.content.tags == ["alpha", "beta"]
 
-        client = client_module.Client(
-            base_url=harness.base_url,
-            cookies={"id": harness.session_id},
-            verify_ssl=False,
-            raise_on_unexpected_status=True,
-        )
+            listed = content_list_module.sync(site_id=harness.site_id, client=client)
+            assert listed is not None
+            assert not isinstance(listed, error_response_model.ApiErrorResponse)
+            assert any(item.id == content_id for item in listed.items)
 
-        created_content = content_create_module.sync(
-            site_id=harness.site_id,
-            client=client,
-            body=create_content_model.ApiCreateContentRequest(
-                draft=True,
-                page_content="Python client body",
-                page_type="page",
-                slug="python-client-body",
-                title="Python Client Body",
-                tags=["alpha", "beta"],
-            ),
-        )
-        assert created_content is not None
-        content_id = created_content.content.id
-        assert created_content.content.title == "Python Client Body"
-        assert created_content.content.tags == ["alpha", "beta"]
+            fetched = content_get_module.sync(
+                site_id=harness.site_id,
+                content_id=content_id,
+                client=client,
+            )
+            assert fetched is not None
+            assert not isinstance(fetched, error_response_model.ApiErrorResponse)
+            assert fetched.content.page_content == "Python client body"
 
-        listed = content_list_module.sync(site_id=harness.site_id, client=client)
-        assert listed is not None
-        assert any(item.id == content_id for item in listed.items)
+            updated = content_update_module.sync(
+                site_id=harness.site_id,
+                content_id=content_id,
+                client=client,
+                body=update_content_model.ApiUpdateContentRequest(
+                    title="Python Client Published",
+                    draft=False,
+                    tags=["gamma"],
+                ),
+            )
+            assert updated is not None
+            assert not isinstance(updated, error_response_model.ApiErrorResponse)
+            assert updated.content.title == "Python Client Published"
+            assert updated.content.tags == ["gamma"]
 
-        fetched = content_get_module.sync(
-            site_id=harness.site_id,
-            content_id=content_id,
-            client=client,
-        )
-        assert fetched is not None
-        assert fetched.content.page_content == "Python client body"
+            searched = content_search_module.sync(
+                site_id=harness.site_id,
+                client=client,
+                q="Published",
+            )
+            assert searched is not None
+            assert not isinstance(searched, error_response_model.ApiErrorResponse)
+            assert len(searched.items) == 1
+            assert searched.items[0].id == content_id
 
-        updated = content_update_module.sync(
-            site_id=harness.site_id,
-            content_id=content_id,
-            client=client,
-            body=update_content_model.ApiUpdateContentRequest(
-                title="Python Client Published",
-                draft=False,
-                tags=["gamma"],
-            ),
-        )
-        assert updated is not None
-        assert updated.content.title == "Python Client Published"
-        assert updated.content.tags == ["gamma"]
+            uploaded_asset = asset_create_module.sync(
+                site_id=harness.site_id,
+                client=client,
+                body=asset_upload_model.AssetUploadRequest(
+                    file=types_module.File(
+                        payload=io.BytesIO(TINY_PNG_BYTES),
+                        file_name="tiny.png",
+                        mime_type="image/png",
+                    )
+                ),
+            )
+            assert uploaded_asset is not None
+            assert not isinstance(uploaded_asset, error_response_model.ApiErrorResponse)
+            asset_id = uploaded_asset.asset.id
+            assert uploaded_asset.asset.original_filename == "tiny.png"
 
-        searched = content_search_module.sync(
-            site_id=harness.site_id,
-            client=client,
-            q="Published",
-        )
-        assert searched is not None
-        assert len(searched.items) == 1
-        assert searched.items[0].id == content_id
+            stored_files = sorted(path.name for path in harness.upload_root.iterdir())
+            assert stored_files
 
-        uploaded_asset = asset_create_module.sync(
-            site_id=harness.site_id,
-            client=client,
-            body=asset_upload_model.AssetUploadRequest(
-                file=types_module.File(
-                    payload=io.BytesIO(TINY_PNG_BYTES),
-                    file_name="tiny.png",
-                    mime_type="image/png",
-                )
-            ),
-        )
-        assert uploaded_asset is not None
-        asset_id = uploaded_asset.asset.id
-        assert uploaded_asset.asset.original_filename == "tiny.png"
+            listed_assets = asset_list_module.sync(site_id=harness.site_id, client=client)
+            assert listed_assets is not None
+            assert not isinstance(listed_assets, error_response_model.ApiErrorResponse)
+            assert any(asset.id == asset_id for asset in listed_assets.assets)
 
-        stored_files = sorted(path.name for path in harness.upload_root.iterdir())
-        assert stored_files
+            library_assets = asset_library_module.sync(site_id=harness.site_id, client=client)
+            assert library_assets is not None
+            assert not isinstance(library_assets, error_response_model.ApiErrorResponse)
+            assert any(asset.id == asset_id for asset in library_assets.assets)
 
-        listed_assets = asset_list_module.sync(site_id=harness.site_id, client=client)
-        assert listed_assets is not None
-        assert any(asset.id == asset_id for asset in listed_assets.assets)
+            fetched_asset = asset_get_module.sync(
+                site_id=harness.site_id,
+                asset_id=asset_id,
+                client=client,
+            )
+            assert fetched_asset is not None
+            assert not isinstance(fetched_asset, error_response_model.ApiErrorResponse)
+            assert fetched_asset.asset.original_filename == "tiny.png"
+            assert fetched_asset.asset.variants
 
-        library_assets = asset_library_module.sync(site_id=harness.site_id, client=client)
-        assert library_assets is not None
-        assert any(asset.id == asset_id for asset in library_assets.assets)
+            delete_asset_response = asset_delete_module.sync_detailed(
+                site_id=harness.site_id,
+                asset_id=asset_id,
+                client=client,
+            )
+            assert delete_asset_response.status_code == 204
+            assert list(harness.upload_root.iterdir()) == []
 
-        fetched_asset = asset_get_module.sync(
-            site_id=harness.site_id,
-            asset_id=asset_id,
-            client=client,
-        )
-        assert fetched_asset is not None
-        assert fetched_asset.asset.original_filename == "tiny.png"
-        assert len(fetched_asset.asset.variants) >= 1
+            delete_content_response = content_delete_module.sync_detailed(
+                site_id=harness.site_id,
+                content_id=content_id,
+                client=client,
+            )
+            assert delete_content_response.status_code == 204
 
-        delete_asset_response = asset_delete_module.sync_detailed(
-            site_id=harness.site_id,
-            asset_id=asset_id,
-            client=client,
-        )
-        assert delete_asset_response.status_code == 204
-        assert list(harness.upload_root.iterdir()) == []
-
-        delete_content_response = content_delete_module.sync_detailed(
-            site_id=harness.site_id,
-            content_id=content_id,
-            client=client,
-        )
-        assert delete_content_response.status_code == 204
-
-        missing_content = content_get_module.sync_detailed(
-            site_id=harness.site_id,
-            content_id=content_id,
-            client=client,
-        )
-        assert missing_content.status_code == 404
+            missing_content = content_get_module.sync_detailed(
+                site_id=harness.site_id,
+                content_id=content_id,
+                client=client,
+            )
+            assert missing_content.status_code == 404
