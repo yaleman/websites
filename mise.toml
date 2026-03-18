@@ -105,12 +105,14 @@ run = [
 [tasks.docker_run]
 run = '''
 docker run --rm -it \
+    --pull always \
     --init \
     --mount "type=bind,src=$(pwd)/database.sqlite,target=/data/websites.sqlite" \
     --mount "type=bind,src=${WEBSITES_TLS_CERT_PATH},target=/certs/tls.crt" \
     --mount "type=bind,src=${WEBSITES_TLS_KEY_PATH},target=/certs/tls.key" \
+    -p 9000:9000 \
     -e "WEBSITES_FRONTEND_URL=${WEBSITES_FRONTEND_URL}" \
     -e "WEBSITES_OIDC_CLIENT_ID=${WEBSITES_OIDC_CLIENT_ID}" \
-    -e "WEBSITES_OIDC_DISCOVERY_URL=${WEBSITES_OIDC_DISCOVERY_URL} \
-    docker.io/library/websites:test
+    -e "WEBSITES_OIDC_DISCOVERY_URL=${WEBSITES_OIDC_DISCOVERY_URL}" \
+    'ghcr.io/yaleman/websites:latest'
 '''
