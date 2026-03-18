@@ -1,8 +1,6 @@
 /target
 /node_modules
-/admin-ui-assets/editor.js
-/admin-ui-assets/editor.css
-/admin-ui-assets/*.map
+/admin-ui-assets/*
 /playwright-report
 /test-results
 .DS_Store
