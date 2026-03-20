@@ -10,7 +10,7 @@ default-run = "websites"
 [dependencies]
 anyhow = "1.0.102"
 askama = "0.15.4"
-askama_web = { version = "0.15.1", features = ["axum-0.8", "tracing-0.1"] }
+askama_web = { version = "0.15.2", features = ["axum-0.8", "tracing-0.1"] }
 axum = { version = "0.8.8", features = ["multipart", "macros"] }
 axum-server = { version = "0.8.0", features = ["tokio-rustls", "tls-rustls"] }
 chrono = "0.4.44"
