@@ -1,41 +1,49 @@
 {% extends "base_template.html" %}
 {% block body %}
 
-<form method="post" action class="editor-form">
-  <div class="form-field">
-    <label for="full_title">Full Title</label>
-    <input id="full_title" name="full_title" value="{{ full_title }}" required />
-  </div>
-  <div class="form-field">
-    <label for="template_name">Template</label>
-    <select id="template_name" name="template_name" required>
-      {% for template in templates %}
-      <option value="{{ template }}" {% if template == &template_name %}selected{% endif %}>{{ template }}</option>
-      {% endfor %}
-    </select>
-  </div>
+<section class="surface grid gap-4 p-4 md:p-6">
+  <form method="post" action class="stack-form">
+    <div class="form-field">
+      <label for="full_title">Full Title</label>
+      <input id="full_title" name="full_title" value="{{ full_title }}" required />
+    </div>
+    <div class="form-field">
+      <label for="template_name">Template</label>
+      <select id="template_name" name="template_name" required>
+        {% for template in templates %}
+        <option value="{{ template }}" {% if template == &template_name %}selected{% endif %}>{{ template }}</option>
+        {% endfor %}
+      </select>
+    </div>
 
-  <div class="form-actions">
-    <button type="submit">Save settings</button>
-  </div>
-</form>
+    <div class="form-actions">
+      <button type="submit" class="btn">Save settings</button>
+    </div>
+  </form>
+</section>
 
-<section>
-  <p>
-    Site ID: {{ site_id }}
-  </p>
-  <p>
-    Short Name: {{ site_short_name }}
-  </p>
-  {% if let Some(export_href) = export_href %}
-  <p>
-    <a href="{{ export_href }}">Download site export JSON</a>
-  </p>
-  {% endif %}
+<section class="surface grid gap-4 p-4 md:p-6">
+  <h2>Site Details</h2>
+  <dl class="grid gap-3">
+    <div class="grid gap-0.5">
+      <dt class="text-sm font-medium text-slate-600">Site ID</dt>
+      <dd class="text-sm text-slate-800">{{ site_id }}</dd>
+    </div>
+    <div class="grid gap-0.5">
+      <dt class="text-sm font-medium text-slate-600">Short Name</dt>
+      <dd class="text-sm text-slate-800">{{ site_short_name }}</dd>
+    </div>
+    {% if let Some(export_href) = export_href %}
+    <div class="grid gap-0.5">
+      <dt class="text-sm font-medium text-slate-600">Export</dt>
+      <dd class="text-sm text-slate-800"><a href="{{ export_href }}">Download site export JSON</a></dd>
+    </div>
+    {% endif %}
+  </dl>
 </section>
 
 {% if can_delete_site %}
-<section>
+<section class="surface grid gap-4 p-4 md:p-6">
   <h2>Danger Zone</h2>
   <p class="inline-body">
     Deleting a site removes its content, memberships, tags, assets, and template overrides.
@@ -46,7 +54,7 @@
 </section>
 {% endif %}
 
-<section>
+<section class="surface grid gap-4 p-4 md:p-6">
   <h2>Template Overrides</h2>
   <p class="inline-body">
     Overrides are stored per site and layered on top of the selected shared template. Leave a file without an override to keep inheriting the shared version.
