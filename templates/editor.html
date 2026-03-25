@@ -1,18 +1,18 @@
 
 {% include "editor-toolbar.html" %}
 
-<div id="editor" class="editor-shell"></div>
-<section class="editor-source-panel" data-editor-source-panel hidden>
-    <div class="editor-source-panel__header">
+<div id="editor" class="editor-shell overflow-y-auto rounded-b-xl border border-slate-200 bg-white p-2 shadow-sm shadow-slate-200/60"></div>
+<section class="editor-source-panel mt-3 flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm shadow-slate-200/60" data-editor-source-panel hidden>
+    <div class="editor-source-panel__header border-b border-slate-200 bg-slate-50 px-3 py-2">
         <h2>Markdown source</h2>
     </div>
-    <textarea id="page_content" name="page_content" rows="14" class="editor-source">{{ page_content }}</textarea>
+    <textarea id="page_content" name="page_content" rows="14" class="editor-source min-h-[18rem] overflow-y-auto rounded-none border-0 bg-white font-mono text-sm">{{ page_content }}</textarea>
 </section>
-<section class="editor-preview" data-editor-preview hidden>
-    <div class="editor-preview__header">
+<section class="editor-preview mt-3 flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm shadow-slate-200/60" data-editor-preview hidden>
+    <div class="editor-preview__header border-b border-slate-200 bg-slate-50 px-3 py-2">
         <h2>Preview</h2>
     </div>
-    <div class="editor-preview__body" data-editor-preview-body></div>
+    <div class="editor-preview__body flex-1 overflow-y-auto p-3" data-editor-preview-body></div>
 </section>
 
 {% include "editor-tags.html" %}

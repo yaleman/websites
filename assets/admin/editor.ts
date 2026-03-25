@@ -4,7 +4,6 @@ import Link from "@tiptap/extension-link";
 import { Markdown } from "@tiptap/markdown";
 import StarterKit from "@tiptap/starter-kit";
 import "./editor.css";
-import "./styles.css";
 import type { Client } from "openapi-fetch";
 import createClient from "openapi-fetch";
 import { ApiPaths, type components, type paths } from "./openapi";
@@ -25,12 +24,14 @@ const formatAssetMeta = (asset: components["schemas"]["AssetLibraryItem"]) => {
 const createAssetCard = (asset: components["schemas"]["AssetLibraryItem"]) => {
 	const button = document.createElement("button");
 	button.type = "button";
-	button.className = "asset-card";
+	button.className =
+		"asset-card group grid gap-2 rounded-md border border-slate-200 bg-white p-2 text-left shadow-sm transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200";
 	button.dataset.assetId = asset.id;
 	button.dataset.assetPayload = JSON.stringify(asset);
+	button.dataset.assetCard = "true";
 
 	const thumb = document.createElement("div");
-	thumb.className = "asset-card__thumb";
+	thumb.className = "aspect-[4/3] overflow-hidden rounded-md bg-slate-100";
 	const image = document.createElement("img");
 	image.src = asset.thumbnail_url ?? asset.original_url;
 	image.alt = "";
@@ -38,11 +39,11 @@ const createAssetCard = (asset: components["schemas"]["AssetLibraryItem"]) => {
 	thumb.appendChild(image);
 
 	const name = document.createElement("div");
-	name.className = "asset-card__name";
+	name.className = "truncate text-sm font-medium text-slate-900";
 	name.textContent = asset.original_filename;
 
 	const meta = document.createElement("div");
-	meta.className = "asset-card__meta";
+	meta.className = "text-xs text-slate-500";
 	meta.textContent = formatAssetMeta(asset);
 
 	button.appendChild(thumb);
@@ -59,7 +60,7 @@ const renderAssetGrid = (
 	container.innerHTML = "";
 	if (assets.length === 0) {
 		const empty = document.createElement("div");
-		empty.className = "asset-empty";
+		empty.className = "text-xs text-slate-500";
 		empty.textContent = message;
 		container.appendChild(empty);
 		return;
@@ -130,8 +131,8 @@ const createAssetModal = (editor: Editor) => {
 
 	const clearSelection = () => {
 		selectedAsset = null;
-		modal.querySelectorAll(".asset-card.is-selected").forEach((card) => {
-			card.classList.remove("is-selected");
+		modal.querySelectorAll<HTMLElement>("[data-asset-card]").forEach((card) => {
+			card.classList.remove("border-slate-900", "ring-2", "ring-slate-300");
 		});
 		setInsertEnabled();
 	};
@@ -140,11 +141,11 @@ const createAssetModal = (editor: Editor) => {
 		asset: components["schemas"]["AssetLibraryItem"] | null,
 	) => {
 		selectedAsset = asset;
-		modal.querySelectorAll(".asset-card").forEach((card) => {
-			card.classList.toggle(
-				"is-selected",
-				card.getAttribute("data-asset-id") === asset?.id,
-			);
+		modal.querySelectorAll<HTMLElement>("[data-asset-card]").forEach((card) => {
+			const selected = card.getAttribute("data-asset-id") === asset?.id;
+			card.classList.toggle("border-slate-900", selected);
+			card.classList.toggle("ring-2", selected);
+			card.classList.toggle("ring-slate-300", selected);
 		});
 		if (asset && altInput && !altInput.value.trim()) {
 			altInput.value = inferAltFromFilename(asset.original_filename);
@@ -247,7 +248,7 @@ const createAssetModal = (editor: Editor) => {
 		if (!target) {
 			return;
 		}
-		const card = target.closest<HTMLButtonElement>(".asset-card");
+		const card = target.closest<HTMLButtonElement>("[data-asset-card]");
 		if (!card) {
 			return;
 		}
@@ -636,7 +637,8 @@ const initTagEditor = () => {
 		for (const tag of selectedTags) {
 			const chip = document.createElement("button");
 			chip.type = "button";
-			chip.className = "tag-chip";
+			chip.className =
+				"inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-sm font-medium text-slate-700 shadow-sm";
 			chip.dataset.tagChip = tag;
 
 			const label = document.createElement("span");
@@ -644,7 +646,7 @@ const initTagEditor = () => {
 			chip.appendChild(label);
 
 			const remove = document.createElement("span");
-			remove.className = "tag-chip__remove";
+			remove.className = "text-xs font-semibold text-slate-400";
 			remove.setAttribute("aria-hidden", "true");
 			remove.textContent = "x";
 			chip.appendChild(remove);

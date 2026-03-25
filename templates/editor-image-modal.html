@@ -1,12 +1,12 @@
-<div class="editor-modal" data-asset-modal hidden aria-hidden="true">
-    <div class="editor-modal__backdrop" data-asset-modal-close></div>
-    <div class="editor-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="asset-modal-title">
-        <header class="editor-modal__header">
+<div class="editor-modal fixed inset-0 z-50 flex items-center justify-center" data-asset-modal hidden aria-hidden="true">
+    <div class="editor-modal__backdrop absolute inset-0 bg-slate-950/60 backdrop-blur-sm" data-asset-modal-close></div>
+    <div class="editor-modal__dialog relative flex w-[min(960px,92vw)] max-h-[90vh] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl shadow-slate-950/20" role="dialog" aria-modal="true" aria-labelledby="asset-modal-title">
+        <header class="editor-modal__header flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
             <h2 id="asset-modal-title">Insert image</h2>
             <button type="button" class="editor-button" data-asset-modal-close>Close</button>
         </header>
-        <div class="editor-modal__body">
-            <div class="asset-controls">
+        <div class="editor-modal__body grid gap-4 overflow-auto p-4">
+            <div class="asset-controls grid gap-3 md:grid-cols-2">
                 <div class="form-field">
                     <label for="asset_search">Search images</label>
                     <input id="asset_search" type="search" placeholder="Search by filename" data-asset-search />
@@ -24,17 +24,17 @@
                 </div>
             </div>
 
-            <section class="asset-section" data-asset-recent-section>
+            <section class="asset-section grid gap-2" data-asset-recent-section>
                 <h3>Recent uploads</h3>
-                <div class="asset-grid" data-asset-recent></div>
+                <div class="asset-grid grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4" data-asset-recent></div>
             </section>
 
-            <section class="asset-section" data-asset-results-section hidden>
+            <section class="asset-section grid gap-2" data-asset-results-section hidden>
                 <h3>Search results</h3>
-                <div class="asset-grid" data-asset-results></div>
+                <div class="asset-grid grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4" data-asset-results></div>
             </section>
 
-            <div class="asset-fields">
+            <div class="asset-fields grid gap-3">
                 <div class="form-field">
                     <label for="asset_alt">Alt text</label>
                     <input id="asset_alt" type="text" placeholder="Describe the image" data-asset-alt />
@@ -47,7 +47,7 @@
                 {% endif %}
             </div>
         </div>
-        <footer class="editor-modal__footer">
+        <footer class="editor-modal__footer flex items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3">
             <button type="button" class="editor-button" data-asset-modal-close>Cancel</button>
             <button type="button" class="editor-button save" data-asset-insert disabled>Insert image</button>
         </footer>
