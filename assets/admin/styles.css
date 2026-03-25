@@ -45,7 +45,7 @@
 	li,
 	dl,
 	dd {
-		@apply text-sm leading-6 text-slate-700;
+		@apply text-sm leading-6 text-slate-800;
 	}
 
 	code {
@@ -73,7 +73,7 @@
 	}
 
 	thead {
-		@apply bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500;
+		@apply bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600;
 	}
 
 	th {
@@ -89,7 +89,11 @@
 	}
 
 	label {
-		@apply text-xs font-semibold uppercase tracking-wide text-slate-500;
+		@apply text-sm font-medium normal-case tracking-normal text-slate-700;
+	}
+
+	legend {
+		@apply text-sm font-semibold tracking-normal text-slate-900;
 	}
 
 	input,
@@ -102,8 +106,9 @@
 		@apply min-h-32;
 	}
 
-	input[type="checkbox"] {
-		@apply h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-300;
+	input[type="checkbox"],
+	input[type="radio"] {
+		@apply h-4 w-4 rounded border-slate-400 accent-violet-700 text-violet-700 focus:ring-2 focus:ring-violet-300;
 	}
 
 	input[type="file"] {
@@ -133,7 +138,7 @@
 	}
 
 	.page-site-indicator {
-		@apply m-0 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-right text-sm font-medium text-slate-600 shadow-sm;
+		@apply m-0 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-right text-sm font-medium text-slate-700 shadow-sm;
 	}
 
 	nav {
@@ -173,7 +178,7 @@
 	}
 
 	.inline-body {
-		@apply text-sm text-slate-600;
+		@apply text-sm text-slate-700;
 	}
 
 	.form-grid {
@@ -193,7 +198,7 @@
 	}
 
 	.inline-checkbox {
-		@apply mt-1.5 inline-flex items-center gap-3;
+		@apply mt-1.5 inline-flex items-center gap-3 text-sm font-medium normal-case tracking-normal text-slate-800;
 	}
 
 	.inline-checkbox input {
