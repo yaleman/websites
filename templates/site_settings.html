@@ -42,6 +42,29 @@
   </dl>
 </section>
 
+<section class="surface grid gap-4 p-4 md:p-6" id="wordpress-import">
+  <h2>WordPress Import</h2>
+  <p class="inline-body">
+    Upload a WordPress WXR XML export for this site. Imports are idempotent: if you upload the same file again, content that already exists on this site is skipped instead of duplicated.
+  </p>
+  {% if can_import_wordpress %}
+  <form method="post" action="/admin/site/{{ site_id }}/settings/wordpress-import" enctype="multipart/form-data" class="stack-form">
+    <div class="form-field">
+      <label for="wordpress_xml">WordPress XML file</label>
+      <input id="wordpress_xml" name="file" type="file" accept=".xml,application/xml,text/xml" required />
+    </div>
+
+    <div class="form-actions">
+      <button type="submit">Import WordPress XML</button>
+    </div>
+  </form>
+  {% else %}
+  <p class="inline-body">
+    You need author access or better to import WordPress XML into this site.
+  </p>
+  {% endif %}
+</section>
+
 <section class="surface grid gap-4 p-4 md:p-6">
   <h2>Template Overrides</h2>
   <p class="inline-body">

@@ -29,12 +29,12 @@ use crate::{
     NewContent, cli::OidcConfig, content_primary_route, create_content, create_membership,
     create_site, create_tag, delete_membership, delete_site, delete_tag, export_site,
     get_membership_by_id, get_membership_for_subject, get_revision, get_revision_by_number,
-    get_user_by_id, import_site_json, list_aliases, list_assets, list_content, list_content_tags,
-    list_memberships, list_memberships_for_user_id, list_revisions, list_sites,
-    list_sites_for_subject, list_tags, list_users, list_users_by_ids, render_content_preview,
-    render_site, resolve_site_template_override_root, resolve_upload_root, search_all_content,
-    search_content, serialize_site_export_pretty, store_uploaded_asset, sync_tags_to_content,
-    update_content, update_membership_role, update_site_settings,
+    get_user_by_id, import_site_json, import_wordpress_xml, list_aliases, list_assets,
+    list_content, list_content_tags, list_memberships, list_memberships_for_user_id,
+    list_revisions, list_sites, list_sites_for_subject, list_tags, list_users, list_users_by_ids,
+    render_content_preview, render_site, resolve_site_template_override_root, resolve_upload_root,
+    search_all_content, search_content, serialize_site_export_pretty, store_uploaded_asset,
+    sync_tags_to_content, update_content, update_membership_role, update_site_settings,
 };
 use anyhow::Context;
 use askama::Template;
@@ -357,6 +357,7 @@ struct AdminSiteSettingsTemplate {
     full_title: String,
     template_name: String,
     can_delete_site: bool,
+    can_import_wordpress: bool,
     export_href: Option<String>,
     templates: Vec<String>,
     template_files: Vec<AdminSiteTemplateFileRow>,
@@ -701,6 +702,11 @@ struct AdminUserProfileQuery {
 struct AdminContentListQuery {
     page_type: Option<String>,
     sort_by: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminSiteSettingsQuery {
+    imported: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1803,6 +1809,10 @@ fn build_admin_app(state: AdminState, assets_dir: &StdPath, upload_root: &StdPat
             "/admin/site/{site_id}/settings",
             get(admin_site_settings).post(admin_site_settings_update),
         )
+        .route(
+            "/admin/site/{site_id}/settings/wordpress-import",
+            axum::routing::post(admin_site_wordpress_import),
+        )
         .route("/admin/themes", get(admin_themes).post(admin_themes_create))
         .route(
             "/admin/themes/{slug}/update",
@@ -2549,6 +2559,10 @@ async fn admin_site_content_list(
                         ),
                         AdminLink::new(&format!("/admin/site/{site_id}/tags"), "Tags"),
                         AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Assets"),
+                        AdminLink::new(
+                            &format!("/admin/site/{site_id}/settings#wordpress-import"),
+                            "WordPress import",
+                        ),
                         AdminLink::new(&format!("/admin/site/{site_id}/render"), "Render"),
                         AdminLink::new(&format!("/admin/site/{site_id}/settings"), "Site settings"),
                     ]),
@@ -4570,6 +4584,7 @@ async fn admin_site_settings(
     State(state): State<AdminState>,
     session: Session,
     Path(site_id): Path<Uuid>,
+    Query(query): Query<AdminSiteSettingsQuery>,
 ) -> Result<AdminSiteSettingsTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
     let viewer = current_user(&session).await?;
@@ -4588,36 +4603,121 @@ async fn admin_site_settings(
         Some(&site.template_name),
     )
     .await?;
-    let export_href = if viewer.admin {
-        Some(format!("/admin/site/{site_id}/export.json"))
+    let membership = if viewer.admin {
+        None
     } else {
-        let membership = get_membership_for_subject(state.db.as_ref(), site_id, &viewer.subject)
+        get_membership_for_subject(state.db.as_ref(), site_id, &viewer.subject)
             .await
             .map_err(|error| {
-                SiteError::internal(format!("failed to load export membership: {error}"))
-            })?;
-        membership
-            .filter(|membership| role_satisfies(membership.role, SiteRole::Owner))
-            .map(|_| format!("/admin/site/{site_id}/export.json"))
+                SiteError::internal(format!("failed to load site membership: {error}"))
+            })?
+    };
+    let can_import_wordpress = viewer.admin
+        || membership
+            .as_ref()
+            .is_some_and(|membership| role_satisfies(membership.role, SiteRole::Author));
+    let export_href = if viewer.admin
+        || membership
+            .as_ref()
+            .is_some_and(|membership| role_satisfies(membership.role, SiteRole::Owner))
+    {
+        Some(format!("/admin/site/{site_id}/export.json"))
+    } else {
+        None
+    };
+
+    let template_shared = AdminTemplateData::new("Site Settings")
+        .with_site_context(site.id, &site.full_title)
+        .with_links(vec![AdminLink::new(
+            &format!("/admin/site/{site_id}/memberships"),
+            "Memberships",
+        )]);
+    let template_shared = if let Some(imported) = query.imported {
+        template_shared.with_toast_message(wordpress_import_message(imported), "imported")
+    } else {
+        template_shared
     };
 
     Ok(AdminSiteSettingsTemplate {
-        template_shared: AdminTemplateData::new("Site Settings")
-            .with_site_context(site.id, &site.full_title)
-            .with_links(vec![AdminLink::new(
-                &format!("/admin/site/{site_id}/memberships"),
-                "Memberships",
-            )]),
-
+        template_shared,
         site_id: site.id,
         site_short_name: site.short_name,
         full_title: site.full_title,
         template_name: site.template_name,
         can_delete_site: viewer.admin,
+        can_import_wordpress,
         export_href,
         templates,
         template_files,
     })
+}
+
+async fn admin_site_wordpress_import(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    mut multipart: Multipart,
+) -> Result<Redirect, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let actor = current_user(&session).await?;
+    let site = get_by_id(state.db.as_ref(), site_id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
+
+    let mut upload_bytes: Option<Vec<u8>> = None;
+    let mut uploaded_name: Option<String> = None;
+
+    loop {
+        let field = multipart.next_field().await.map_err(|error| {
+            SiteError::internal(format!("failed to parse WordPress import upload: {error}"))
+        })?;
+        let Some(field) = field else { break };
+        if field.name() != Some("file") {
+            continue;
+        }
+
+        let uploaded_file_name = field.file_name().map(|value| value.to_string());
+        let bytes = field.bytes().await.map_err(|error| {
+            SiteError::internal(format!("failed to read WordPress import upload: {error}"))
+        })?;
+        if bytes.is_empty() {
+            continue;
+        }
+
+        uploaded_name = uploaded_file_name;
+        upload_bytes = Some(bytes.to_vec());
+        break;
+    }
+
+    let upload_bytes = upload_bytes
+        .ok_or_else(|| SiteError::BadRequest("provide a WordPress XML file".to_string()))?;
+    let xml = String::from_utf8(upload_bytes).map_err(|error| {
+        SiteError::BadRequest(format!("uploaded WordPress XML must be UTF-8: {error}"))
+    })?;
+
+    let txn = state.db.begin().await?;
+    let imported = import_wordpress_xml(&txn, site_id, xml.as_str(), &actor.subject).await?;
+    log_audit_event(
+        &txn,
+        &actor.subject,
+        "import_wordpress",
+        "site",
+        &site.id.to_string(),
+        Some(site.id),
+        Some(json!({
+            "imported": imported,
+            "file_name": uploaded_name,
+        })),
+    )
+    .await
+    .map_err(|error| {
+        SiteError::internal(format!("failed to log WordPress import audit: {error}"))
+    })?;
+    txn.commit().await?;
+
+    Ok(Redirect::to(&format!(
+        "/admin/site/{site_id}/settings?imported={imported}"
+    )))
 }
 
 async fn admin_site_settings_update(
@@ -4676,6 +4776,16 @@ async fn admin_site_settings_update(
     txn.commit().await?;
 
     Ok(Redirect::to(&format!("/admin/site/{site_id}/settings")))
+}
+
+fn wordpress_import_message(imported: usize) -> String {
+    if imported == 0 {
+        "No new WordPress items were imported.".to_string()
+    } else if imported == 1 {
+        "Imported 1 WordPress item.".to_string()
+    } else {
+        format!("Imported {imported} WordPress items.")
+    }
 }
 
 async fn collect_site_media_filenames(
@@ -5298,6 +5408,14 @@ mod tests {
         let boundary = "site-import-boundary";
         let body = format!(
             "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"site-export.json\"\r\nContent-Type: application/json\r\n\r\n{json}\r\n--{boundary}--\r\n"
+        );
+        (boundary.to_string(), body.into_bytes())
+    }
+
+    fn multipart_wordpress_xml_request_body(xml: &str) -> (String, Vec<u8>) {
+        let boundary = "wordpress-import-boundary";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"wordpress.xml\"\r\nContent-Type: application/xml\r\n\r\n{xml}\r\n--{boundary}--\r\n"
         );
         (boundary.to_string(), body.into_bytes())
     }
@@ -5937,5 +6055,127 @@ mod tests {
             .expect("failed to call import route");
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn admin_site_wordpress_import_is_idempotent_per_file() {
+        let db = Arc::new(test_db_start().await);
+        let site = crate::create_site(
+            db.as_ref(),
+            "wordpress-site".to_string(),
+            "WordPress Site".to_string(),
+            DEFAULT_TEMPLATE_NAME.to_string(),
+        )
+        .await
+        .expect("failed to create site");
+        let user = crate::entities::user::create_user(
+            db.as_ref(),
+            "author",
+            Some("author@example.com"),
+            Some("Author"),
+            false,
+        )
+        .await
+        .expect("failed to create author");
+        crate::create_membership(
+            db.as_ref(),
+            crate::NewMembership {
+                site_id: site.id,
+                user_id: user.id,
+                role: SiteRole::Author,
+            },
+        )
+        .await
+        .expect("failed to create author membership");
+
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:wp="http://wordpress.org/export/1.2/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <item>
+      <title>Imported Post</title>
+      <link>https://example.com/2020/01/imported-post/?p=123</link>
+      <wp:post_id>123</wp:post_id>
+      <wp:post_name>imported-post</wp:post_name>
+      <wp:post_type>post</wp:post_type>
+      <wp:status>publish</wp:status>
+      <content:encoded><![CDATA[Hello world]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"#;
+        let (boundary, body) = multipart_wordpress_xml_request_body(xml);
+
+        let session_store = MemoryStore::default();
+        let router = test_app_router(test_admin_state(db.clone()), session_store.clone());
+        let cookie =
+            seed_session_cookie(test_admin_state(db.clone()), session_store.clone(), user.id).await;
+
+        let first_response = router
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/admin/site/{}/settings/wordpress-import", site.id))
+                    .header(header::COOKIE, &cookie)
+                    .header(
+                        header::CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body.clone()))
+                    .expect("failed to build wordpress import request"),
+            )
+            .await
+            .expect("failed to call wordpress import route");
+
+        assert_eq!(first_response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            first_response
+                .headers()
+                .get(header::LOCATION)
+                .expect("missing first location header")
+                .to_str()
+                .expect("invalid first location header"),
+            format!("/admin/site/{}/settings?imported=1", site.id)
+        );
+
+        let first_content = crate::list_content(db.as_ref(), site.id, None)
+            .await
+            .expect("failed to list content after first wordpress import");
+        assert_eq!(first_content.len(), 1);
+
+        let second_response = router
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/admin/site/{}/settings/wordpress-import", site.id))
+                    .header(header::COOKIE, cookie)
+                    .header(
+                        header::CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .expect("failed to build second wordpress import request"),
+            )
+            .await
+            .expect("failed to call wordpress import route a second time");
+
+        assert_eq!(second_response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            second_response
+                .headers()
+                .get(header::LOCATION)
+                .expect("missing second location header")
+                .to_str()
+                .expect("invalid second location header"),
+            format!("/admin/site/{}/settings?imported=0", site.id)
+        );
+
+        let second_content = crate::list_content(db.as_ref(), site.id, None)
+            .await
+            .expect("failed to list content after second wordpress import");
+        assert_eq!(second_content.len(), 1);
     }
 }
