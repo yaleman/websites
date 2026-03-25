@@ -1,14 +1,16 @@
 {% extends "base_template.html" %}
 {% block body %}
-<form method="get" action>
-  <label for="page_type">Page Type</label>
-  <select id="page_type" name="page_type">
-    {% for option in page_type_options %}
-    <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
-    {% endfor %}
-  </select>
+<form method="get" action class="flex flex-wrap items-end gap-2">
+  <div class="min-w-[16rem] flex-1">
+    <label for="page_type">Page Type</label>
+    <select id="page_type" name="page_type">
+      {% for option in page_type_options %}
+      <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
   <input type="hidden" name="sort_by" value="{{ current_sort_by }}" />
-  <button type="submit">Filter</button>
+  <button type="submit" class="shrink-0">Filter</button>
 </form>
 
 {% if !content_rows.is_empty() %}
