@@ -34,7 +34,7 @@
 	}
 
 	h2 {
-		@apply text-lg md:text-xl;
+		@apply text-lg font-bold md:text-xl;
 	}
 
 	h3 {
