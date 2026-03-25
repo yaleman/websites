@@ -1612,8 +1612,7 @@ async fn build_admin_user_profile_template(
         .or(target.email.as_deref())
         .unwrap_or(&target.subject)
         .to_string();
-    let template_shared = AdminTemplateData::new(format!("User Profile: {profile_name}"))
-        .with_links(vec![AdminLink::new("/admin", "Back to dashboard")]);
+    let template_shared = AdminTemplateData::new(format!("User Profile: {profile_name}"));
     let template_shared = if let Some(message) = view_state.page_message {
         if view_state.page_message_is_toast {
             template_shared.with_toast_message(
@@ -2097,8 +2096,7 @@ async fn admin_users(
         .await
         .map_err(|error| SiteError::internal(format!("failed to load users: {error}")))?;
     users.sort_by(|left, right| left.subject.cmp(&right.subject));
-    let template_shared = AdminTemplateData::new("Users")
-        .with_links(vec![AdminLink::new("/admin", "Back to dashboard")]);
+    let template_shared = AdminTemplateData::new("Users");
     let template_shared = if query.created.is_some() {
         template_shared.with_toast_message("User created.", "created")
     } else {
@@ -2209,8 +2207,7 @@ async fn admin_sites_new(State(state): State<AdminState>) -> Result<Response, Si
     let templates =
         get_template_names(state.db.as_ref(), state.site_templates_root.as_path(), None).await?;
     Ok(AdminSitesNewTemplate {
-        template_shared: AdminTemplateData::new("Create Site")
-            .with_links(vec![AdminLink::new("/admin", "Back to dashboard")]),
+        template_shared: AdminTemplateData::new("Create Site"),
         templates,
     }
     .into_response())
@@ -2219,8 +2216,7 @@ async fn admin_sites_new(State(state): State<AdminState>) -> Result<Response, Si
 async fn admin_sites_import(session: Session) -> Result<AdminSitesImportTemplate, SiteError> {
     require_global_admin(&session).await?;
     Ok(AdminSitesImportTemplate {
-        template_shared: AdminTemplateData::new("Import Site")
-            .with_links(vec![AdminLink::new("/admin", "Back to dashboard")]),
+        template_shared: AdminTemplateData::new("Import Site"),
     })
 }
 
@@ -3088,8 +3084,7 @@ async fn get_global_search(
     Ok(AdminSearchTemplate {
         template_shared: AdminTemplateData::new("Search Content")
             .with_message(message)
-            .with_nav_search_value(&query_text)
-            .with_links(vec![AdminLink::new("/admin", "Back to dashboard")]),
+            .with_nav_search_value(&query_text),
         rows,
         show_site_column: true,
     })
