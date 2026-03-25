@@ -1,7 +1,7 @@
 {% extends "base_template.html" %}
 
 {% block body %}
-<section>
+<section class="surface grid gap-4 p-4 md:p-6">
   <h2>Existing memberships</h2>
   {% if memberships.is_empty() %}
   <p>No memberships yet.</p>
@@ -35,8 +35,8 @@
           {% endif %}
         </td>
         <td>
-          <form method="post" action="{{ membership.update_href }}">
-            <select name="role">
+          <form method="post" action="{{ membership.update_href }}" class="flex flex-wrap items-end gap-2">
+            <select name="role" class="w-auto min-w-[10rem]">
               {% for role in SiteRole::all_without_admin() %}
               <option value="{{ role.label() }}" {% if membership.role == role %}selected{% endif %}>
                 {{ role }}</option>
@@ -54,12 +54,12 @@
                 Owner
               </option> #}
             </select>
-            <button type="submit">Update</button>
+            <button type="submit" class="btn shrink-0">Update</button>
           </form>
         </td>
         <td>
           <form method="post" action="{{ membership.remove_href }}">
-            <button type="submit">Remove</button>
+            <button type="submit" class="btn shrink-0">Remove</button>
           </form>
         </td>
       </tr>
@@ -69,60 +69,66 @@
   {% endif %}
 </section>
 
-<section>
+<section class="surface grid gap-4 p-4 md:p-6">
   <h2>Add membership</h2>
-  <form method="post" action="/admin/site/{{ site_id }}/memberships/new" data-membership-create>
-    <label for="membership_user_query">User</label>
-    {% if membership_candidates.is_empty() %}
-    <input id="membership_user_query" name="subject" disabled value="No eligible users available" />
-    {% else %}
-    <div class="membership-autocomplete" data-membership-autocomplete>
-      <input
-        id="membership_user_query"
-        name="subject"
-        data-membership-user-query
-        autocomplete="off"
-        aria-autocomplete="list"
-        aria-controls="membership-user-options"
-        aria-expanded="false"
-        required />
-      <input type="hidden" name="user_id" data-membership-user-id />
-      <div
-        id="membership-user-options"
-        class="membership-autocomplete__menu"
-        data-membership-user-options
-        role="listbox"
-        hidden>
-        {% for candidate in membership_candidates %}
-        <button
-          type="button"
-          class="membership-autocomplete__option"
-          role="option"
-          data-membership-option
-          data-user-id="{{ candidate.user_id }}"
-          data-user-subject="{{ candidate.subject }}"
-          data-search-value="{{ candidate.search_value }}"
-          {% if let Some(email)=candidate.email %}data-user-email="{{ email }}" {% endif %}>
-          <strong>{{ candidate.subject }}</strong>
-          {% if let Some(email) = candidate.email %}
-          <span>{{ email }}</span>
-          {% endif %}
-        </button>
-        {% endfor %}
-        <p class="membership-autocomplete__empty" data-membership-empty hidden>No matching users.</p>
+  <form method="post" action="/admin/site/{{ site_id }}/memberships/new" class="stack-form" data-membership-create>
+    <div class="form-field">
+      <label for="membership_user_query">User</label>
+      {% if membership_candidates.is_empty() %}
+      <input id="membership_user_query" name="subject" disabled value="No eligible users available" />
+      {% else %}
+      <div class="membership-autocomplete" data-membership-autocomplete>
+        <input
+          id="membership_user_query"
+          name="subject"
+          data-membership-user-query
+          autocomplete="off"
+          aria-autocomplete="list"
+          aria-controls="membership-user-options"
+          aria-expanded="false"
+          required />
+        <input type="hidden" name="user_id" data-membership-user-id />
+        <div
+          id="membership-user-options"
+          class="membership-autocomplete__menu"
+          data-membership-user-options
+          role="listbox"
+          hidden>
+          {% for candidate in membership_candidates %}
+          <button
+            type="button"
+            class="membership-autocomplete__option"
+            role="option"
+            data-membership-option
+            data-user-id="{{ candidate.user_id }}"
+            data-user-subject="{{ candidate.subject }}"
+            data-search-value="{{ candidate.search_value }}"
+            {% if let Some(email)=candidate.email %}data-user-email="{{ email }}" {% endif %}>
+            <strong>{{ candidate.subject }}</strong>
+            {% if let Some(email) = candidate.email %}
+            <span>{{ email }}</span>
+            {% endif %}
+          </button>
+          {% endfor %}
+          <p class="membership-autocomplete__empty" data-membership-empty hidden>No matching users.</p>
+        </div>
       </div>
+      <p class="inline-body">Search existing users by email or subject. Users appear here after their first login.</p>
+      {% endif %}
     </div>
-    <p class="inline-body">Search existing users by email or subject. Users appear here after their first login.</p>
-    {% endif %}
 
-    <label for="role">Role</label>
-    <select id="role" name="role" required>
-      {% for role in roles %}
-      <option value="{{ role.label() }}">{{ role }}</option>
-      {% endfor %}
-    </select>
+    <div class="form-field">
+      <label for="role">Role</label>
+      <select id="role" name="role" required>
+        {% for role in roles %}
+        <option value="{{ role.label() }}">{{ role }}</option>
+        {% endfor %}
+      </select>
+    </div>
 
-    <button type="submit" {% if membership_candidates.is_empty() %}disabled{% endif %}>Add member</button>
+    <div class="form-actions">
+      <button type="submit" class="btn" {% if membership_candidates.is_empty() %}disabled{% endif %}>Add member</button>
+    </div>
   </form>
 </section>
 {% endblock %}

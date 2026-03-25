@@ -2649,13 +2649,10 @@ async fn admin_site_memberships(
     Ok(AdminMembershipsTemplate {
         template_shared: AdminTemplateData::new("Memberships")
             .with_site_context(site.id, &site.full_title)
-            .with_links(vec![
-                AdminLink::new(
-                    &format!("/admin/site/{site_id}/content"),
-                    "Back to site dashboard",
-                ),
-                AdminLink::new(&format!("/admin/site/{site_id}/settings"), "Site settings"),
-            ]),
+            .with_links(vec![AdminLink::new(
+                &format!("/admin/site/{site_id}/settings"),
+                "Site settings",
+            )]),
         site_id: site.id,
         site_full_title: site.full_title,
         memberships: membership_rows,
@@ -4607,13 +4604,10 @@ async fn admin_site_settings(
     Ok(AdminSiteSettingsTemplate {
         template_shared: AdminTemplateData::new("Site Settings")
             .with_site_context(site.id, &site.full_title)
-            .with_links(vec![
-                AdminLink::new(
-                    &format!("/admin/site/{site_id}/content"),
-                    "Back to site dashboard",
-                ),
-                AdminLink::new(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
-            ]),
+            .with_links(vec![AdminLink::new(
+                &format!("/admin/site/{site_id}/memberships"),
+                "Memberships",
+            )]),
 
         site_id: site.id,
         site_short_name: site.short_name,
