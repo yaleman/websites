@@ -33,6 +33,7 @@
   </table>
 </section>
 
+{% if !is_admin %}
 <section>
   <h2>Site Memberships</h2>
   {% if memberships.is_empty() %}
@@ -58,6 +59,7 @@
   </table>
   {% endif %}
 </section>
+{% endif %}
 
 {% if can_manage_tokens %}
 <section>

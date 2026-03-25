@@ -456,6 +456,39 @@ test.describe("user profile", () => {
 		}
 	});
 
+	test("hides site memberships on an admin user's profile", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const targetUserId = await createUser(harness, "admin-profile-user", {
+				admin: true,
+			});
+			await addMembership(harness, targetUserId, "viewer");
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				"admin-profile-user",
+			);
+			const response = await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/users/${targetUserId}`,
+				{ waitUntil: "domcontentloaded" },
+			);
+
+			expect(response).not.toBeNull();
+			expect(response?.status()).toBe(200);
+			await expect(
+				page.getByRole("heading", { name: "User Profile: admin-profile-user" }),
+			).toBeVisible();
+			await expect(page.getByRole("heading", { name: "Site Memberships" })).toHaveCount(
+				0,
+			);
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
 	test("blocks a non-admin user from viewing another user's profile", async ({
 		browser,
 	}) => {
