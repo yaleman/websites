@@ -2543,7 +2543,6 @@ async fn admin_site_content_list(
                             &format!("/admin/site/{site_id}/content/scan"),
                             "Scan content",
                         ),
-                        AdminLink::new(&format!("/admin/site/{site_id}/search"), "Search content"),
                         AdminLink::new(
                             &format!("/admin/site/{site_id}/memberships"),
                             "Memberships",
