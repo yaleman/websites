@@ -4,7 +4,7 @@
 <section class="surface grid gap-4 p-4 md:p-6">
   <form method="post" action class="stack-form">
     <div class="form-field">
-      <label for="full_title">Full Title</label>
+      <label for="full_title">Site Title</label>
       <input id="full_title" name="full_title" value="{{ full_title }}" required />
     </div>
     <div class="form-field">
@@ -45,7 +45,8 @@
 <section class="surface grid gap-4 p-4 md:p-6" id="wordpress-import">
   <h2>WordPress Import</h2>
   <p class="inline-body">
-    Upload a WordPress WXR XML export for this site. Imports are idempotent: if you upload the same file again, content that already exists on this site is skipped instead of duplicated.
+    Upload a WordPress WXR XML export for this site. Imports are idempotent: if you upload the same file again, content that already exists on this site is
+    skipped instead of duplicated.
   </p>
   {% if can_import_wordpress %}
   <form method="post" action="/admin/site/{{ site_id }}/settings/wordpress-import" enctype="multipart/form-data" class="stack-form">
