@@ -3,6 +3,7 @@ import { defineConfig } from "@rspack/cli";
 
 export default defineConfig({
 	entry: {
+		admin: "./assets/admin/admin.ts",
 		editor: "./assets/admin/editor.ts",
 		remediation: "./assets/admin/remediation.ts",
 	},
@@ -23,6 +24,10 @@ export default defineConfig({
 						},
 					},
 				],
+			},
+			{
+				test: /\.css$/,
+				use: ["postcss-loader"],
 			},
 		],
 	},

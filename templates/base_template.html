@@ -10,15 +10,15 @@
     {% block header %}
     {% endblock %}
   </head>
-  <body>
-    <main>
+  <body class="min-h-dvh bg-slate-100 text-slate-900 antialiased">
+    <main class="mx-auto flex min-h-dvh w-full max-w-[1680px] flex-col gap-3 px-3 py-3 md:px-5 md:py-4">
       <header class="page-header">
-        <h1 class="page-title">{{ template_shared.page_title }}</h1>
+        <h1 class="page-title m-0 text-2xl font-semibold tracking-tight text-slate-950 md:text-3xl">{{ template_shared.page_title }}</h1>
         {% if let Some(site_full_title) = template_shared.site_full_title %}
-        <p class="page-site-indicator" aria-label="Active site">{{ site_full_title }}</p>
+        <p class="page-site-indicator hidden m-0 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-right text-sm font-medium text-slate-600 shadow-sm md:block" aria-label="Active site">{{ site_full_title }}</p>
         {% endif %}
       </header>
-      <nav>
+      <nav class="flex w-full flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-slate-950 px-3 py-2 text-sm shadow-sm shadow-slate-200/60">
         <a href="/admin">Dashboard</a>
         {% if let Some(site_id) = template_shared.site_id %}
         <a href="/admin/site/{{ site_id }}/content">Site Content</a>
@@ -27,12 +27,13 @@
         <a href="/admin/users/me">My Profile</a>
         <a href="/admin/logout">Logout</a>
         {% block nav_links %}{% endblock %}
-        <form class="nav-search" method="get" action="{{ template_shared.nav_search_action }}">
+        <form class="nav-search ml-auto min-w-[12rem] flex-1 max-w-sm" method="get" action="{{ template_shared.nav_search_action }}">
           <input
             id="nav-search-query"
             type="search"
             name="q"
             value="{{ template_shared.nav_search_value }}"
+            class="border-slate-700 bg-slate-900 text-white placeholder:text-slate-400 focus:border-slate-500 focus:ring-slate-700"
             placeholder="Search"
             aria-label="Search" />
         </form>
@@ -40,16 +41,16 @@
 
       {% if let Some(message) = template_shared.page_message %}
       <p
-        id="message" class="message{% if template_shared.page_message_is_toast %} message--toast{% endif %}"
+        id="message" class="message rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm{% if template_shared.page_message_is_toast %} message--toast{% endif %}"
         {% if template_shared.page_message_is_toast %}data-auto-dismiss-ms="2000" {% endif %}
         {% if let Some(clear_query_param)=template_shared.clear_query_param %}data-clear-query-param="{{ clear_query_param }}" {% endif %}>{{ message }}</p>
       {% endif %}
 
       {% if !template_shared.links.is_empty() %}
       <!-- <h2>Actions</h2> -->
-      <ul class="shared-actions">
+      <ul class="shared-actions m-0 flex list-none flex-wrap gap-2 p-0">
         {% for link in template_shared.links %}
-        <li><a href="{{ link.href }}" {% if let Some(target)=link.target %} target="{{ target }}" {% endif %}>{{ link.label }}</a></li>
+        <li class="rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm"><a class="font-medium no-underline" href="{{ link.href }}" {% if let Some(target)=link.target %} target="{{ target }}" {% endif %}>{{ link.label }}</a></li>
         {% endfor %}
       </ul>
       {% endif %}
