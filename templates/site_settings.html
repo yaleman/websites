@@ -42,18 +42,6 @@
   </dl>
 </section>
 
-{% if can_delete_site %}
-<section class="surface grid gap-4 p-4 md:p-6">
-  <h2>Danger Zone</h2>
-  <p class="inline-body">
-    Deleting a site removes its content, memberships, tags, assets, and template overrides.
-  </p>
-  <p>
-    <a href="/admin/site/{{ site_id }}/delete">Delete site</a>
-  </p>
-</section>
-{% endif %}
-
 <section class="surface grid gap-4 p-4 md:p-6">
   <h2>Template Overrides</h2>
   <p class="inline-body">
@@ -87,4 +75,16 @@
     </tbody>
   </table>
 </section>
+
+{% if can_delete_site %}
+<section class="surface grid gap-4 p-4 md:p-6">
+  <h2>Danger Zone</h2>
+  <p class="inline-body">
+    Deleting a site removes its content, memberships, tags, assets, and template overrides.
+  </p>
+  <p>
+    <a href="/admin/site/{{ site_id }}/delete" class="btn btn--danger">Delete site</a>
+  </p>
+</section>
+{% endif %}
 {% endblock %}
