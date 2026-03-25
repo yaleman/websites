@@ -6,7 +6,7 @@ import {
 	request as playwrightRequest,
 } from "@playwright/test";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -350,6 +350,7 @@ export function extractCsrfToken(html: string): string {
 export async function setupHarness(): Promise<TestHarness> {
 	const tempRoot = await mkdtemp(path.join(tmpdir(), "websites-e2e-"));
 	const uploadRoot = path.join(tempRoot, "uploads");
+	const siteTemplatesRoot = path.join(tempRoot, "site_templates");
 	const dbPath = path.join(tempRoot, "database.sqlite");
 	const databaseUrl = `sqlite://${dbPath}?mode=rwc`;
 	const env = { ...process.env, WEBSITES_UPLOAD_ROOT: uploadRoot };
@@ -359,9 +360,13 @@ export async function setupHarness(): Promise<TestHarness> {
 		path.join(workspaceRoot, "admin-ui-assets"),
 		path.join(tempRoot, "admin-ui-assets"),
 	);
-	await symlink(
-		path.join(workspaceRoot, "site_templates"),
-		path.join(tempRoot, "site_templates"),
+	await mkdir(siteTemplatesRoot, { recursive: true });
+	await cp(
+		path.join(workspaceRoot, "site_templates", "default"),
+		path.join(siteTemplatesRoot, "default"),
+		{
+			recursive: true,
+		},
 	);
 
 	await runWebsitesCommand(
@@ -486,6 +491,7 @@ export async function createMembership(
 	harness: TestHarness,
 	userId: string,
 	role: SiteRole,
+	siteId = harness.siteId,
 ): Promise<string> {
 	const result = await runWebsitesCommand(
 		[
@@ -501,7 +507,7 @@ export async function createMembership(
 			"site",
 			"member-add",
 			"--site-id",
-			harness.siteId,
+			siteId,
 			"--user-id",
 			userId,
 			"--role",
