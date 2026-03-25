@@ -101,16 +101,6 @@
 		@apply min-h-32;
 	}
 
-	button,
-	input[type="submit"] {
-		@apply inline-flex cursor-pointer items-center justify-center rounded-md border border-violet-800 bg-violet-900 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-violet-800 focus:outline-none focus:ring-2 focus:ring-violet-300 disabled:cursor-not-allowed disabled:opacity-50;
-	}
-
-	button.save,
-	input[type="submit"].save {
-		@apply border-emerald-600 bg-emerald-600 hover:bg-emerald-700;
-	}
-
 	input[type="checkbox"] {
 		@apply h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-300;
 	}
@@ -121,6 +111,18 @@
 }
 
 @layer components {
+	.btn,
+	button,
+	input[type="submit"] {
+		@apply inline-flex cursor-pointer items-center justify-center rounded-md border border-violet-800 bg-violet-900 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:border-violet-900 hover:bg-transparent hover:text-violet-950 focus:outline-none focus:ring-2 focus:ring-violet-300 disabled:cursor-not-allowed disabled:opacity-50;
+	}
+
+	.btn--save,
+	button.save,
+	input[type="submit"].save {
+		@apply border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-transparent hover:text-emerald-950 focus:ring-emerald-300;
+	}
+
 	.page-header {
 		@apply flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white/90 px-4 py-4 shadow-sm shadow-slate-200/60 md:flex-row md:items-start md:justify-between;
 	}
