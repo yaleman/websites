@@ -1,7 +1,7 @@
 {% extends "base_template.html" %}
 
 {% block body %}
-<section>
+<section class="surface grid gap-4 p-4 md:p-6">
   <h2>Details</h2>
   <table>
     <tbody>
@@ -34,7 +34,7 @@
 </section>
 
 {% if !is_admin %}
-<section>
+<section class="surface grid gap-4 p-4 md:p-6">
   <h2>Site Memberships</h2>
   {% if memberships.is_empty() %}
   <p>No site memberships.</p>
@@ -62,28 +62,30 @@
 {% endif %}
 
 {% if can_manage_tokens %}
-<section>
+<section class="surface grid gap-4 p-4 md:p-6">
   <h2>Issue API Token</h2>
   <p>Issued tokens expire 7 days after last successful use.</p>
-  <form method="post" action="/admin/users/{{ user_id }}/tokens">
+  <form method="post" action="/admin/users/{{ user_id }}/tokens" class="stack-form">
     <input type="hidden" name="csrf_token" value="{{ issue_token_csrf_token }}" />
-    <label for="token_label">Label</label>
-    <input id="token_label" name="label" required />
+    <div class="form-field">
+      <label for="token_label">Label</label>
+      <input id="token_label" name="label" required />
+    </div>
 
-    <fieldset>
+    <fieldset class="form-field">
       <legend>Grant Mode</legend>
-      <label for="grant_mode_current">
+      <label for="grant_mode_current" class="inline-checkbox">
         <input id="grant_mode_current" type="radio" name="grant_mode" value="current" checked />
         Current user access
       </label>
-      <label for="grant_mode_restricted">
+      <label for="grant_mode_restricted" class="inline-checkbox">
         <input id="grant_mode_restricted" type="radio" name="grant_mode" value="restricted" />
         Restricted access
       </label>
     </fieldset>
 
     {% if is_admin %}
-    <label for="grant_admin">
+    <label for="grant_admin" class="inline-checkbox">
       <input id="grant_admin" type="checkbox" name="grant_admin" value="true" />
       Allow global admin access in restricted mode
     </label>
@@ -122,21 +124,25 @@
             </select>
           </td>
         </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% endif %}
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
 
-    <button type="submit">Issue token</button>
+    <div class="form-actions">
+      <button type="submit" class="btn">Issue token</button>
+    </div>
   </form>
 
   {% if let Some(issued_token) = issued_token %}
-  <label for="issued_token">Issued Token</label>
-  <textarea id="issued_token" rows="8" readonly>{{ issued_token }}</textarea>
+  <div class="form-field">
+    <label for="issued_token">Issued Token</label>
+    <textarea id="issued_token" rows="8" readonly>{{ issued_token }}</textarea>
+  </div>
   {% endif %}
 </section>
 
-<section>
+<section class="surface grid gap-4 p-4 md:p-6">
   <h2>Issued API Tokens</h2>
   {% if tokens.is_empty() %}
   <p>No tokens issued.</p>
