@@ -1202,7 +1202,16 @@ pub async fn import_wordpress<C: ConnectionTrait>(
     creator_sub: &str,
 ) -> Result<usize, SiteError> {
     let xml = fs::read_to_string(file_path).await?;
-    let items = parse_wordpress_wxr(xml.as_str())?;
+    import_wordpress_xml(db, site_id, &xml, creator_sub).await
+}
+
+pub async fn import_wordpress_xml<C: ConnectionTrait>(
+    db: &C,
+    site_id: Uuid,
+    xml: &str,
+    creator_sub: &str,
+) -> Result<usize, SiteError> {
+    let items = parse_wordpress_wxr(xml)?;
     let mut imported = 0usize;
 
     for item in items {
