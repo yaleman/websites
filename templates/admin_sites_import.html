@@ -4,13 +4,9 @@
   Upload a site export JSON file to create a new site record with its related database content.
 </p>
 
-<p class="inline-body">
-  Site export v1 restores database rows only. Uploaded media bytes and template override contents are not included in the export and will not be recreated during import.
-</p>
-
 <form method="post" action enctype="multipart/form-data" class="stack-form">
   <div class="form-field">
-    <label for="file">Site Export JSON</label>
+    <label for="file">Select File</label>
     <input id="file" name="file" type="file" accept="application/json,.json" required />
   </div>
 
