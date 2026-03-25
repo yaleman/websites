@@ -16,6 +16,11 @@ axum-server = { version = "0.8.0", features = ["tokio-rustls", "tls-rustls"] }
 chrono = "0.4.44"
 clap = { version = "4.6.0", features = ["derive", "env"] }
 compact_jwt = "0.5.5"
+gix = { version = "0.81.0", default-features = false, features = [
+    "blocking-network-client",
+    "sha1",
+    "worktree-mutation",
+] }
 glob = "0.3.3"
 image = "0.25.10"
 markdown = "1.0.0"

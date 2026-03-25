@@ -16,6 +16,10 @@ use crate::entities::{self, PageType};
 use crate::errors::SiteError;
 use crate::middleware::log_requests;
 use crate::oidc::{admin_login_callback, build_http_client, build_oidc_client};
+use crate::theme_registry::{
+    ThemeAdminRow, ThemeInstallRequest, available_template_names, delete_theme, install_theme,
+    theme_admin_rows, update_theme,
+};
 use crate::tls::build_tls_config;
 use crate::token_auth::{
     self, TokenGrantSet, TokenSiteGrant, deserialize_grants_json, ensure_jwt_hs256_secret,
@@ -169,6 +173,7 @@ pub(crate) struct AdminState {
     pub(crate) jwt_signer: Arc<compact_jwt::JwsHs256Signer>,
     pub(crate) jwt_issuer: String,
     pub(crate) upload_root: PathBuf,
+    pub(crate) site_templates_root: PathBuf,
 }
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
@@ -176,6 +181,14 @@ pub(crate) struct AdminState {
 struct AdminIndexTemplate {
     template_shared: AdminTemplateData,
     sites: Vec<crate::entities::site::Model>,
+}
+
+#[allow(dead_code)]
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_themes.html")]
+struct AdminThemesTemplate {
+    template_shared: AdminTemplateData,
+    themes: Vec<ThemeAdminRow>,
 }
 
 #[allow(dead_code)]
@@ -650,6 +663,13 @@ struct UpdateSiteSettingsForm {
 }
 
 #[derive(Debug, Deserialize)]
+struct ThemeInstallForm {
+    repo_url: String,
+    slug: Option<String>,
+    branch: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct CsrfTokenForm {
     csrf_token: String,
 }
@@ -663,6 +683,13 @@ struct DashboardQuery {
 #[derive(Debug, Deserialize)]
 struct AdminUsersQuery {
     created: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminThemesQuery {
+    installed: Option<String>,
+    updated: Option<String>,
+    deleted: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1777,6 +1804,15 @@ fn build_admin_app(state: AdminState, assets_dir: &StdPath, upload_root: &StdPat
             "/admin/site/{site_id}/settings",
             get(admin_site_settings).post(admin_site_settings_update),
         )
+        .route("/admin/themes", get(admin_themes).post(admin_themes_create))
+        .route(
+            "/admin/themes/{slug}/update",
+            axum::routing::post(admin_theme_update),
+        )
+        .route(
+            "/admin/themes/{slug}/delete",
+            axum::routing::post(admin_theme_delete),
+        )
         .route(
             "/admin/site/{site_id}/delete",
             get(admin_site_delete_confirm).post(admin_site_delete),
@@ -1833,6 +1869,7 @@ pub async fn run_admin_server(
         jwt_signer: Arc::new(jwt_signer),
         jwt_issuer: oidc.frontend_url.to_string(),
         upload_root: upload_root.clone(),
+        site_templates_root: PathBuf::from(crate::constants::SITE_TEMPLATES_DIR),
     };
 
     let pool = db.get_sqlite_connection_pool();
@@ -2031,6 +2068,7 @@ async fn get_index(
     let mut links = vec![AdminLink::new("/admin/sites/new", "New site")];
     if viewer.admin {
         links.push(AdminLink::new("/admin/sites/import", "Import site"));
+        links.push(AdminLink::new("/admin/themes", "Themes"));
         links.push(AdminLink::new("/admin/users", "Users"));
     }
 
@@ -2167,14 +2205,15 @@ async fn admin_users_create(
     Ok(Redirect::to("/admin/users?created=1"))
 }
 
-async fn admin_sites_new() -> Response {
-    AdminSitesNewTemplate {
+async fn admin_sites_new(State(state): State<AdminState>) -> Result<Response, SiteError> {
+    let templates =
+        get_template_names(state.db.as_ref(), state.site_templates_root.as_path(), None).await?;
+    Ok(AdminSitesNewTemplate {
         template_shared: AdminTemplateData::new("Create Site")
             .with_links(vec![AdminLink::new("/admin", "Back to dashboard")]),
-
-        templates: get_template_names().await,
+        templates,
     }
-    .into_response()
+    .into_response())
 }
 
 async fn admin_sites_import(session: Session) -> Result<AdminSitesImportTemplate, SiteError> {
@@ -2234,6 +2273,112 @@ async fn admin_sites_import_create(
     txn.commit().await?;
 
     Ok(Redirect::to("/admin?imported=1"))
+}
+
+async fn admin_themes(
+    State(state): State<AdminState>,
+    session: Session,
+    Query(query): Query<AdminThemesQuery>,
+) -> Result<AdminThemesTemplate, SiteError> {
+    require_global_admin(&session).await?;
+    let themes = theme_admin_rows(state.db.as_ref(), state.site_templates_root.as_path()).await?;
+    let template_shared = AdminTemplateData::new("Themes")
+        .with_links(vec![AdminLink::new("/admin", "Back to dashboard")]);
+    let template_shared = if query.installed.is_some() {
+        template_shared.with_toast_message("Theme installed.", "installed")
+    } else if query.updated.is_some() {
+        template_shared.with_toast_message("Theme updated.", "updated")
+    } else if query.deleted.is_some() {
+        template_shared.with_toast_message("Theme deleted.", "deleted")
+    } else {
+        template_shared
+    };
+
+    Ok(AdminThemesTemplate {
+        template_shared,
+        themes,
+    })
+}
+
+async fn admin_themes_create(
+    State(state): State<AdminState>,
+    session: Session,
+    Form(form): Form<ThemeInstallForm>,
+) -> Result<Redirect, SiteError> {
+    let actor = require_global_admin(&session).await?.subject;
+    let repo_url = form.repo_url.trim().to_string();
+    if repo_url.is_empty() {
+        return Err(SiteError::BadRequest("missing repository url".to_string()));
+    }
+
+    let request = ThemeInstallRequest {
+        slug: form.slug.and_then(|value| {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        }),
+        repo_url,
+        branch: form.branch.and_then(|value| {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        }),
+    };
+    let model = install_theme(
+        state.db.as_ref(),
+        &actor,
+        state.site_templates_root.as_path(),
+        request,
+    )
+    .await?;
+
+    Ok(Redirect::to(&format!(
+        "/admin/themes?installed={}",
+        model.slug
+    )))
+}
+
+async fn admin_theme_update(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(slug): Path<String>,
+) -> Result<Redirect, SiteError> {
+    let actor = require_global_admin(&session).await?.subject;
+    let model = update_theme(
+        state.db.as_ref(),
+        &actor,
+        &slug,
+        state.site_templates_root.as_path(),
+    )
+    .await?;
+
+    Ok(Redirect::to(&format!(
+        "/admin/themes?updated={}",
+        model.slug
+    )))
+}
+
+async fn admin_theme_delete(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(slug): Path<String>,
+) -> Result<Redirect, SiteError> {
+    let actor = require_global_admin(&session).await?.subject;
+    delete_theme(
+        state.db.as_ref(),
+        &actor,
+        &slug,
+        state.site_templates_root.as_path(),
+    )
+    .await?;
+
+    Ok(Redirect::to("/admin/themes?deleted=1"))
 }
 
 async fn ensure_site_owner_membership<C: ConnectionTrait>(
@@ -3597,7 +3742,10 @@ async fn admin_site_content_preview(
         state.db.as_ref(),
         site_id,
         content_id,
-        crate::SITE_TEMPLATES_DIR,
+        state
+            .site_templates_root
+            .to_str()
+            .expect("theme root should be valid utf-8"),
     )
     .await?;
     Ok(Html(rewrite_preview_asset_urls(&rendered, site_id)))
@@ -3613,7 +3761,8 @@ async fn admin_site_preview_asset(
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
     let safe_asset_path = sanitize_preview_asset_path(&asset_path)?;
-    let file_path = StdPath::new(crate::SITE_TEMPLATES_DIR)
+    let file_path = state
+        .site_templates_root
         .join(site.template_name)
         .join("assets")
         .join(safe_asset_path);
@@ -4327,21 +4476,12 @@ fn parse_optional_datetime(
         .transpose()
 }
 
-async fn get_template_names() -> Vec<String> {
-    let mut templates = vec!["default".to_string()];
-    if let Ok(mut entries) = fs::read_dir(crate::constants::SITE_TEMPLATES_DIR).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            if let Ok(file_type) = entry.file_type().await
-                && file_type.is_dir()
-                && entry.file_name() != "default"
-                && let Some(name) = entry.file_name().to_str()
-            {
-                templates.push(name.to_string());
-            }
-        }
-    }
-
-    templates
+async fn get_template_names(
+    db: &DatabaseConnection,
+    templates_root: &StdPath,
+    include_name: Option<&str>,
+) -> Result<Vec<String>, SiteError> {
+    available_template_names(db, templates_root, include_name).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -4367,6 +4507,7 @@ fn site_template_reset_href(site_id: Uuid, file_name: &str) -> String {
 }
 
 async fn describe_template_source_origin(
+    templates_root: &StdPath,
     site_id: Uuid,
     template_name: &str,
     file_name: &str,
@@ -4376,9 +4517,7 @@ async fn describe_template_source_origin(
         return Ok(("site override".to_string(), true));
     }
 
-    let shared_path = StdPath::new(crate::constants::SITE_TEMPLATES_DIR)
-        .join(template_name)
-        .join(file_name);
+    let shared_path = templates_root.join(template_name).join(file_name);
     if fs::metadata(&shared_path).await.is_ok() {
         return Ok((format!("shared template ({template_name})"), false));
     }
@@ -4387,6 +4526,7 @@ async fn describe_template_source_origin(
 }
 
 async fn load_editable_template_source(
+    templates_root: &StdPath,
     site_id: Uuid,
     template_name: &str,
     file_name: &str,
@@ -4396,16 +4536,12 @@ async fn load_editable_template_source(
         return Ok((source, "site override".to_string(), true));
     }
 
-    let shared_path = StdPath::new(crate::constants::SITE_TEMPLATES_DIR)
-        .join(template_name)
-        .join(file_name);
+    let shared_path = templates_root.join(template_name).join(file_name);
     if let Ok(source) = fs::read_to_string(&shared_path).await {
         return Ok((source, format!("shared template ({template_name})"), false));
     }
 
-    let default_path = StdPath::new(crate::constants::SITE_TEMPLATES_DIR)
-        .join(DEFAULT_TEMPLATE_NAME)
-        .join(file_name);
+    let default_path = templates_root.join(DEFAULT_TEMPLATE_NAME).join(file_name);
     let source = fs::read_to_string(&default_path).await.map_err(|error| {
         SiteError::internal(format!(
             "failed to load default template {file_name}: {error}"
@@ -4419,13 +4555,15 @@ async fn load_editable_template_source(
 }
 
 async fn build_site_template_file_rows(
+    templates_root: &StdPath,
     site_id: Uuid,
     template_name: &str,
 ) -> Result<Vec<AdminSiteTemplateFileRow>, SiteError> {
     let mut rows = Vec::with_capacity(CUSTOMIZABLE_TEMPLATE_FILES.len());
     for file_name in CUSTOMIZABLE_TEMPLATE_FILES {
         let (source_origin, override_exists) =
-            describe_template_source_origin(site_id, template_name, file_name).await?;
+            describe_template_source_origin(templates_root, site_id, template_name, file_name)
+                .await?;
         rows.push(AdminSiteTemplateFileRow {
             file_name: file_name.to_string(),
             source_origin,
@@ -4448,7 +4586,18 @@ async fn admin_site_settings(
     let site = get_by_id(state.db.as_ref(), site_id)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
-    let template_files = build_site_template_file_rows(site.id, &site.template_name).await?;
+    let template_files = build_site_template_file_rows(
+        state.site_templates_root.as_path(),
+        site.id,
+        &site.template_name,
+    )
+    .await?;
+    let templates = get_template_names(
+        state.db.as_ref(),
+        state.site_templates_root.as_path(),
+        Some(&site.template_name),
+    )
+    .await?;
     let export_href = if viewer.admin {
         Some(format!("/admin/site/{site_id}/export.json"))
     } else {
@@ -4479,7 +4628,7 @@ async fn admin_site_settings(
         template_name: site.template_name,
         can_delete_site: viewer.admin,
         export_href,
-        templates: get_template_names().await,
+        templates,
         template_files,
     })
 }
@@ -4501,10 +4650,24 @@ async fn admin_site_settings_update(
         return Err(SiteError::internal("missing template name".to_string()));
     }
 
-    let txn = state.db.begin().await?;
     let actor = actor.clone();
     let full_title = full_title.clone();
     let template_name = template_name.clone();
+    let valid_templates = get_template_names(
+        state.db.as_ref(),
+        state.site_templates_root.as_path(),
+        Some(&template_name),
+    )
+    .await?;
+    if !valid_templates
+        .iter()
+        .any(|candidate| candidate == &template_name)
+    {
+        return Err(SiteError::BadRequest(format!(
+            "unknown template: {template_name}"
+        )));
+    }
+    let txn = state.db.begin().await?;
     let site = update_site_settings(&txn, site_id, full_title, template_name)
         .await
         .map_err(|error| SiteError::internal(format!("failed to update site: {error}")))?;
@@ -4665,8 +4828,13 @@ async fn admin_site_template_editor(
     let site = get_by_id(state.db.as_ref(), site_id)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
-    let (source, source_origin, override_exists) =
-        load_editable_template_source(site.id, &site.template_name, file_name).await?;
+    let (source, source_origin, override_exists) = load_editable_template_source(
+        state.site_templates_root.as_path(),
+        site.id,
+        &site.template_name,
+        file_name,
+    )
+    .await?;
 
     let template_shared = AdminTemplateData::new(format!("Template Override: {file_name}"))
         .with_site_context(site.id, &site.full_title)
@@ -4796,7 +4964,7 @@ async fn admin_site_render(
     render_site(
         state.db.as_ref(),
         site_id,
-        std::path::Path::new(crate::constants::SITE_TEMPLATES_DIR),
+        state.site_templates_root.as_path(),
         std::path::Path::new(crate::constants::RENDERED_DIR),
         &resolve_upload_root(),
     )
@@ -4844,6 +5012,7 @@ async fn admin_site_export(
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use crate::constants::SESSION_USER;
@@ -4998,7 +5167,19 @@ mod tests {
         Ok(StatusCode::NO_CONTENT)
     }
 
-    async fn seed_session_cookie(router: Router, user_id: Uuid) -> String {
+    async fn seed_session_cookie(
+        state: AdminState,
+        session_store: MemoryStore,
+        user_id: Uuid,
+    ) -> String {
+        let router = Router::new()
+            .route("/test-login/{user_id}", get(test_login))
+            .layer(
+                SessionManagerLayer::new(session_store)
+                    .with_secure(false)
+                    .with_expiry(Expiry::OnSessionEnd),
+            )
+            .with_state(state);
         let response = router
             .oneshot(
                 Request::builder()
@@ -5023,6 +5204,30 @@ mod tests {
             .to_string()
     }
 
+    fn copy_dir_recursive(source: &StdPath, target: &StdPath) {
+        std::fs::create_dir_all(target).expect("failed to create template fixture target");
+        for entry in std::fs::read_dir(source).expect("failed to read template fixture source") {
+            let entry = entry.expect("failed to read template fixture entry");
+            let entry_path = entry.path();
+            let target_path = target.join(entry.file_name());
+            if entry_path.is_dir() {
+                copy_dir_recursive(&entry_path, &target_path);
+            } else {
+                std::fs::copy(&entry_path, &target_path)
+                    .expect("failed to copy template fixture file");
+            }
+        }
+    }
+
+    fn test_site_templates_root() -> tempfile::TempDir {
+        let root = tempfile::tempdir().expect("failed to create temp template root");
+        let default_source =
+            std::path::Path::new(crate::constants::SITE_TEMPLATES_DIR).join("default");
+        let default_target = root.path().join("default");
+        copy_dir_recursive(&default_source, &default_target);
+        root
+    }
+
     fn test_admin_state(db: std::sync::Arc<DatabaseConnection>) -> AdminState {
         let jwt_signer = signer_from_secret(&token_auth::JwtHs256SecretSetting {
             secret_bytes: vec![7; 32],
@@ -5041,11 +5246,13 @@ mod tests {
             jwt_signer: Arc::new(jwt_signer),
             jwt_issuer: "https://example.com".to_string(),
             upload_root: std::env::temp_dir().join(format!("websites-test-{}", Uuid::now_v7())),
+            site_templates_root: std::env::temp_dir()
+                .join(format!("websites-templates-test-{}", Uuid::now_v7())),
         }
     }
 
-    fn site_transfer_test_router(state: AdminState) -> Router {
-        let session_layer = SessionManagerLayer::new(MemoryStore::default())
+    fn site_transfer_test_router(state: AdminState, session_store: MemoryStore) -> Router {
+        let session_layer = SessionManagerLayer::new(session_store)
             .with_secure(false)
             .with_expiry(Expiry::OnSessionEnd);
         let protected = Router::new()
@@ -5071,15 +5278,23 @@ mod tests {
         #[allow(dead_code)]
         /// These are kept around for lifecycle reasons
         upload_root: tempfile::TempDir,
+        #[allow(dead_code)]
+        /// These are kept around for lifecycle reasons
+        site_templates_root: tempfile::TempDir,
+        #[allow(dead_code)]
+        /// These are kept around for lifecycle reasons
+        session_store: MemoryStore,
     }
 
-    fn test_app_router(mut state: AdminState) -> TestRouter {
-        let session_layer = SessionManagerLayer::new(MemoryStore::default())
+    fn test_app_router(mut state: AdminState, session_store: MemoryStore) -> TestRouter {
+        let session_layer = SessionManagerLayer::new(session_store.clone())
             .with_secure(false)
             .with_expiry(Expiry::OnSessionEnd);
         let assets_dir = tempfile::tempdir().expect("failed to create temp assets dir");
         let upload_root = tempfile::tempdir().expect("failed to create temp upload root");
+        let site_templates_root = test_site_templates_root();
         state.upload_root = upload_root.path().to_path_buf();
+        state.site_templates_root = site_templates_root.path().to_path_buf();
 
         let router =
             build_admin_app(state, assets_dir.path(), upload_root.path()).layer(session_layer);
@@ -5087,6 +5302,8 @@ mod tests {
             router,
             assets_dir,
             upload_root,
+            site_templates_root,
+            session_store,
         }
     }
 
@@ -5098,10 +5315,49 @@ mod tests {
         (boundary.to_string(), body.into_bytes())
     }
 
+    fn git_command(dir: &StdPath, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "Codex")
+            .env("GIT_AUTHOR_EMAIL", "codex@example.com")
+            .env("GIT_COMMITTER_NAME", "Codex")
+            .env("GIT_COMMITTER_EMAIL", "codex@example.com")
+            .args(args)
+            .status()
+            .expect("failed to run git command");
+        assert!(status.success(), "git command failed: {:?}", args);
+    }
+
+    fn create_theme_repo(theme_content: &str) -> tempfile::TempDir {
+        let repo = tempfile::tempdir().expect("failed to create theme repo");
+        git_command(repo.path(), &["init", "-b", "main"]);
+        std::fs::write(repo.path().join("theme.txt"), theme_content)
+            .expect("failed to write theme file");
+        git_command(repo.path(), &["add", "theme.txt"]);
+        git_command(repo.path(), &["commit", "-m", "initial theme"]);
+        repo
+    }
+
+    fn update_theme_repo(repo: &StdPath, theme_content: &str, message: &str) {
+        std::fs::write(repo.join("theme.txt"), theme_content).expect("failed to update theme file");
+        git_command(repo, &["add", "theme.txt"]);
+        git_command(repo, &["commit", "-m", message]);
+    }
+
+    fn urlencoded_theme_form(repo_url: &str, slug: Option<&str>) -> String {
+        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+        serializer.append_pair("repo_url", repo_url);
+        if let Some(slug) = slug {
+            serializer.append_pair("slug", slug);
+        }
+        serializer.finish()
+    }
+
     #[tokio::test]
     async fn health_check_is_public_and_returns_json_ok() {
         let db = test_db_start().await;
-        let test_router = test_app_router(test_admin_state(db.into()));
+        let session_store = MemoryStore::default();
+        let test_router = test_app_router(test_admin_state(db.into()), session_store);
 
         let response = test_router
             .router
@@ -5132,10 +5388,317 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn admin_site_export_allows_owner_and_sets_download_headers() {
-        let db = test_db_start().await;
+    async fn admin_themes_install_succeeds_for_global_admin() {
+        let db = std::sync::Arc::new(test_db_start().await);
+        let admin = crate::entities::user::create_user(
+            db.as_ref(),
+            "admin",
+            Some("admin@example.com"),
+            Some("Admin"),
+            true,
+        )
+        .await
+        .expect("failed to create admin");
+        let repo = create_theme_repo("version-one");
+        let session_store = MemoryStore::default();
+        let router = test_app_router(test_admin_state(db.clone()), session_store.clone());
+        let cookie = seed_session_cookie(
+            test_admin_state(db.clone()),
+            session_store.clone(),
+            admin.id,
+        )
+        .await;
+        let body = urlencoded_theme_form(
+            repo.path().to_str().expect("repo path should be utf-8"),
+            Some("sample-theme"),
+        );
+
+        let response = router
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/themes")
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .expect("failed to build install request"),
+            )
+            .await
+            .expect("failed to call install route");
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::LOCATION)
+                .expect("missing location header")
+                .to_str()
+                .expect("invalid location header"),
+            "/admin/themes?installed=sample-theme"
+        );
+
+        let installed_file = router
+            .site_templates_root
+            .path()
+            .join("sample-theme")
+            .join("theme.txt");
+        let installed_content =
+            std::fs::read_to_string(&installed_file).expect("failed to read installed theme file");
+        assert_eq!(installed_content, "version-one");
+
+        let admin_page = router
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/sites/new")
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .expect("failed to build new site request"),
+            )
+            .await
+            .expect("failed to load create-site page");
+        assert_eq!(admin_page.status(), StatusCode::OK);
+        let body = to_bytes(admin_page.into_body(), usize::MAX)
+            .await
+            .expect("failed to read create-site body");
+        assert!(
+            String::from_utf8_lossy(&body).contains("sample-theme"),
+            "expected create-site page to list installed theme"
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_themes_install_rejects_non_admin_users() {
+        let db = std::sync::Arc::new(test_db_start().await);
+        let user = crate::entities::user::create_user(
+            db.as_ref(),
+            "viewer",
+            Some("viewer@example.com"),
+            Some("Viewer"),
+            false,
+        )
+        .await
+        .expect("failed to create viewer");
+        let repo = create_theme_repo("version-one");
+        let session_store = MemoryStore::default();
+        let router = test_app_router(test_admin_state(db.clone()), session_store.clone());
+        let cookie =
+            seed_session_cookie(test_admin_state(db.clone()), session_store.clone(), user.id).await;
+        let body = urlencoded_theme_form(
+            repo.path().to_str().expect("repo path should be utf-8"),
+            Some("blocked-theme"),
+        );
+
+        let response = router
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/themes")
+                    .header(header::COOKIE, cookie)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .expect("failed to build install request"),
+            )
+            .await
+            .expect("failed to call install route");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn admin_themes_update_refreshes_from_source_repo() {
+        let db = std::sync::Arc::new(test_db_start().await);
+        let admin = crate::entities::user::create_user(
+            db.as_ref(),
+            "admin",
+            Some("admin@example.com"),
+            Some("Admin"),
+            true,
+        )
+        .await
+        .expect("failed to create admin");
+        let repo = create_theme_repo("version-one");
+        let session_store = MemoryStore::default();
+        let router = test_app_router(test_admin_state(db.clone()), session_store.clone());
+        let cookie = seed_session_cookie(
+            test_admin_state(db.clone()),
+            session_store.clone(),
+            admin.id,
+        )
+        .await;
+        let install_body = urlencoded_theme_form(
+            repo.path().to_str().expect("repo path should be utf-8"),
+            Some("sample-theme"),
+        );
+
+        let install_response = router
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/themes")
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(install_body))
+                    .expect("failed to build install request"),
+            )
+            .await
+            .expect("failed to call install route");
+        assert_eq!(install_response.status(), StatusCode::SEE_OTHER);
+
+        update_theme_repo(repo.path(), "version-two", "update theme");
+
+        let update_response = router
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/themes/sample-theme/update")
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .expect("failed to build update request"),
+            )
+            .await
+            .expect("failed to call update route");
+
+        assert_eq!(update_response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            update_response
+                .headers()
+                .get(header::LOCATION)
+                .expect("missing location header")
+                .to_str()
+                .expect("invalid location header"),
+            "/admin/themes?updated=sample-theme"
+        );
+
+        let installed_file = router
+            .site_templates_root
+            .path()
+            .join("sample-theme")
+            .join("theme.txt");
+        let installed_content =
+            std::fs::read_to_string(&installed_file).expect("failed to read refreshed theme file");
+        assert_eq!(installed_content, "version-two");
+    }
+
+    #[tokio::test]
+    async fn admin_themes_delete_blocks_themes_still_in_use() {
+        let db = std::sync::Arc::new(test_db_start().await);
+        let admin = crate::entities::user::create_user(
+            db.as_ref(),
+            "admin",
+            Some("admin@example.com"),
+            Some("Admin"),
+            true,
+        )
+        .await
+        .expect("failed to create admin");
+        let repo = create_theme_repo("version-one");
+        let session_store = MemoryStore::default();
+        let router = test_app_router(test_admin_state(db.clone()), session_store.clone());
+        let cookie = seed_session_cookie(
+            test_admin_state(db.clone()),
+            session_store.clone(),
+            admin.id,
+        )
+        .await;
+        let install_body = urlencoded_theme_form(
+            repo.path().to_str().expect("repo path should be utf-8"),
+            Some("sample-theme"),
+        );
+
+        let install_response = router
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/themes")
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(install_body))
+                    .expect("failed to build install request"),
+            )
+            .await
+            .expect("failed to call install route");
+        assert_eq!(install_response.status(), StatusCode::SEE_OTHER);
+
         let site = crate::create_site(
-            &db,
+            db.as_ref(),
+            "theme-site".to_string(),
+            "Theme Site".to_string(),
+            "sample-theme".to_string(),
+        )
+        .await
+        .expect("failed to create site");
+
+        let settings_response = router
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/admin/site/{}/settings", site.id))
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())
+                    .expect("failed to build settings request"),
+            )
+            .await
+            .expect("failed to load site settings");
+        assert_eq!(settings_response.status(), StatusCode::OK);
+        let settings_body = to_bytes(settings_response.into_body(), usize::MAX)
+            .await
+            .expect("failed to read settings body");
+        assert!(
+            String::from_utf8_lossy(&settings_body).contains("sample-theme"),
+            "expected site settings to list installed theme"
+        );
+
+        let delete_response = router
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/themes/sample-theme/delete")
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .expect("failed to build delete request"),
+            )
+            .await
+            .expect("failed to call delete route");
+
+        assert_eq!(delete_response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            router
+                .site_templates_root
+                .path()
+                .join("sample-theme")
+                .exists()
+        );
+        let theme = crate::entities::theme_registry::Entity::find()
+            .filter(crate::entities::theme_registry::Column::Slug.eq("sample-theme"))
+            .one(db.as_ref())
+            .await
+            .expect("failed to load theme registry row");
+        assert!(
+            theme.is_some(),
+            "expected theme row to remain after blocked delete"
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_site_export_allows_owner_and_sets_download_headers() {
+        let db = Arc::new(test_db_start().await);
+        let site = crate::create_site(
+            db.as_ref(),
             "export-site".to_string(),
             "Export Site".to_string(),
             DEFAULT_TEMPLATE_NAME.to_string(),
@@ -5143,7 +5706,7 @@ mod tests {
         .await
         .expect("failed to create site");
         let owner = crate::entities::user::create_user(
-            &db,
+            db.as_ref(),
             "owner",
             Some("owner@example.com"),
             Some("Owner"),
@@ -5152,7 +5715,7 @@ mod tests {
         .await
         .expect("failed to create owner");
         crate::create_membership(
-            &db,
+            db.as_ref(),
             crate::NewMembership {
                 site_id: site.id,
                 user_id: owner.id,
@@ -5162,8 +5725,14 @@ mod tests {
         .await
         .expect("failed to create owner membership");
 
-        let router = site_transfer_test_router(test_admin_state(db.into()));
-        let cookie = seed_session_cookie(router.clone(), owner.id).await;
+        let session_store = MemoryStore::default();
+        let router = site_transfer_test_router(test_admin_state(db.clone()), session_store.clone());
+        let cookie = seed_session_cookie(
+            test_admin_state(db.clone()),
+            session_store.clone(),
+            owner.id,
+        )
+        .await;
         let response = router
             .oneshot(
                 Request::builder()
@@ -5198,9 +5767,9 @@ mod tests {
 
     #[tokio::test]
     async fn admin_site_export_rejects_non_owner_members() {
-        let db = test_db_start().await;
+        let db = Arc::new(test_db_start().await);
         let site = crate::create_site(
-            &db,
+            db.as_ref(),
             "export-site".to_string(),
             "Export Site".to_string(),
             DEFAULT_TEMPLATE_NAME.to_string(),
@@ -5208,7 +5777,7 @@ mod tests {
         .await
         .expect("failed to create site");
         let viewer = crate::entities::user::create_user(
-            &db,
+            db.as_ref(),
             "viewer",
             Some("viewer@example.com"),
             Some("Viewer"),
@@ -5217,7 +5786,7 @@ mod tests {
         .await
         .expect("failed to create viewer");
         crate::create_membership(
-            &db,
+            db.as_ref(),
             crate::NewMembership {
                 site_id: site.id,
                 user_id: viewer.id,
@@ -5227,8 +5796,14 @@ mod tests {
         .await
         .expect("failed to create viewer membership");
 
-        let router = site_transfer_test_router(test_admin_state(db.into()));
-        let cookie = seed_session_cookie(router.clone(), viewer.id).await;
+        let session_store = MemoryStore::default();
+        let router = site_transfer_test_router(test_admin_state(db.clone()), session_store.clone());
+        let cookie = seed_session_cookie(
+            test_admin_state(db.clone()),
+            session_store.clone(),
+            viewer.id,
+        )
+        .await;
         let response = router
             .oneshot(
                 Request::builder()
@@ -5277,8 +5852,14 @@ mod tests {
             crate::serialize_site_export_pretty(&export).expect("failed to serialize import json");
         let (boundary, body) = multipart_json_request_body(&json);
 
-        let router = site_transfer_test_router(test_admin_state(db.clone()));
-        let cookie = seed_session_cookie(router.clone(), admin.id).await;
+        let session_store = MemoryStore::default();
+        let router = site_transfer_test_router(test_admin_state(db.clone()), session_store.clone());
+        let cookie = seed_session_cookie(
+            test_admin_state(db.clone()),
+            session_store.clone(),
+            admin.id,
+        )
+        .await;
         let response = router
             .oneshot(
                 Request::builder()
@@ -5348,8 +5929,10 @@ mod tests {
             crate::serialize_site_export_pretty(&export).expect("failed to serialize import json");
         let (boundary, body) = multipart_json_request_body(&json);
 
-        let router = site_transfer_test_router(test_admin_state(db.clone()));
-        let cookie = seed_session_cookie(router.clone(), user.id).await;
+        let session_store = MemoryStore::default();
+        let router = site_transfer_test_router(test_admin_state(db.clone()), session_store.clone());
+        let cookie =
+            seed_session_cookie(test_admin_state(db.clone()), session_store.clone(), user.id).await;
         let response = router
             .oneshot(
                 Request::builder()
