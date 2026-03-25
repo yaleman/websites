@@ -39,6 +39,7 @@ pub mod migration;
 pub mod oidc;
 pub mod site_export;
 pub mod telemetry;
+pub mod theme_registry;
 pub mod tls;
 pub mod token_auth;
 pub mod web;
@@ -155,6 +156,14 @@ pub fn resolve_site_template_override_root(site_id: Uuid) -> PathBuf {
     resolve_upload_root()
         .join(".site-template-overrides")
         .join(site_id.to_string())
+}
+
+pub fn resolve_site_templates_root() -> PathBuf {
+    if let Ok(value) = env::var("WEBSITES_SITE_TEMPLATES_DIR") {
+        return PathBuf::from(value);
+    }
+
+    PathBuf::from(SITE_TEMPLATES_DIR)
 }
 
 pub fn is_customizable_template_file(filename: &str) -> bool {
@@ -527,7 +536,11 @@ async fn load_template(
                 path=?template_path.display(),
                 "Failed to load template, using fallback",
             );
-            let fallback_path = Path::new(SITE_TEMPLATES_DIR).join("default").join(filename);
+            let fallback_path = template_root
+                .parent()
+                .map(|parent| parent.join("default").join(filename))
+                .filter(|path| path.exists())
+                .unwrap_or_else(|| resolve_site_templates_root().join("default").join(filename));
             let fallback = fs::read_to_string(fallback_path).await.inspect_err(|err| {
                 error!(
                     error=?err,

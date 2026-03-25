@@ -1244,7 +1244,11 @@ mod tests {
         Ok(StatusCode::NO_CONTENT)
     }
 
-    fn test_admin_state(db: Arc<sea_orm::DatabaseConnection>, upload_root: &StdPath) -> AdminState {
+    fn test_admin_state(
+        db: Arc<sea_orm::DatabaseConnection>,
+        upload_root: &StdPath,
+        site_templates_root: &StdPath,
+    ) -> AdminState {
         let jwt_signer = signer_from_secret(&JwtHs256SecretSetting {
             secret_bytes: vec![7; 32],
         })
@@ -1260,6 +1264,7 @@ mod tests {
             jwt_signer: Arc::new(jwt_signer),
             jwt_issuer: "https://example.com".to_string(),
             upload_root: upload_root.to_path_buf(),
+            site_templates_root: site_templates_root.to_path_buf(),
         }
     }
 
@@ -1335,7 +1340,12 @@ mod tests {
     async fn content_api_supports_crud_and_search() {
         let db = Arc::new(test_db_start().await);
         let upload_root = TempDir::new().expect("failed to create upload root");
-        let router = test_router(test_admin_state(db.clone(), upload_root.path()));
+        let site_templates_root = TempDir::new().expect("failed to create template root");
+        let router = test_router(test_admin_state(
+            db.clone(),
+            upload_root.path(),
+            site_templates_root.path(),
+        ));
 
         let site = crate::create_site(
             db.as_ref(),
@@ -1483,7 +1493,12 @@ mod tests {
     async fn content_api_enforces_viewer_and_author_roles() {
         let db = Arc::new(test_db_start().await);
         let upload_root = TempDir::new().expect("failed to create upload root");
-        let router = test_router(test_admin_state(db.clone(), upload_root.path()));
+        let site_templates_root = TempDir::new().expect("failed to create template root");
+        let router = test_router(test_admin_state(
+            db.clone(),
+            upload_root.path(),
+            site_templates_root.path(),
+        ));
 
         let site = crate::create_site(
             db.as_ref(),
@@ -1598,7 +1613,12 @@ mod tests {
     async fn asset_api_supports_upload_list_get_and_delete_with_file_cleanup() {
         let db = Arc::new(test_db_start().await);
         let upload_root = TempDir::new().expect("failed to create upload root");
-        let router = test_router(test_admin_state(db.clone(), upload_root.path()));
+        let site_templates_root = TempDir::new().expect("failed to create template root");
+        let router = test_router(test_admin_state(
+            db.clone(),
+            upload_root.path(),
+            site_templates_root.path(),
+        ));
 
         let site = crate::create_site(
             db.as_ref(),

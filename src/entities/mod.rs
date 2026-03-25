@@ -15,6 +15,7 @@ pub mod setting;
 pub mod site;
 pub mod site_membership;
 pub mod tag;
+pub mod theme_registry;
 pub mod user;
 pub mod user_api_token;
 
