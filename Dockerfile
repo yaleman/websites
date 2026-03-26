@@ -55,6 +55,7 @@ ENV WEBSITES_DB_PATH="/data/websites.sqlite"
 ENV WEBSITES_TLS_CERT_PATH="/certs/tls.crt"
 ENV WEBSITES_TLS_KEY_PATH="/certs/tls.key"
 ENV WEBSITES_ADMIN_ASSETS_DIR="/admin-ui-assets"
+ENV WEBSITES_SITE_TEMPLATES_DIR="/site_templates"
 
 EXPOSE 9000
 USER nonroot

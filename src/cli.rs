@@ -117,6 +117,14 @@ pub struct Cli {
         help = "SQLite database path for the management database"
     )]
     pub db_path: PathBuf,
+    #[arg(
+        long = "site-templates-dir",
+        env = "WEBSITES_SITE_TEMPLATES_DIR",
+        default_value = crate::constants::SITE_TEMPLATES_DIR,
+        value_name = "DIR",
+        help = "Root directory containing site templates"
+    )]
+    pub site_templates_dir: PathBuf,
     #[command(flatten)]
     pub oidc: OidcConfigArgs,
     #[command(subcommand)]
@@ -227,8 +235,8 @@ pub enum SiteCommands {
     Render {
         #[arg(long)]
         site_id: Uuid,
-        #[arg(long, default_value = crate::constants::SITE_TEMPLATES_DIR)]
-        templates_dir: PathBuf,
+        #[arg(long)]
+        templates_dir: Option<PathBuf>,
         #[arg(long, default_value = crate::constants::RENDERED_DIR)]
         rendered_dir: PathBuf,
     },
@@ -428,6 +436,7 @@ pub enum ContentCommands {
 pub async fn execute(
     command: Commands,
     db_path: &Path,
+    site_templates_dir: &Path,
     oidc: &OidcConfigArgs,
 ) -> Result<(), String> {
     let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
@@ -470,6 +479,7 @@ pub async fn execute(
             println!("frontend_url={frontend_url}");
             println!("oidc_client_id={oidc_client_id}");
             println!("oidc_discovery_url={oidc_discovery_url}");
+            println!("site_templates_dir={}", site_templates_dir.display());
             Ok(())
         }
         Commands::Site { command } => match command {
@@ -642,6 +652,8 @@ pub async fn execute(
                 rendered_dir,
             } => {
                 let upload_root = resolve_upload_root();
+                let templates_dir =
+                    resolve_site_render_templates_dir(templates_dir, site_templates_dir);
                 let files_written =
                     render_site(db_ref, site_id, &templates_dir, &rendered_dir, &upload_root)
                         .await
@@ -892,9 +904,14 @@ pub async fn execute(
         Commands::Serve { command } => match command {
             ServeCommands::Admin { listen } => {
                 let oidc = oidc.require_complete()?;
-                crate::web::run_admin_server(db.clone(), &listen, &oidc)
-                    .await
-                    .map_err(|err| err.to_string())
+                crate::web::run_admin_server(
+                    db.clone(),
+                    &listen,
+                    &oidc,
+                    site_templates_dir.to_path_buf(),
+                )
+                .await
+                .map_err(|err| err.to_string())
             }
         },
         Commands::Audit { command } => match command {
@@ -1337,6 +1354,13 @@ pub async fn execute(
     }
 }
 
+fn resolve_site_render_templates_dir(
+    templates_dir: Option<PathBuf>,
+    site_templates_dir: &Path,
+) -> PathBuf {
+    templates_dir.unwrap_or_else(|| site_templates_dir.to_path_buf())
+}
+
 fn parse_optional_datetime(
     value: Option<String>,
     label: &str,
@@ -1438,6 +1462,121 @@ mod tests {
             None => unsafe {
                 std::env::remove_var("WEBSITES_DB_PATH");
             },
+        }
+    }
+
+    #[test]
+    fn site_templates_dir_can_be_loaded_from_flag() {
+        let cli = Cli::try_parse_from([
+            "websites",
+            "--site-templates-dir",
+            "/tmp/site-templates-from-flag",
+        ])
+        .expect("failed to parse CLI arguments with site templates flag");
+
+        assert_eq!(
+            cli.site_templates_dir,
+            PathBuf::from("/tmp/site-templates-from-flag")
+        );
+    }
+
+    #[test]
+    fn site_templates_dir_can_be_loaded_from_env() {
+        let _guard = env_lock().lock().expect("failed to lock env");
+        let original = std::env::var_os("WEBSITES_SITE_TEMPLATES_DIR");
+
+        unsafe {
+            std::env::set_var(
+                "WEBSITES_SITE_TEMPLATES_DIR",
+                "/tmp/site-templates-from-env",
+            );
+        }
+
+        let cli = Cli::try_parse_from(["websites"])
+            .expect("failed to parse CLI arguments with site templates env override");
+
+        assert_eq!(
+            cli.site_templates_dir,
+            PathBuf::from("/tmp/site-templates-from-env")
+        );
+
+        match original {
+            Some(value) => unsafe {
+                std::env::set_var("WEBSITES_SITE_TEMPLATES_DIR", value);
+            },
+            None => unsafe {
+                std::env::remove_var("WEBSITES_SITE_TEMPLATES_DIR");
+            },
+        }
+    }
+
+    #[test]
+    fn site_render_uses_global_templates_dir_when_command_override_is_missing() {
+        let cli = Cli::try_parse_from([
+            "websites",
+            "--site-templates-dir",
+            "/tmp/site-templates-global",
+            "site",
+            "render",
+            "--site-id",
+            "00000000-0000-0000-0000-000000000001",
+        ])
+        .expect("failed to parse site render command");
+        let site_templates_dir = cli.site_templates_dir.clone();
+
+        match cli.command.expect("missing command") {
+            Commands::Site {
+                command:
+                    SiteCommands::Render {
+                        site_id,
+                        templates_dir,
+                        rendered_dir,
+                    },
+            } => {
+                assert_eq!(
+                    site_id,
+                    Uuid::parse_str("00000000-0000-0000-0000-000000000001")
+                        .expect("failed to parse uuid")
+                );
+                assert!(templates_dir.is_none());
+                assert_eq!(rendered_dir, PathBuf::from(crate::constants::RENDERED_DIR));
+                let resolved =
+                    resolve_site_render_templates_dir(templates_dir, &site_templates_dir);
+                assert_eq!(resolved, PathBuf::from("/tmp/site-templates-global"));
+            }
+            other => panic!("unexpected parsed command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn site_render_prefers_explicit_templates_dir_override() {
+        let cli = Cli::try_parse_from([
+            "websites",
+            "--site-templates-dir",
+            "/tmp/site-templates-global",
+            "site",
+            "render",
+            "--site-id",
+            "00000000-0000-0000-0000-000000000001",
+            "--templates-dir",
+            "/tmp/site-templates-explicit",
+        ])
+        .expect("failed to parse site render command with explicit override");
+        let site_templates_dir = cli.site_templates_dir.clone();
+
+        match cli.command.expect("missing command") {
+            Commands::Site {
+                command: SiteCommands::Render { templates_dir, .. },
+            } => {
+                assert_eq!(
+                    templates_dir,
+                    Some(PathBuf::from("/tmp/site-templates-explicit"))
+                );
+                let resolved =
+                    resolve_site_render_templates_dir(templates_dir, &site_templates_dir);
+                assert_eq!(resolved, PathBuf::from("/tmp/site-templates-explicit"));
+            }
+            other => panic!("unexpected parsed command: {other:?}"),
         }
     }
 
