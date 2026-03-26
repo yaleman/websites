@@ -21,6 +21,22 @@ const formatAssetMeta = (asset: components["schemas"]["AssetLibraryItem"]) => {
 	return `${asset.mime_type} • ${dimensions}`;
 };
 
+const bindConfirmingForms = () => {
+	document
+		.querySelectorAll<HTMLFormElement>("form[data-confirm-message]")
+		.forEach((form) => {
+			form.addEventListener("submit", (event) => {
+				const message = form.dataset.confirmMessage?.trim();
+				if (!message) {
+					return;
+				}
+				if (!window.confirm(message)) {
+					event.preventDefault();
+				}
+			});
+		});
+};
+
 const createAssetCard = (asset: components["schemas"]["AssetLibraryItem"]) => {
 	const button = document.createElement("button");
 	button.type = "button";
@@ -964,6 +980,7 @@ function doPageStartup() {
 	initTransientMessages();
 	initTagEditor();
 	initMembershipCreateForm();
+	bindConfirmingForms();
 	initEditor();
 
 	const apiUrl = new URL("/", window.location.origin).href;
