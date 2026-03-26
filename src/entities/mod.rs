@@ -14,6 +14,8 @@ pub mod content_tag;
 pub mod setting;
 pub mod site;
 pub mod site_membership;
+pub mod site_publish_config;
+pub mod site_publish_run;
 pub mod tag;
 pub mod theme_registry;
 pub mod user;

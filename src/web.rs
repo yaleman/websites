@@ -16,6 +16,10 @@ use crate::entities::{self, PageType};
 use crate::errors::SiteError;
 use crate::middleware::log_requests;
 use crate::oidc::{admin_login_callback, build_http_client, build_oidc_client};
+use crate::publish::{
+    S3CompatiblePublishConfig, delete_site_publish_config, get_s3_publish_config,
+    list_site_publish_runs, queue_site_publish, save_s3_publish_config,
+};
 use crate::theme_registry::{
     ThemeAdminRow, ThemeInstallRequest, available_template_names, delete_theme, install_theme,
     theme_admin_rows, update_theme,
@@ -371,8 +375,33 @@ struct AdminSiteSettingsTemplate {
     template_name: String,
     can_delete_site: bool,
     can_import_wordpress: bool,
+    can_manage_publish: bool,
     templates: Vec<String>,
     template_files: Vec<AdminSiteTemplateFileRow>,
+}
+
+#[allow(dead_code)]
+#[derive(Template, WebTemplate)]
+#[template(path = "site_publish.html")]
+struct AdminSitePublishTemplate {
+    template_shared: AdminTemplateData,
+    site_id: Uuid,
+    site_short_name: String,
+    full_title: String,
+    config_present: bool,
+    method_label: String,
+    endpoint_url: String,
+    bucket: String,
+    prefix: String,
+    region: String,
+    access_key_id: String,
+    secret_present: bool,
+    force_path_style: bool,
+    can_publish_now: bool,
+    csrf_token: String,
+    publish_csrf_token: String,
+    delete_csrf_token: String,
+    runs: Vec<AdminSitePublishRunRow>,
 }
 
 #[allow(dead_code)]
@@ -643,6 +672,21 @@ struct AdminSiteTemplateFileRow {
 }
 
 #[derive(Debug)]
+struct AdminSitePublishRunRow {
+    id: Uuid,
+    status: String,
+    method: String,
+    actor_sub: String,
+    created_at: String,
+    started_at: String,
+    finished_at: String,
+    rendered_file_count: i32,
+    published_file_count: i32,
+    deleted_object_count: i32,
+    error_message: String,
+}
+
+#[derive(Debug)]
 struct AdminLink {
     href: String,
     label: String,
@@ -676,6 +720,24 @@ struct CreateSiteForm {
 struct UpdateSiteSettingsForm {
     full_title: String,
     template_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateSitePublishForm {
+    csrf_token: String,
+    method: String,
+    endpoint_url: String,
+    bucket: String,
+    prefix: Option<String>,
+    region: String,
+    access_key_id: String,
+    secret_access_key: Option<String>,
+    force_path_style: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SitePublishActionForm {
+    csrf_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -736,6 +798,13 @@ struct AdminContentListQuery {
 #[derive(Debug, Deserialize)]
 struct AdminSiteSettingsQuery {
     imported: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminSitePublishQuery {
+    saved: Option<usize>,
+    queued: Option<usize>,
+    deleted: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1087,6 +1156,18 @@ fn build_search_rows(
 
 fn site_delete_csrf_scope(site_id: Uuid) -> String {
     format!("delete-site:{site_id}")
+}
+
+fn site_publish_csrf_scope(site_id: Uuid) -> String {
+    format!("site-publish:{site_id}")
+}
+
+fn site_publish_run_csrf_scope(site_id: Uuid) -> String {
+    format!("site-publish-run:{site_id}")
+}
+
+fn site_publish_delete_csrf_scope(site_id: Uuid) -> String {
+    format!("site-publish-delete:{site_id}")
 }
 
 fn admin_user_create_csrf_scope() -> &'static str {
@@ -1845,6 +1926,18 @@ fn build_admin_app(state: AdminState, assets_dir: &StdPath, upload_root: &StdPat
         .route(
             "/admin/site/{site_id}/settings/wordpress-import",
             axum::routing::post(admin_site_wordpress_import),
+        )
+        .route(
+            "/admin/site/{site_id}/publish",
+            get(admin_site_publish).post(admin_site_publish_update),
+        )
+        .route(
+            "/admin/site/{site_id}/publish/run",
+            axum::routing::post(admin_site_publish_run),
+        )
+        .route(
+            "/admin/site/{site_id}/publish/delete",
+            axum::routing::post(admin_site_publish_delete),
         )
         .route("/admin/themes", get(admin_themes).post(admin_themes_create))
         .route(
@@ -5064,6 +5157,10 @@ async fn admin_site_settings(
         || membership
             .as_ref()
             .is_some_and(|membership| role_satisfies(membership.role, SiteRole::Author));
+    let can_manage_publish = viewer.admin
+        || membership
+            .as_ref()
+            .is_some_and(|membership| role_satisfies(membership.role, SiteRole::Owner));
     let mut links = vec![
         AdminLink::new(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
         AdminLink::new(
@@ -5079,6 +5176,12 @@ async fn admin_site_settings(
         links.push(AdminLink::new(
             &format!("/admin/site/{site_id}/export.json"),
             "Download site export JSON",
+        ));
+    }
+    if can_manage_publish {
+        links.push(AdminLink::new(
+            &format!("/admin/site/{site_id}/publish"),
+            "Publish settings",
         ));
     }
 
@@ -5099,9 +5202,312 @@ async fn admin_site_settings(
         template_name: site.template_name,
         can_delete_site: viewer.admin,
         can_import_wordpress,
+        can_manage_publish,
         templates,
         template_files,
     })
+}
+
+async fn admin_site_publish(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    Query(query): Query<AdminSitePublishQuery>,
+) -> Result<AdminSitePublishTemplate, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Owner).await?;
+    let site = get_by_id(state.db.as_ref(), site_id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
+
+    let publish_config = get_s3_publish_config(state.db.as_ref(), site_id).await?;
+    let runs = list_site_publish_runs(state.db.as_ref(), site_id, 20).await?;
+    let template_shared = AdminTemplateData::new("Publish Settings")
+        .with_site_context(site.id, &site.full_title)
+        .with_links(vec![
+            AdminLink::new(
+                &format!("/admin/site/{site_id}/settings"),
+                "Back to settings",
+            ),
+            AdminLink::new(&format!("/admin/site/{site_id}/render"), "Render site"),
+        ]);
+    let template_shared = if let Some(saved) = query.saved {
+        template_shared.with_toast_message(
+            if saved == 1 {
+                "Publish configuration saved.".to_string()
+            } else {
+                "Publish configuration updated.".to_string()
+            },
+            "saved",
+        )
+    } else if let Some(queued) = query.queued {
+        template_shared.with_toast_message(
+            if queued == 1 {
+                "Publish job queued.".to_string()
+            } else {
+                format!("{queued} publish jobs queued.")
+            },
+            "queued",
+        )
+    } else if let Some(deleted) = query.deleted {
+        template_shared.with_toast_message(
+            if deleted == 1 {
+                "Publish configuration deleted.".to_string()
+            } else {
+                format!("{deleted} publish configurations deleted.")
+            },
+            "deleted",
+        )
+    } else {
+        template_shared
+    };
+
+    let config_present = publish_config.is_some();
+    let (endpoint_url, bucket, prefix, region, access_key_id, secret_present, force_path_style) =
+        if let Some(config) = publish_config {
+            (
+                config.endpoint_url,
+                config.bucket,
+                config.prefix,
+                config.region,
+                config.access_key_id,
+                true,
+                config.force_path_style,
+            )
+        } else {
+            (
+                String::new(),
+                String::new(),
+                String::new(),
+                crate::publish::DEFAULT_S3_REGION.to_string(),
+                String::new(),
+                false,
+                false,
+            )
+        };
+    let can_publish_now = secret_present;
+
+    Ok(AdminSitePublishTemplate {
+        template_shared,
+        site_id: site.id,
+        site_short_name: site.short_name,
+        full_title: site.full_title,
+        config_present,
+        method_label: "S3-compatible store".to_string(),
+        endpoint_url,
+        bucket,
+        prefix,
+        region,
+        access_key_id,
+        secret_present,
+        force_path_style,
+        can_publish_now,
+        csrf_token: session
+            .issue_csrf_token(&site_publish_csrf_scope(site_id))
+            .await?,
+        publish_csrf_token: session
+            .issue_csrf_token(&site_publish_run_csrf_scope(site_id))
+            .await?,
+        delete_csrf_token: session
+            .issue_csrf_token(&site_publish_delete_csrf_scope(site_id))
+            .await?,
+        runs: runs
+            .into_iter()
+            .map(|run| AdminSitePublishRunRow {
+                id: run.id,
+                status: run.status.to_string(),
+                method: run.method.to_string(),
+                actor_sub: run.actor_sub,
+                created_at: run.created_at.to_rfc3339(),
+                started_at: run
+                    .started_at
+                    .map(|value| value.to_rfc3339())
+                    .unwrap_or_else(|| "not started".to_string()),
+                finished_at: run
+                    .finished_at
+                    .map(|value| value.to_rfc3339())
+                    .unwrap_or_else(|| "not finished".to_string()),
+                rendered_file_count: run.rendered_file_count,
+                published_file_count: run.published_file_count,
+                deleted_object_count: run.deleted_object_count,
+                error_message: run.error_message.unwrap_or_default(),
+            })
+            .collect(),
+    })
+}
+
+async fn admin_site_publish_update(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    Form(form): Form<UpdateSitePublishForm>,
+) -> Result<Redirect, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Owner).await?;
+    session
+        .validate_csrf_token(&site_publish_csrf_scope(site_id), &form.csrf_token)
+        .await?;
+    let actor = current_user(&session).await?.subject;
+
+    let method = form.method.trim();
+    if method != "s3_compatible" {
+        return Err(SiteError::BadRequest(format!(
+            "unsupported publish method: {method}"
+        )));
+    }
+
+    let endpoint_url = form.endpoint_url.trim().to_string();
+    let bucket = form.bucket.trim().to_string();
+    let prefix = normalize_optional(form.prefix).unwrap_or_default();
+    let region = form.region.trim().to_string();
+    let access_key_id = form.access_key_id.trim().to_string();
+    let secret_access_key = normalize_optional(form.secret_access_key);
+    let force_path_style = form.force_path_style.is_some();
+
+    if endpoint_url.is_empty() {
+        return Err(SiteError::BadRequest(
+            "publish endpoint_url is required".to_string(),
+        ));
+    }
+    if bucket.is_empty() {
+        return Err(SiteError::BadRequest(
+            "publish bucket is required".to_string(),
+        ));
+    }
+    if region.is_empty() {
+        return Err(SiteError::BadRequest(
+            "publish region is required".to_string(),
+        ));
+    }
+    if access_key_id.is_empty() {
+        return Err(SiteError::BadRequest(
+            "publish access_key_id is required".to_string(),
+        ));
+    }
+
+    let existing = get_s3_publish_config(state.db.as_ref(), site_id).await?;
+    let secret_access_key = match (secret_access_key, existing) {
+        (Some(secret_access_key), _) => secret_access_key,
+        (None, Some(existing)) => existing.secret_access_key,
+        (None, None) => {
+            return Err(SiteError::BadRequest(
+                "publish secret_access_key is required".to_string(),
+            ));
+        }
+    };
+
+    let txn = state.db.begin().await?;
+    let saved = save_s3_publish_config(
+        &txn,
+        site_id,
+        S3CompatiblePublishConfig {
+            endpoint_url,
+            bucket,
+            prefix,
+            region,
+            access_key_id,
+            secret_access_key,
+            force_path_style,
+        },
+    )
+    .await?;
+    log_audit_event(
+        &txn,
+        &actor,
+        "update_site_publish_config",
+        "site_publish_config",
+        &saved.site_id.to_string(),
+        Some(site_id),
+        Some(json!({
+            "method": saved.method,
+        })),
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to log publish config audit: {error}")))?;
+    txn.commit().await?;
+
+    Ok(Redirect::to(&format!(
+        "/admin/site/{site_id}/publish?saved=1"
+    )))
+}
+
+async fn admin_site_publish_delete(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    Form(form): Form<SitePublishActionForm>,
+) -> Result<Redirect, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Owner).await?;
+    session
+        .validate_csrf_token(&site_publish_delete_csrf_scope(site_id), &form.csrf_token)
+        .await?;
+    let actor = current_user(&session).await?.subject;
+
+    let txn = state.db.begin().await?;
+    delete_site_publish_config(&txn, site_id).await?;
+    log_audit_event(
+        &txn,
+        &actor,
+        "delete_site_publish_config",
+        "site_publish_config",
+        &site_id.to_string(),
+        Some(site_id),
+        Some(json!({ "site_id": site_id })),
+    )
+    .await
+    .map_err(|error| {
+        SiteError::internal(format!("failed to log publish config delete: {error}"))
+    })?;
+    txn.commit().await?;
+
+    Ok(Redirect::to(&format!(
+        "/admin/site/{site_id}/publish?deleted=1"
+    )))
+}
+
+async fn admin_site_publish_run(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    Form(form): Form<SitePublishActionForm>,
+) -> Result<Redirect, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Owner).await?;
+    session
+        .validate_csrf_token(&site_publish_run_csrf_scope(site_id), &form.csrf_token)
+        .await?;
+    let actor = current_user(&session).await?.subject;
+    let site = get_by_id(state.db.as_ref(), site_id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
+
+    let _run = queue_site_publish(
+        Arc::clone(&state.db),
+        site_id,
+        actor.clone(),
+        state.site_templates_root.clone(),
+        state.upload_root.clone(),
+    )
+    .await?;
+
+    let txn = state.db.begin().await?;
+    if let Err(error) = log_audit_event(
+        &txn,
+        &actor,
+        "queue_site_publish",
+        "site_publish_run",
+        &site_id.to_string(),
+        Some(site_id),
+        Some(json!({
+            "site_short_name": site.short_name,
+        })),
+    )
+    .await
+    {
+        error!("failed to log publish queue audit: {error}");
+    }
+    txn.commit().await?;
+
+    Ok(Redirect::to(&format!(
+        "/admin/site/{site_id}/publish?queued=1"
+    )))
 }
 
 async fn admin_site_wordpress_import(
@@ -6492,6 +6898,7 @@ mod tests {
                 template_name: DEFAULT_TEMPLATE_NAME.to_string(),
                 created_at: Utc::now(),
                 updated_at: None,
+                publish_config: None,
             },
             memberships: Vec::new(),
             tags: Vec::new(),
@@ -6636,6 +7043,7 @@ mod tests {
                 template_name: DEFAULT_TEMPLATE_NAME.to_string(),
                 created_at: Utc::now(),
                 updated_at: None,
+                publish_config: None,
             },
             memberships: Vec::new(),
             tags: Vec::new(),
@@ -6717,6 +7125,7 @@ mod tests {
                 template_name: DEFAULT_TEMPLATE_NAME.to_string(),
                 created_at: Utc::now(),
                 updated_at: None,
+                publish_config: None,
             },
             memberships: Vec::new(),
             tags: Vec::new(),

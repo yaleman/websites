@@ -37,6 +37,7 @@ pub mod images;
 pub mod middleware;
 pub mod migration;
 pub mod oidc;
+pub mod publish;
 pub mod site_export;
 pub mod telemetry;
 pub mod theme_registry;
@@ -44,6 +45,10 @@ pub mod tls;
 pub mod token_auth;
 pub mod web;
 
+pub use publish::{
+    PublishOutcome, S3CompatiblePublishConfig, delete_site_publish_config, get_s3_publish_config,
+    list_site_publish_runs, queue_site_publish, save_s3_publish_config,
+};
 pub use site_export::{
     SITE_EXPORT_FORMAT_VERSION, SiteExport, SiteImportResult, deserialize_site_export, export_site,
     export_site_with_roots, import_site_export, import_site_json, serialize_site_export_pretty,
@@ -257,22 +262,36 @@ pub async fn render_site(
     upload_root: &Path,
 ) -> Result<usize, SiteError> {
     let override_root = resolve_site_template_override_root(site_id);
-    render_site_with_overrides(
+    fs::create_dir_all(rendered_dir).await?;
+    let tmp_root = tempfile::tempdir_in(rendered_dir).map_err(SiteError::internal)?;
+    let files_written = render_site_into_dir(
         db,
         site_id,
         templates_dir,
-        rendered_dir,
+        tmp_root.path(),
         upload_root,
         &override_root,
     )
-    .await
+    .await?;
+
+    let site = entities::site::Entity::find_by_id(site_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| SiteError::internal("site not found"))?;
+    let rendered_root = rendered_dir.join(site.short_name);
+    if fs::metadata(&rendered_root).await.is_ok() {
+        fs::remove_dir_all(&rendered_root).await?;
+    }
+    fs::rename(tmp_root.path(), &rendered_root).await?;
+
+    Ok(files_written)
 }
 
-async fn render_site_with_overrides(
+pub(crate) async fn render_site_into_dir(
     db: &DatabaseConnection,
     site_id: Uuid,
     templates_dir: &Path,
-    rendered_dir: &Path,
+    output_root: &Path,
     upload_root: &Path,
     override_root: &Path,
 ) -> Result<usize, SiteError> {
@@ -297,9 +316,7 @@ async fn render_site_with_overrides(
 
     let tera = load_site_templates(&template_root, override_root).await?;
 
-    let rendered_root = rendered_dir.join(site.short_name.clone());
-    fs::create_dir_all(rendered_dir).await?;
-    let tmp_root = tempfile::tempdir_in(rendered_dir).map_err(SiteError::internal)?;
+    fs::create_dir_all(output_root).await?;
 
     let mut files_written = 0usize;
     let mut index_items = Vec::new();
@@ -339,9 +356,9 @@ async fn render_site_with_overrides(
         for route in routes {
             let route = route.trim_end_matches('/').trim_start_matches('/');
             let output_dir = if route.is_empty() {
-                tmp_root.path().join("")
+                output_root.to_path_buf()
             } else {
-                tmp_root.path().join(route)
+                output_root.join(route)
             };
 
             fs::create_dir_all(&output_dir).await?;
@@ -356,7 +373,7 @@ async fn render_site_with_overrides(
         });
     }
 
-    write_index(tmp_root.path(), &tera, &site, &index_items).await?;
+    write_index(output_root, &tera, &site, &index_items).await?;
     files_written = files_written.saturating_add(1);
 
     let post_items = content_items
@@ -365,10 +382,10 @@ async fn render_site_with_overrides(
         .cloned()
         .collect::<Vec<_>>();
 
-    write_rss(tmp_root.path(), &tera, &site, &post_items).await?;
+    write_rss(output_root, &tera, &site, &post_items).await?;
     files_written = files_written.saturating_add(1);
 
-    write_atom(tmp_root.path(), &tera, &site, &post_items).await?;
+    write_atom(output_root, &tera, &site, &post_items).await?;
     files_written = files_written.saturating_add(1);
 
     let tags = entities::tag::Entity::find()
@@ -403,7 +420,7 @@ async fn render_site_with_overrides(
         tag_context.insert("items", &tag_items);
         let tag_output = tera.render("tag.html", &tag_context)?;
         let tag_slug = sanitize_tag_slug(&tag.name);
-        let tag_path = tmp_root.path().join("tags").join(tag_slug);
+        let tag_path = output_root.join("tags").join(tag_slug);
 
         fs::create_dir_all(&tag_path).await?;
         fs::write(tag_path.join("index.html"), tag_output.as_bytes()).await?;
@@ -413,7 +430,7 @@ async fn render_site_with_overrides(
     let template_assets = template_root.join("assets");
     copy_directory_recursive(
         &template_assets,
-        &tmp_root.path().join("assets"),
+        &output_root.join("assets"),
         &mut files_written,
     )
     .await?;
@@ -422,15 +439,10 @@ async fn render_site_with_overrides(
         db,
         site.id,
         upload_root,
-        &tmp_root.path().join("media/images"),
+        &output_root.join("media/images"),
         &mut files_written,
     )
     .await?;
-
-    if fs::metadata(&rendered_root).await.is_ok() {
-        fs::remove_dir_all(&rendered_root).await?;
-    }
-    fs::rename(tmp_root.path(), &rendered_root).await?;
 
     Ok(files_written)
 }

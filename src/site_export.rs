@@ -1,4 +1,5 @@
 use crate::errors::SiteError;
+use crate::publish::S3CompatiblePublishConfig;
 use crate::{
     entities, list_asset_variants, list_audit_events, list_memberships, list_users_by_ids,
 };
@@ -36,6 +37,14 @@ pub struct ExportSite {
     pub template_name: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publish_config: Option<ExportSitePublishConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportSitePublishConfig {
+    pub method: entities::site_publish_config::PublishMethod,
+    pub s3: S3CompatiblePublishConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -518,6 +527,25 @@ pub async fn export_site_with_roots(
         .collect();
 
     let template_overrides = export_template_overrides(override_root).await?;
+    let publish_config = entities::site_publish_config::Entity::find_by_id(site_id)
+        .one(db)
+        .await?
+        .map(|row| {
+            if row.method != entities::site_publish_config::PublishMethod::S3Compatible {
+                return Err(SiteError::BadRequest(format!(
+                    "unsupported publish method in export: {}",
+                    row.method
+                )));
+            }
+            let s3 = serde_json::from_value::<S3CompatiblePublishConfig>(row.config_json).map_err(
+                |error| SiteError::BadRequest(format!("invalid publish config in export: {error}")),
+            )?;
+            Ok(ExportSitePublishConfig {
+                method: row.method,
+                s3,
+            })
+        })
+        .transpose()?;
 
     Ok(SiteExport {
         format_version: SITE_EXPORT_FORMAT_VERSION,
@@ -529,6 +557,7 @@ pub async fn export_site_with_roots(
             template_name: site.template_name,
             created_at: site.created_at,
             updated_at: site.updated_at,
+            publish_config,
         },
         memberships: exported_memberships,
         tags: exported_tags,
@@ -596,6 +625,21 @@ pub async fn import_site_export<C: ConnectionTrait>(
     }
     .insert(db)
     .await?;
+
+    if let Some(publish_config) = &export.site.publish_config {
+        let config_json = serde_json::to_value(&publish_config.s3).map_err(|error| {
+            SiteError::internal(format!("failed to serialize publish config: {error}"))
+        })?;
+        entities::site_publish_config::ActiveModel {
+            site_id: Set(site_id),
+            method: Set(publish_config.method),
+            config_json: Set(config_json),
+            created_at: Set(export.exported_at),
+            updated_at: Set(export.exported_at),
+        }
+        .insert(db)
+        .await?;
+    }
 
     let mut created_users = 0usize;
     let mut reused_users = 0usize;
@@ -1420,6 +1464,7 @@ mod tests {
                 template_name: "default".to_string(),
                 created_at: Utc::now(),
                 updated_at: None,
+                publish_config: None,
             },
             memberships: Vec::new(),
             tags: Vec::new(),
@@ -1492,6 +1537,7 @@ mod tests {
                 template_name: "default".to_string(),
                 created_at: Utc::now(),
                 updated_at: None,
+                publish_config: None,
             },
             memberships: Vec::new(),
             tags: Vec::new(),
