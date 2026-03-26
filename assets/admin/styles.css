@@ -118,6 +118,11 @@
 	input[type="file"] {
 		@apply cursor-pointer bg-white;
 	}
+
+	input.site-import-file::file-selector-button,
+	input.site-import-file::-webkit-file-upload-button {
+		@apply mr-4;
+	}
 }
 
 @layer components {
