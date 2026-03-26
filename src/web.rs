@@ -4642,10 +4642,13 @@ async fn admin_site_settings(
 
     let template_shared = AdminTemplateData::new("Site Settings")
         .with_site_context(site.id, &site.full_title)
-        .with_links(vec![AdminLink::new(
-            &format!("/admin/site/{site_id}/memberships"),
-            "Memberships",
-        )]);
+        .with_links(vec![
+            AdminLink::new(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
+            AdminLink::new(
+                &format!("/admin/site/{site_id}/content/scan"),
+                "Scan content",
+            ),
+        ]);
     let template_shared = if let Some(imported) = query.imported {
         template_shared.with_toast_message(wordpress_import_message(imported), "imported")
     } else {
