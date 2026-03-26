@@ -231,7 +231,7 @@ struct AdminContentDetailTemplate {
     revisions_summary: String,
     tags: Vec<String>,
     aliases: Vec<AdminContentAliasRow>,
-    creator_sub: String,
+    creator_label: String,
     content_id: Uuid,
     site_id: Uuid,
     slug: String,
@@ -3542,6 +3542,25 @@ async fn admin_site_content_detail(
                 content.site_id
             ))
         })?;
+    let creator_label = entities::user::Entity::find()
+        .filter(entities::user::Column::Subject.eq(content.creator_sub.clone()))
+        .one(state.db.as_ref())
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!(
+                "failed to load creator {} for content {content_id}: {error}",
+                content.creator_sub
+            ))
+        })?
+        .map(|user| match (user.display_name, user.email) {
+            (Some(display_name), Some(email)) if display_name != email => {
+                format!("{display_name} ({email})")
+            }
+            (Some(display_name), _) => display_name,
+            (None, Some(email)) => email,
+            (None, None) => user.subject,
+        })
+        .unwrap_or_else(|| content.creator_sub.clone());
 
     let route = content_primary_route(&content);
     Ok(AdminContentDetailTemplate {
@@ -3574,8 +3593,7 @@ async fn admin_site_content_detail(
         revisions_summary: latest_revision_summary(&revisions),
         tags,
         aliases,
-        // TODO look up the creator by sub and display their name instead of sub
-        creator_sub: content.creator_sub,
+        creator_label,
         content_id: content.id,
         site_id: content.site_id,
         slug: content.slug,

@@ -1,14 +1,10 @@
 {% extends "base_template.html" %}
 {% block body %}
-<form method="post" action class="editor-form" data-editor-config data-site-id="{{ site_id }}" data-allow-external-image="{{ allow_external_image }}">
+<form method="post" action class="editor-form" data-editor-config data-new-content-slug-controller data-site-id="{{ site_id }}" data-allow-external-image="{{ allow_external_image }}">
   <div class="form-grid">
     <div class="form-field">
       <label for="title">Title</label>
       <input id="title" name="title" type="text" required />
-    </div>
-    <div class="form-field">
-      <label for="slug">Slug</label>
-      <input id="slug" name="slug" type="text" required />
     </div>
     <div class="form-field">
       <label for="page_type">Page Type</label>
@@ -27,6 +23,15 @@
   </label>
   <div class="form-actions">
     <button type="submit" class="save">Create content</button>
+  </div>
+
+  <div class="form-field">
+    <div class="flex items-end justify-between gap-2">
+      <label for="slug">Slug</label>
+      <button type="button" class="editor-button" data-slug-reset>Use title slug</button>
+    </div>
+    <input id="slug" name="slug" type="text" required />
+    <p class="text-xs text-slate-500">Auto-generates from the title until you choose to edit it.</p>
   </div>
 
 </form>

@@ -37,6 +37,133 @@ const bindConfirmingForms = () => {
 		});
 };
 
+const normalizeSlug = (value: string) => {
+	let slug = "";
+	let previousDash = false;
+
+	for (const ch of value.toLowerCase()) {
+		const code = ch.charCodeAt(0);
+		const isAsciiAlphaNumeric =
+			(code >= 48 && code <= 57) || (code >= 97 && code <= 122);
+
+		if (isAsciiAlphaNumeric) {
+			slug += ch;
+			previousDash = false;
+			continue;
+		}
+
+		if (!previousDash) {
+			slug += "-";
+			previousDash = true;
+		}
+	}
+
+	slug = slug.trim().replace(/^[-_]+|[-_]+$/g, "");
+	return slug || "post";
+};
+
+const bindNewContentSlugController = () => {
+	const form = document.querySelector<HTMLFormElement>(
+		"form[data-new-content-slug-controller]",
+	);
+
+	if (!form) {
+		return;
+	}
+
+	const titleInput = form.querySelector<HTMLInputElement>("#title");
+	const slugInput = form.querySelector<HTMLInputElement>("#slug");
+	const resetButton = form.querySelector<HTMLButtonElement>("[data-slug-reset]");
+
+	if (!titleInput || !slugInput || !resetButton) {
+		return;
+	}
+
+	const promptMessage =
+		"Edit the slug manually? It will stop following the title until you reset it.";
+	let isManualSlug = false;
+
+	const syncSlugFromTitle = () => {
+		if (isManualSlug) {
+			return;
+		}
+		const title = titleInput.value.trim();
+		slugInput.value = title ? normalizeSlug(title) : "";
+	};
+
+	const setManualMode = (manual: boolean) => {
+		isManualSlug = manual;
+		slugInput.readOnly = !manual;
+	};
+
+	const confirmManualEdit = () => {
+		if (isManualSlug) {
+			return true;
+		}
+		if (!window.confirm(promptMessage)) {
+			return false;
+		}
+		setManualMode(true);
+		return true;
+	};
+
+	const unlockSlugFromPointer = (event: PointerEvent) => {
+		if (isManualSlug) {
+			return;
+		}
+		event.preventDefault();
+		if (!confirmManualEdit()) {
+			return;
+		}
+		slugInput.focus();
+		slugInput.select();
+	};
+
+	const unlockSlugFromKeyboard = (event: KeyboardEvent) => {
+		if (isManualSlug) {
+			return;
+		}
+
+		const key = event.key.toLowerCase();
+		const isEditingKey =
+			event.key.length === 1 ||
+			event.key === "Backspace" ||
+			event.key === "Delete" ||
+			((event.ctrlKey || event.metaKey) && (key === "v" || key === "x"));
+
+		if (!isEditingKey) {
+			return;
+		}
+
+		event.preventDefault();
+		if (!confirmManualEdit()) {
+			return;
+		}
+		slugInput.focus();
+		slugInput.select();
+	};
+
+	resetButton.addEventListener("click", (event) => {
+		event.preventDefault();
+		setManualMode(false);
+		syncSlugFromTitle();
+		slugInput.focus();
+	});
+
+	titleInput.addEventListener("input", syncSlugFromTitle);
+	titleInput.addEventListener("change", syncSlugFromTitle);
+
+	slugInput.addEventListener("pointerdown", unlockSlugFromPointer);
+	slugInput.addEventListener("keydown", unlockSlugFromKeyboard);
+
+	form.addEventListener("submit", () => {
+		syncSlugFromTitle();
+	});
+
+	setManualMode(false);
+	syncSlugFromTitle();
+};
+
 const createAssetCard = (asset: components["schemas"]["AssetLibraryItem"]) => {
 	const button = document.createElement("button");
 	button.type = "button";
@@ -979,6 +1106,7 @@ const initEditor = () => {
 function doPageStartup() {
 	initTransientMessages();
 	initTagEditor();
+	bindNewContentSlugController();
 	initMembershipCreateForm();
 	bindConfirmingForms();
 	initEditor();
