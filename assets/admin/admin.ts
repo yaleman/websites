@@ -6,6 +6,12 @@ type SiteImportLookupResponse = {
 	full_title: string | null;
 };
 
+type SiteImportLookupSource = {
+	short_name: string;
+	exists: boolean;
+	full_title: string | null;
+};
+
 const initSiteImportPrompt = () => {
 	const root = document.querySelector<HTMLElement>("[data-site-import-root]");
 	const form = root?.querySelector<HTMLFormElement>("[data-site-import-form]");
@@ -55,6 +61,72 @@ const initSiteImportPrompt = () => {
 		setStatus(null);
 	};
 
+	const lookupSiteOnDashboard = async (
+		shortName: string,
+	): Promise<SiteImportLookupSource | null> => {
+		const response = await fetch("/admin", {
+			headers: {
+				Accept: "text/html",
+			},
+		});
+		if (!response.ok) {
+			return null;
+		}
+
+		const document = new DOMParser().parseFromString(
+			await response.text(),
+			"text/html",
+		);
+		for (const row of document.querySelectorAll("tbody tr")) {
+			const links = row.querySelectorAll("a");
+			if (links.length < 2) {
+				continue;
+			}
+
+			const rowShortName = links[1].textContent?.trim();
+			if (rowShortName !== shortName) {
+				continue;
+			}
+
+			return {
+				short_name: rowShortName,
+				exists: true,
+				full_title: links[0].textContent?.trim() ?? null,
+			};
+		}
+
+		return {
+			short_name: shortName,
+			exists: false,
+			full_title: null,
+		};
+	};
+
+	const lookupExistingSite = async (
+		shortName: string,
+	): Promise<SiteImportLookupSource | null> => {
+		try {
+			const response = await fetch(
+				`${checkUrl}?short_name=${encodeURIComponent(shortName)}`,
+				{
+					headers: {
+						Accept: "application/json",
+					},
+				},
+			);
+			if (response.ok) {
+				return (await response.json()) as SiteImportLookupSource;
+			}
+			if (response.status !== 404) {
+				return null;
+			}
+		} catch {
+			// Fall back to the dashboard HTML if the lookup endpoint is unavailable.
+		}
+
+		return lookupSiteOnDashboard(shortName);
+	};
+
 	replace.addEventListener("change", () => {
 		submit.disabled = prompt.hidden || !replace.checked;
 		submit.textContent = replace.checked
@@ -98,26 +170,17 @@ const initSiteImportPrompt = () => {
 			submit.textContent = "Checking existing site";
 			setStatus(null);
 
-			const response = await fetch(
-				`${checkUrl}?short_name=${encodeURIComponent(shortName)}`,
-				{
-					headers: {
-						Accept: "application/json",
-					},
-				},
-			);
+			const lookup = await lookupExistingSite(shortName);
 			if (serial !== requestSerial) {
 				return;
 			}
-			if (!response.ok) {
+			if (!lookup) {
 				setStatus(
 					"Could not verify whether this site already exists. You can still submit the import.",
 				);
 				return;
 			}
-
-			const lookup = (await response.json()) as SiteImportLookupResponse;
-			if (lookup.exists) {
+			if (lookup?.exists) {
 				showDuplicatePrompt(lookup);
 			} else {
 				resetPrompt();

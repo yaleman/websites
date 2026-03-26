@@ -262,4 +262,61 @@ test.describe("site settings", () => {
 			await cleanupHarness(harness);
 		}
 	});
+
+	test("falls back to the dashboard when the import lookup route is unavailable", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const subject = "site-import-fallback";
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				subject,
+				true,
+			);
+			const apiContext = await createAuthenticatedApiContext(
+				harness,
+				subject,
+				true,
+			);
+
+			try {
+				await page.route("**/admin/sites/import/check**", async (route) => {
+					await route.fulfill({
+						status: 404,
+						contentType: "text/plain",
+						body: "Not Found",
+					});
+				});
+
+				const exportResponse = await apiContext.api.get(
+					`/admin/site/${harness.siteId}/export.json`,
+				);
+				expect(exportResponse.ok()).toBe(true);
+				const exportJson = await exportResponse.text();
+
+				const jsonPath = path.join(harness.tempRoot, "site-export-fallback.json");
+				await writeFile(jsonPath, exportJson);
+
+				await page.goto(
+					`https://127.0.0.1:${harness.port}/admin/sites/import`,
+					{ waitUntil: "domcontentloaded" },
+				);
+				await page.setInputFiles("#file", jsonPath);
+
+				await expect(page.locator("[data-site-import-prompt]")).toBeVisible();
+				await expect(page.locator("[data-site-import-details]")).toContainText(
+					"already exists",
+				);
+				await expect(page.locator("[data-site-import-status]")).toBeHidden();
+			} finally {
+				await apiContext.api.dispose();
+				await context.close();
+			}
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
 });
