@@ -30,16 +30,23 @@ test.describe("site settings", () => {
 				ownerSubject,
 			);
 			try {
-				await ownerSession.page.goto(
-					`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/settings`,
-					{ waitUntil: "domcontentloaded" },
-				);
-				await expect(
-					ownerSession.page.getByRole("link", { name: "Delete site" }),
-				).toHaveCount(0);
-			} finally {
-				await ownerSession.context.close();
-			}
+			await ownerSession.page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/settings`,
+				{ waitUntil: "domcontentloaded" },
+			);
+			await expect(
+				ownerSession.page.getByRole("link", { name: "Delete site" }),
+			).toHaveCount(0);
+			await expect(
+				ownerSession.page.getByRole("link", { name: "Scan content" }),
+			).toBeVisible();
+			await ownerSession.page.getByRole("link", { name: "Scan content" }).click();
+			await expect(ownerSession.page).toHaveURL(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/scan`,
+			);
+		} finally {
+			await ownerSession.context.close();
+		}
 
 			const adminSession = await createAuthenticatedPage(
 				browser,
