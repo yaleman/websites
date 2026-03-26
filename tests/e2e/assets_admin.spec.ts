@@ -1,4 +1,6 @@
 import { createServer } from "node:http";
+import { rm } from "node:fs/promises";
+import path from "node:path";
 
 import { expect, test } from "@playwright/test";
 
@@ -65,6 +67,73 @@ test.describe("assets admin", () => {
 			).toBeVisible();
 			await expect(page.locator("body")).toContainText("banner.png");
 			await expect(page.getByRole("img", { name: "banner.png" })).toBeVisible();
+
+			await context.close();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
+	test("flags missing assets and supports in-place replacement", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const userId = await createUser(harness, "asset-replacer");
+			await addMembership(harness, userId, "owner");
+			const assetId = await createAssetWithThumbnail(harness, {
+				originalFilename: "missing-banner.png",
+				storageBasename: "missing-banner.png",
+				thumbnailFilename: "missing-banner_thumb.png",
+			});
+
+			await rm(path.join(harness.uploadRoot, "missing-banner.png"), {
+				force: true,
+			});
+			await rm(path.join(harness.uploadRoot, "missing-banner_thumb.png"), {
+				force: true,
+			});
+
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				"asset-replacer",
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/assets`,
+				{ waitUntil: "domcontentloaded" },
+			);
+			const assetRow = page.locator("tr", { hasText: "missing-banner.png" });
+			await expect(
+				assetRow.getByRole("link", { name: "missing" }),
+			).toBeVisible();
+
+			await page.getByRole("link", { name: "missing" }).click();
+			await expect(page).toHaveURL(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/assets/${assetId}/replace`,
+			);
+			await expect(
+				page.getByRole("heading", { name: "Replace Asset" }),
+			).toBeVisible();
+
+			await page.locator('input[type="file"]').setInputFiles({
+				name: "missing-banner.png",
+				mimeType: "image/png",
+				buffer: tinyPngBytes,
+			});
+			await page.getByRole("button", { name: "Replace", exact: true }).click();
+
+			await expect(page).toHaveURL(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/assets`,
+			);
+			await expect(
+				assetRow.getByRole("img", { name: "missing-banner.png" }),
+			).toBeVisible();
+			await expect(
+				assetRow.getByRole("link", { name: /^missing$/ }),
+			).toHaveCount(0);
 
 			await context.close();
 		} finally {

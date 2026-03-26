@@ -26,12 +26,13 @@ use crate::token_auth::{
     issue_user_api_token, revoke_user_api_token, signer_from_secret, summarize_grants,
 };
 use crate::{
-    NewContent, cli::OidcConfig, content_primary_route, create_content, create_membership,
-    create_site, create_tag, delete_membership, delete_site, delete_tag, deserialize_site_export,
-    export_site, get_membership_by_id, get_membership_for_subject, get_revision,
-    get_revision_by_number, get_user_by_id, import_site_export, import_wordpress_xml, list_aliases,
-    list_assets, list_content, list_content_tags, list_memberships, list_memberships_for_user_id,
-    list_revisions, list_sites, list_sites_for_subject, list_tags, list_users, list_users_by_ids,
+    NewAssetVariant, NewContent, cli::OidcConfig, content_primary_route, create_content,
+    create_membership, create_site, create_tag, delete_membership, delete_site, delete_tag,
+    deserialize_site_export, export_site, get_asset_for_site, get_membership_by_id,
+    get_membership_for_subject, get_revision, get_revision_by_number, get_user_by_id,
+    import_site_export, import_wordpress_xml, list_aliases, list_assets, list_content,
+    list_content_tags, list_memberships, list_memberships_for_user_id, list_revisions, list_sites,
+    list_sites_for_subject, list_tags, list_users, list_users_by_ids, persist_asset_files,
     render_content_preview, render_site, resolve_site_template_override_root, resolve_upload_root,
     search_all_content, search_content, serialize_site_export_pretty, store_uploaded_asset,
     sync_tags_to_content, update_content, update_membership_role, update_site_settings,
@@ -56,14 +57,16 @@ use openidconnect::{
 use sea_orm::prelude::StringLen;
 
 use sea_orm::{
-    ColumnTrait as _, Condition, ConnectionTrait, DatabaseConnection, DeriveActiveEnum,
-    EntityTrait, EnumIter, QueryFilter, QueryOrder, TransactionTrait,
+    ActiveModelTrait, ColumnTrait as _, Condition, ConnectionTrait, DatabaseConnection,
+    DeriveActiveEnum, EntityTrait, EnumIter, IntoActiveModel, QueryFilter, QueryOrder, Set,
+    TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use similar::TextDiff;
 use std::collections::{HashMap, HashSet};
 use std::env;
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::path::{Component, Path as StdPath, PathBuf};
 use std::str::FromStr;
@@ -1830,6 +1833,10 @@ fn build_admin_app(state: AdminState, assets_dir: &StdPath, upload_root: &StdPat
         .route(
             "/admin/site/{site_id}/assets/new",
             get(admin_site_assets_new).post(admin_site_assets_create),
+        )
+        .route(
+            "/admin/site/{site_id}/assets/{asset_id}/replace",
+            get(admin_site_asset_replace).post(admin_site_asset_replace_update),
         )
         .route(
             "/admin/site/{site_id}/settings",
@@ -4670,6 +4677,229 @@ async fn admin_site_assets_create(
             "failed to commit asset transaction: {error}"
         )));
     }
+
+    Ok(Redirect::to(&format!("/admin/site/{site_id}/assets")))
+}
+
+async fn remove_file_if_exists(path: &StdPath) -> Result<(), SiteError> {
+    match fs::remove_file(path).await {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(SiteError::from(error)),
+    }
+}
+
+async fn replace_asset_variant<C: ConnectionTrait>(
+    db: &C,
+    input: NewAssetVariant,
+) -> Result<entities::asset_variant::Model, SiteError> {
+    let existing = entities::asset_variant::Entity::find()
+        .filter(entities::asset_variant::Column::AssetId.eq(input.asset_id))
+        .filter(entities::asset_variant::Column::VariantKind.eq(&input.variant_kind))
+        .one(db)
+        .await
+        .map_err(SiteError::from)?;
+
+    if let Some(existing) = existing {
+        let mut active = existing.into_active_model();
+        active.filename = Set(input.filename);
+        active.mime_type = Set(input.mime_type);
+        active.byte_length = Set(input.byte_length);
+        active.width = Set(input.width);
+        active.height = Set(input.height);
+        active.update(db).await.map_err(SiteError::from)
+    } else {
+        crate::create_asset_variant(db, input)
+            .await
+            .map_err(SiteError::internal)
+    }
+}
+
+async fn replace_asset_files<C: ConnectionTrait>(
+    db: &C,
+    upload_root: &StdPath,
+    site_id: Uuid,
+    asset_id: Uuid,
+    bytes: Vec<u8>,
+    original_filename: String,
+    mime_type: Option<String>,
+) -> Result<entities::asset::Model, SiteError> {
+    let existing_asset = entities::asset::Entity::find_by_id(asset_id)
+        .filter(entities::asset::Column::SiteId.eq(site_id))
+        .one(db)
+        .await
+        .map_err(SiteError::from)?
+        .ok_or(SiteError::NotFound)?;
+
+    let existing_variants = crate::list_asset_variants(db, asset_id)
+        .await
+        .map_err(SiteError::internal)?;
+    let existing_thumbnail_filename = existing_variants
+        .iter()
+        .find(|variant| variant.variant_kind == "thumbnail")
+        .map(|variant| variant.filename.clone());
+
+    let file_details = persist_asset_files(
+        upload_root,
+        &existing_asset.storage_basename,
+        bytes,
+        &original_filename,
+        mime_type,
+    )
+    .await?;
+
+    let mut asset = existing_asset.clone().into_active_model();
+    asset.original_filename = Set(original_filename);
+    asset.mime_type = Set(file_details.mime_type.clone());
+    asset.byte_length = Set(file_details.byte_length);
+    asset.width = Set(file_details.width);
+    asset.height = Set(file_details.height);
+    let updated_asset = asset.update(db).await.map_err(SiteError::from)?;
+
+    replace_asset_variant(
+        db,
+        NewAssetVariant {
+            asset_id,
+            variant_kind: "original".to_string(),
+            filename: existing_asset.storage_basename.clone(),
+            mime_type: file_details.mime_type.clone(),
+            byte_length: file_details.byte_length,
+            width: file_details.width,
+            height: file_details.height,
+        },
+    )
+    .await?;
+
+    match (
+        existing_thumbnail_filename,
+        file_details.thumbnail_filename.clone(),
+    ) {
+        (Some(existing_thumbnail), Some(new_thumbnail)) => {
+            replace_asset_variant(
+                db,
+                NewAssetVariant {
+                    asset_id,
+                    variant_kind: "thumbnail".to_string(),
+                    filename: new_thumbnail.clone(),
+                    mime_type: file_details.mime_type.clone(),
+                    byte_length: file_details.byte_length,
+                    width: file_details.width,
+                    height: file_details.height,
+                },
+            )
+            .await?;
+
+            if existing_thumbnail != new_thumbnail {
+                remove_file_if_exists(&upload_root.join(existing_thumbnail)).await?;
+            }
+        }
+        (None, Some(new_thumbnail)) => {
+            replace_asset_variant(
+                db,
+                NewAssetVariant {
+                    asset_id,
+                    variant_kind: "thumbnail".to_string(),
+                    filename: new_thumbnail,
+                    mime_type: file_details.mime_type.clone(),
+                    byte_length: file_details.byte_length,
+                    width: file_details.width,
+                    height: file_details.height,
+                },
+            )
+            .await?;
+        }
+        (Some(existing_thumbnail), None) => {
+            if let Some(existing_variant) = existing_variants
+                .iter()
+                .find(|variant| variant.variant_kind == "thumbnail")
+            {
+                entities::asset_variant::Entity::delete_by_id(existing_variant.id)
+                    .exec(db)
+                    .await
+                    .map_err(SiteError::from)?;
+            }
+            remove_file_if_exists(&upload_root.join(existing_thumbnail)).await?;
+        }
+        (None, None) => {}
+    }
+
+    Ok(updated_asset)
+}
+
+async fn admin_site_asset_replace(
+    State(state): State<AdminState>,
+    session: Session,
+    Path((site_id, asset_id)): Path<(Uuid, Uuid)>,
+) -> Result<AdminAssetReplaceTemplate, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let asset = get_asset_for_site(state.db.as_ref(), site_id, asset_id)
+        .await?
+        .ok_or(SiteError::NotFound)?;
+    let asset_row =
+        build_admin_asset_rows(state.db.as_ref(), &state.upload_root, vec![asset.clone()])
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| SiteError::internal("missing asset row".to_string()))?;
+
+    Ok(AdminAssetReplaceTemplate {
+        template_shared: AdminTemplateData::new("Replace Asset")
+            .with_site_context(site.id, &site.full_title)
+            .with_links(vec![
+                AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Back to assets"),
+                AdminLink::new(
+                    &format!("/admin/site/{site_id}/content"),
+                    "Back to site dashboard",
+                ),
+            ]),
+        site_id: site.id,
+        site_full_title: site.full_title,
+        asset: asset_row,
+    })
+}
+
+async fn admin_site_asset_replace_update(
+    State(state): State<AdminState>,
+    session: Session,
+    Path((site_id, asset_id)): Path<(Uuid, Uuid)>,
+    multipart: Multipart,
+) -> Result<Redirect, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let actor = current_user(&session).await?;
+    let (upload_bytes, source_url) = parse_asset_upload(multipart).await?;
+    let (bytes, original_filename, mime_type) =
+        resolve_asset_upload(state.oidc_client.as_ref(), upload_bytes, source_url).await?;
+
+    let txn = state.db.begin().await?;
+    let asset = replace_asset_files(
+        &txn,
+        &state.upload_root,
+        site_id,
+        asset_id,
+        bytes,
+        original_filename,
+        mime_type,
+    )
+    .await?;
+
+    log_audit_event(
+        &txn,
+        &actor.subject,
+        "replace_asset",
+        "asset",
+        &asset.id.to_string(),
+        Some(asset.site_id),
+        Some(json!({
+            "original_filename": &asset.original_filename,
+            "storage_basename": &asset.storage_basename,
+            "mime_type": &asset.mime_type
+        })),
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to log asset audit: {error}")))?;
+
+    txn.commit().await?;
 
     Ok(Redirect::to(&format!("/admin/site/{site_id}/assets")))
 }

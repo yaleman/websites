@@ -380,6 +380,41 @@ const routeCases: RouteCase[] = [
 		}),
 	},
 	{
+		name: "asset replace form",
+		method: "GET",
+		requiredRole: "author",
+		lowerRole: "viewer",
+		successStatus: 200,
+		prepare: async (harness, fixtures) => ({
+			path: `/admin/site/${harness.siteId}/assets/${fixtures.assetId}/replace`,
+			assertSuccess: async (response) => {
+				expect(await response.text()).toContain("Replace the uploaded asset");
+			},
+		}),
+	},
+	{
+		name: "asset replace",
+		method: "POST",
+		requiredRole: "author",
+		lowerRole: "viewer",
+		successStatus: 303,
+		prepare: async (harness, fixtures) => ({
+			path: `/admin/site/${harness.siteId}/assets/${fixtures.assetId}/replace`,
+			multipart: {
+				file: {
+					name: fixtures.assetOriginalFilename,
+					mimeType: "image/png",
+					buffer: tinyPngBytes,
+				},
+			},
+			assertSuccess: async (response) => {
+				expect(response.headers()["location"]).toBe(
+					`/admin/site/${harness.siteId}/assets`,
+				);
+			},
+		}),
+	},
+	{
 		name: "render route",
 		method: "GET",
 		requiredRole: "editor",

@@ -6,7 +6,15 @@ import {
 	request as playwrightRequest,
 } from "@playwright/test";
 import { spawn } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import {
+	cp,
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -360,6 +368,7 @@ export async function setupHarness(): Promise<TestHarness> {
 		path.join(workspaceRoot, "admin-ui-assets"),
 		path.join(tempRoot, "admin-ui-assets"),
 	);
+	await mkdir(uploadRoot, { recursive: true });
 	await mkdir(siteTemplatesRoot, { recursive: true });
 	await cp(
 		path.join(workspaceRoot, "site_templates", "default"),
@@ -598,6 +607,13 @@ export async function createAssetWithThumbnail(
 		{ cwd: harness.tempRoot, env: harness.env },
 	);
 	const assetId = parseCreatedId(createResult.stdout, "asset");
+
+	await mkdir(harness.uploadRoot, { recursive: true });
+	await writeFile(path.join(harness.uploadRoot, storageBasename), tinyPngBytes);
+	await writeFile(
+		path.join(harness.uploadRoot, thumbnailFilename),
+		tinyPngBytes,
+	);
 
 	await runWebsitesCommand(
 		[
