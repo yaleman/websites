@@ -69,7 +69,8 @@
 <section class="surface grid gap-4 p-4 md:p-6">
   <h2>Template Overrides</h2>
   <p class="inline-body">
-    Overrides are stored per site and layered on top of the selected shared template. Leave a file without an override to keep inheriting the shared version.
+    Overrides are stored per site and layered on top of the selected shared template. Use <strong>Reset to inherited</strong> to remove a site-specific copy
+    and fall back to the shared version again.
   </p>
   <table>
     <thead>
@@ -89,8 +90,8 @@
         <td>
           <a href="{{ file.edit_href }}">Edit</a>
           {% if file.override_exists %}
-          <form method="post" action="{{ file.reset_href }}">
-            <button type="submit">Reset</button>
+          <form method="post" action="{{ file.reset_href }}" data-confirm-message="Reset this template override to the shared template?">
+            <button type="submit">Reset to inherited</button>
           </form>
           {% endif %}
         </td>

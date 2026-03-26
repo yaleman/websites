@@ -1,8 +1,6 @@
-import { readFile } from "node:fs/promises";
 import path from "node:path";
-
+import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
-
 import {
 	addMembership,
 	cleanupHarness,
@@ -99,10 +97,19 @@ test.describe("template overrides", () => {
 				.toContain('data-site-template="override"');
 
 			await page.goto(
-				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/settings/templates/page.html`,
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/settings`,
 				{ waitUntil: "domcontentloaded" },
 			);
-			await page.getByRole("button", { name: "Reset override" }).click();
+			await expect(
+				page.getByRole("button", { name: "Reset to inherited" }),
+			).toBeVisible();
+			page.once("dialog", async (dialog) => {
+				expect(dialog.message()).toContain(
+					"Reset this template override to the shared template?",
+				);
+				await dialog.accept();
+			});
+			await page.getByRole("button", { name: "Reset to inherited" }).click();
 			await expect(
 				page.locator("[data-clear-query-param='reset']"),
 			).toContainText("Template override reset.");
@@ -114,6 +121,54 @@ test.describe("template overrides", () => {
 			expect(await page.content()).not.toContain(
 				'data-site-template="override"',
 			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/settings/templates/page.html`,
+				{ waitUntil: "domcontentloaded" },
+			);
+			await expect(
+				page.getByRole("button", { name: "Reset to inherited" }),
+			).toHaveCount(0);
+
+			await page.getByLabel("Template Source").fill(overrideSource);
+			await page.getByRole("button", { name: "Save override" }).click();
+			await expect(
+				page.locator("[data-clear-query-param='saved']"),
+			).toContainText("Template override saved.");
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/settings/templates/page.html`,
+				{ waitUntil: "domcontentloaded" },
+			);
+			await expect(
+				page.getByRole("button", { name: "Reset to inherited" }),
+			).toBeVisible();
+			page.once("dialog", async (dialog) => {
+				expect(dialog.message()).toContain(
+					"Reset this template override to the shared template?",
+				);
+				await dialog.accept();
+			});
+			await page.getByRole("button", { name: "Reset to inherited" }).click();
+			await expect(
+				page.locator("[data-clear-query-param='reset']"),
+			).toContainText("Template override reset.");
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/preview`,
+				{ waitUntil: "domcontentloaded" },
+			);
+			expect(await page.content()).not.toContain(
+				'data-site-template="override"',
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/settings/templates/page.html`,
+				{ waitUntil: "domcontentloaded" },
+			);
+			await expect(
+				page.getByRole("button", { name: "Reset to inherited" }),
+			).toHaveCount(0);
 
 			await context.close();
 		} finally {
