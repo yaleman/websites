@@ -50,7 +50,7 @@
       <!-- <h2>Actions</h2> -->
       <ul class="shared-actions m-0 flex list-none flex-wrap gap-2 p-0">
         {% for link in template_shared.links %}
-        <li class="rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm"><a class="font-medium no-underline" href="{{ link.href }}" {% if let Some(target)=link.target %} target="{{ target }}" {% endif %}>{{ link.label }}</a></li>
+        <li><a class="page-navbar-button" href="{{ link.href }}" {% if let Some(target)=link.target %} target="{{ target }}" {% endif %}>{{ link.label }}</a></li>
         {% endfor %}
       </ul>
       {% endif %}

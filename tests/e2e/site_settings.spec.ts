@@ -40,6 +40,14 @@ test.describe("site settings", () => {
 			await expect(
 				ownerSession.page.getByRole("link", { name: "Scan content" }),
 			).toBeVisible();
+			await expect(
+				ownerSession.page.getByRole("link", {
+					name: "Download site export JSON",
+				}),
+			).toHaveAttribute(
+				"href",
+				`/admin/site/${harness.siteId}/export.json`,
+			);
 			await ownerSession.page.getByRole("link", { name: "Scan content" }).click();
 			await expect(ownerSession.page).toHaveURL(
 				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/scan`,
