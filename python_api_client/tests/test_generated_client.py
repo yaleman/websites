@@ -1,7 +1,7 @@
-import importlib
+import importlib  # noqa: I001
+import re
 import io
 import os
-import re
 import socket
 import subprocess
 import tempfile
@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
+import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -112,11 +113,37 @@ def run_command(args: list[str], *, env: dict[str, str] | None = None) -> str:
     return result.stdout.strip()
 
 
-def parse_created_id(output: str) -> str:
-    match = re.search(r"([0-9a-f]{8}-[0-9a-f-]{27})", output)
+def parse_created_id(output: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(output)  # validate it's a uuid
+    except ValueError:
+        raise AssertionError(f"output is not a valid UUID: {output}")
+
+
+def find_created_id(output: str) -> uuid.UUID:
+    matcher = re.compile("created site: (?P<site_id>[0-9a-f\-]+)", re.IGNORECASE | re.MULTILINE)
+    match = matcher.search(output)
     if not match:
         raise AssertionError(f"failed to parse created id from output: {output}")
-    return match.group(1)
+    return parse_created_id(match.group("site_id"))
+
+
+def find_uuid(output: str) -> uuid.UUID:
+    matcher = re.compile("([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", re.IGNORECASE)
+    match = matcher.search(output)
+    if not match:
+        raise AssertionError(f"failed to find UUID in output: {output}")
+    return parse_created_id(match.group(1))
+
+
+def test_parse_created_id() -> None:
+    """this is a bit recursive"""
+    with pytest.raises(AssertionError, match="^output is not a valid UUID"):
+        parse_created_id("not-a-uuid")
+    with pytest.raises(AssertionError, match="^output is not a valid UUID"):
+        parse_created_id("Created new thing with id: 12345")
+    valid_uuid = str(uuid.uuid4())
+    assert parse_created_id(f"Created new thing with id: {valid_uuid}".split()[-1]) == uuid.UUID(valid_uuid)
 
 
 def reserve_port() -> int:
@@ -207,26 +234,25 @@ def running_server() -> Generator[Harness, None, None]:
         upload_root = temp_root / "uploads"
         cert_path, key_path = generate_tls_material(temp_root)
 
-        site_id = uuid.UUID(
-            parse_created_id(
-                run_command(
-                    [
-                        str(WEBSITES_BIN),
-                        "--database-url",
-                        str(db_path),
-                        "site",
-                        "create",
-                        "--short-name",
-                        "py-client",
-                        "--full-title",
-                        "Python Client Test",
-                        "--template-name",
-                        "default",
-                    ]
-                )
+        site_id = find_created_id(
+            run_command(
+                [
+                    str(WEBSITES_BIN),
+                    "--database-url",
+                    str(db_path),
+                    "site",
+                    "create",
+                    "--short-name",
+                    "py-client",
+                    "--full-title",
+                    "Python Client Test",
+                    "--template-name",
+                    "default",
+                ]
             )
         )
-        user_id = parse_created_id(
+
+        user_id = find_uuid(
             run_command(
                 [
                     str(WEBSITES_BIN),
@@ -249,7 +275,7 @@ def running_server() -> Generator[Harness, None, None]:
                 "--site-id",
                 str(site_id),
                 "--user-id",
-                user_id,
+                str(user_id),
                 "--role",
                 "author",
             ]
