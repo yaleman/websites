@@ -1,17 +1,33 @@
 {% extends "base_template.html" %}
 {% block body %}
-<p class="inline-body">
-  Upload a site export JSON file to create a new site record with its related database content.
-</p>
+<section class="surface grid gap-4 p-4 md:p-6" data-site-import-root data-check-url="/admin/sites/import/check">
+  <p class="inline-body">
+    Upload a site export JSON file to create a new site record with its related database content.
+  </p>
 
-<form method="post" action enctype="multipart/form-data" class="stack-form">
-  <div class="form-field">
-    <label for="file">Select File</label>
-    <input id="file" name="file" type="file" accept="application/json,.json" required />
-  </div>
+  <form method="post" action="/admin/sites/import" enctype="multipart/form-data" class="stack-form" data-site-import-form>
+    <div class="form-field">
+      <label for="file">Select File</label>
+      <input id="file" name="file" type="file" accept="application/json,.json" required data-site-import-file />
+    </div>
 
-  <div class="form-actions">
-    <button type="submit">Import site</button>
-  </div>
-</form>
+    <div
+      class="grid gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
+      hidden
+      data-site-import-prompt>
+      <p class="m-0 font-medium">This export matches an existing site.</p>
+      <p class="m-0" data-site-import-details></p>
+      <label class="inline-checkbox">
+        <input type="checkbox" name="replace_existing" value="1" data-site-import-replace />
+        Replace existing site
+      </label>
+    </div>
+
+    <p class="inline-body text-rose-700" hidden data-site-import-status></p>
+
+    <div class="form-actions">
+      <button type="submit" class="btn" data-site-import-submit>Import site</button>
+    </div>
+  </form>
+</section>
 {% endblock %}

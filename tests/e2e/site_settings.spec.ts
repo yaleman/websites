@@ -5,6 +5,7 @@ import path from "node:path";
 import {
 	addMembership,
 	cleanupHarness,
+	createAuthenticatedApiContext,
 	createAuthenticatedPage,
 	createUser,
 	setupHarness,
@@ -190,6 +191,73 @@ test.describe("site settings", () => {
 			await expect(page.locator("tbody tr")).toHaveCount(1);
 
 			await context.close();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
+	test("prompts to replace an existing site export before importing", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const subject = "site-import-admin";
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				subject,
+				true,
+			);
+			const apiContext = await createAuthenticatedApiContext(
+				harness,
+				subject,
+				true,
+			);
+
+			try {
+				await page.goto(
+					`https://127.0.0.1:${harness.port}/admin/sites/import`,
+					{ waitUntil: "domcontentloaded" },
+				);
+
+				const exportResponse = await apiContext.api.get(
+					`/admin/site/${harness.siteId}/export.json`,
+				);
+				expect(exportResponse.ok()).toBe(true);
+				const exportJson = await exportResponse.text();
+
+				const jsonPath = path.join(harness.tempRoot, "site-export.json");
+				await writeFile(jsonPath, exportJson);
+
+				await page.goto(
+					`https://127.0.0.1:${harness.port}/admin/sites/import`,
+					{ waitUntil: "domcontentloaded" },
+				);
+				await page.setInputFiles("#file", jsonPath);
+
+				const prompt = page.locator("[data-site-import-prompt]");
+				await expect(prompt).toBeVisible();
+				await expect(page.locator("[data-site-import-details]")).toContainText(
+					"already exists",
+				);
+				const submit = page.locator("[data-site-import-submit]");
+				await expect(submit).toBeDisabled();
+
+				await page.getByLabel("Replace existing site").check();
+				await expect(submit).toBeEnabled();
+
+				await submit.click();
+				await expect(page).toHaveURL(
+					`https://127.0.0.1:${harness.port}/admin?imported=1`,
+				);
+				await expect(page.locator("body")).toContainText(
+					"Site import complete.",
+				);
+			} finally {
+				await apiContext.api.dispose();
+				await context.close();
+			}
 		} finally {
 			await cleanupHarness(harness);
 		}

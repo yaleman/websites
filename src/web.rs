@@ -27,10 +27,10 @@ use crate::token_auth::{
 };
 use crate::{
     NewContent, cli::OidcConfig, content_primary_route, create_content, create_membership,
-    create_site, create_tag, delete_membership, delete_site, delete_tag, export_site,
-    get_membership_by_id, get_membership_for_subject, get_revision, get_revision_by_number,
-    get_user_by_id, import_site_json, import_wordpress_xml, list_aliases, list_assets,
-    list_content, list_content_tags, list_memberships, list_memberships_for_user_id,
+    create_site, create_tag, delete_membership, delete_site, delete_tag, deserialize_site_export,
+    export_site, get_membership_by_id, get_membership_for_subject, get_revision,
+    get_revision_by_number, get_user_by_id, import_site_export, import_wordpress_xml, list_aliases,
+    list_assets, list_content, list_content_tags, list_memberships, list_memberships_for_user_id,
     list_revisions, list_sites, list_sites_for_subject, list_tags, list_users, list_users_by_ids,
     render_content_preview, render_site, resolve_site_template_override_root, resolve_upload_root,
     search_all_content, search_content, serialize_site_export_pretty, store_uploaded_asset,
@@ -669,6 +669,12 @@ struct ThemeInstallForm {
     branch: Option<String>,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct SiteImportLookupQuery {
+    short_name: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct CsrfTokenForm {
     csrf_token: String,
@@ -683,6 +689,14 @@ struct DashboardQuery {
 #[derive(Debug, Deserialize)]
 struct AdminUsersQuery {
     created: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Serialize)]
+struct SiteImportLookupResponse {
+    short_name: String,
+    exists: bool,
+    full_title: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1899,6 +1913,11 @@ pub async fn run_admin_server(
             "admin editor assets not found; run `pnpm run build:admin` to generate them",
         ));
     }
+    if !assets_dir.join("admin.js").exists() {
+        return Err(anyhow::anyhow!(
+            "admin UI assets not found; run `pnpm run build:admin` to generate them",
+        ));
+    }
     debug!("admin assets dir: {}", assets_dir.display());
     debug!("upload root dir: {}", upload_root.display());
 
@@ -2231,6 +2250,30 @@ async fn admin_sites_import(session: Session) -> Result<AdminSitesImportTemplate
     })
 }
 
+#[allow(dead_code)]
+async fn admin_sites_import_check(
+    State(state): State<AdminState>,
+    session: Session,
+    Query(query): Query<SiteImportLookupQuery>,
+) -> Result<Json<SiteImportLookupResponse>, SiteError> {
+    require_global_admin(&session).await?;
+    let short_name = query.short_name.trim();
+    if short_name.is_empty() {
+        return Err(SiteError::BadRequest("missing site short_name".to_string()));
+    }
+
+    let existing = entities::site::Entity::find()
+        .filter(entities::site::Column::ShortName.eq(short_name))
+        .one(state.db.as_ref())
+        .await?;
+
+    Ok(Json(SiteImportLookupResponse {
+        short_name: short_name.to_string(),
+        exists: existing.is_some(),
+        full_title: existing.map(|site| site.full_title),
+    }))
+}
+
 async fn admin_sites_import_create(
     State(state): State<AdminState>,
     session: Session,
@@ -2238,13 +2281,22 @@ async fn admin_sites_import_create(
 ) -> Result<Redirect, SiteError> {
     let actor = require_global_admin(&session).await?;
     let mut upload_bytes: Option<Vec<u8>> = None;
+    let mut replace_existing = false;
 
     loop {
         let field = multipart.next_field().await.map_err(|error| {
             SiteError::internal(format!("failed to parse site import: {error}"))
         })?;
         let Some(field) = field else { break };
-        if field.name() != Some("file") {
+        let field_name = field.name().map(str::to_string);
+        if field_name.as_deref() == Some("replace_existing") {
+            let bytes = field.bytes().await.map_err(|error| {
+                SiteError::internal(format!("failed to read site import upload: {error}"))
+            })?;
+            replace_existing = !bytes.is_empty();
+            continue;
+        }
+        if field_name.as_deref() != Some("file") {
             continue;
         }
         let bytes = field.bytes().await.map_err(|error| {
@@ -2258,9 +2310,39 @@ async fn admin_sites_import_create(
 
     let upload_bytes = upload_bytes
         .ok_or_else(|| SiteError::BadRequest("provide a site export JSON file".to_string()))?;
+    let export = deserialize_site_export(&upload_bytes)?;
+    let existing_site = entities::site::Entity::find()
+        .filter(entities::site::Column::ShortName.eq(export.site.short_name.clone()))
+        .one(state.db.as_ref())
+        .await?;
+    let mut existing_site_files = None;
+    if let Some(existing_site) = existing_site {
+        if !replace_existing {
+            return Err(SiteError::BadRequest(format!(
+                "site {} already exists; select replace existing site to continue",
+                export.site.short_name
+            )));
+        }
+        let media_filenames = collect_site_media_filenames(state.db.as_ref(), existing_site.id)
+            .await
+            .map_err(|error| {
+                SiteError::internal(format!("failed to collect site files: {error}"))
+            })?;
+        existing_site_files = Some((existing_site.id, media_filenames));
+    }
 
     let txn = state.db.begin().await?;
-    let result = import_site_json(&txn, &upload_bytes).await?;
+    if let Some((site_id, _)) = existing_site_files.as_ref() {
+        entities::audit_event::Entity::delete_many()
+            .filter(entities::audit_event::Column::SiteId.eq(*site_id))
+            .exec(&txn)
+            .await
+            .map_err(|error| {
+                SiteError::internal(format!("failed to delete site audit events: {error}"))
+            })?;
+        delete_site(&txn, *site_id).await?;
+    }
+    let result = import_site_export(&txn, &export).await?;
     log_audit_event(
         &txn,
         &actor.subject,
@@ -2273,11 +2355,16 @@ async fn admin_sites_import_create(
             "created_users": result.created_users,
             "reused_users": result.reused_users,
             "warnings": &result.warnings,
+            "replaced_existing_site": existing_site_files.is_some(),
         })),
     )
     .await
     .map_err(|error| SiteError::internal(format!("failed to log import audit: {error}")))?;
     txn.commit().await?;
+
+    if let Some((site_id, media_filenames)) = existing_site_files {
+        remove_deleted_site_files(site_id, &media_filenames).await?;
+    }
 
     Ok(Redirect::to("/admin?imported=1"))
 }
@@ -5376,6 +5463,7 @@ mod tests {
                 "/admin/sites/import",
                 get(admin_sites_import).post(admin_sites_import_create),
             )
+            .route("/admin/sites/import/check", get(admin_sites_import_check))
             .route("/admin/site/{site_id}/export.json", get(admin_site_export))
             .layer(from_fn(crate::middleware::require_session));
 
@@ -5424,9 +5512,23 @@ mod tests {
     }
 
     fn multipart_json_request_body(json: &str) -> (String, Vec<u8>) {
+        multipart_json_request_body_with_replace(json, false)
+    }
+
+    fn multipart_json_request_body_with_replace(
+        json: &str,
+        replace_existing: bool,
+    ) -> (String, Vec<u8>) {
         let boundary = "site-import-boundary";
+        let replace_field = if replace_existing {
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"replace_existing\"\r\n\r\n1\r\n"
+            )
+        } else {
+            String::new()
+        };
         let body = format!(
-            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"site-export.json\"\r\nContent-Type: application/json\r\n\r\n{json}\r\n--{boundary}--\r\n"
+            "{replace_field}--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"site-export.json\"\r\nContent-Type: application/json\r\n\r\n{json}\r\n--{boundary}--\r\n"
         );
         (boundary.to_string(), body.into_bytes())
     }
@@ -6095,6 +6197,154 @@ mod tests {
             .await
             .expect("failed to query imported site");
         assert!(imported_site.is_some(), "expected imported site to exist");
+    }
+
+    #[tokio::test]
+    async fn admin_site_import_check_reports_existing_site() {
+        let db = Arc::new(test_db_start().await);
+        let admin = crate::entities::user::create_user(
+            db.as_ref(),
+            "admin",
+            Some("admin@example.com"),
+            Some("Admin"),
+            true,
+        )
+        .await
+        .expect("failed to create admin");
+        let existing = crate::create_site(
+            db.as_ref(),
+            "duplicate-site".to_string(),
+            "Existing Site".to_string(),
+            DEFAULT_TEMPLATE_NAME.to_string(),
+        )
+        .await
+        .expect("failed to create existing site");
+
+        let session_store = MemoryStore::default();
+        let router = site_transfer_test_router(test_admin_state(db.clone()), session_store.clone());
+        let cookie = seed_session_cookie(
+            test_admin_state(db.clone()),
+            session_store.clone(),
+            admin.id,
+        )
+        .await;
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/sites/import/check?short_name=duplicate-site")
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .expect("failed to build import check request"),
+            )
+            .await
+            .expect("failed to call import check route");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("failed to read import check body");
+        let lookup: serde_json::Value =
+            serde_json::from_slice(&body).expect("failed to parse import check json");
+        assert_eq!(
+            lookup["short_name"].as_str().expect("missing short_name"),
+            "duplicate-site"
+        );
+        assert!(lookup["exists"].as_bool().expect("missing exists flag"));
+        assert_eq!(
+            lookup["full_title"].as_str().expect("missing full_title"),
+            "Existing Site"
+        );
+        assert_eq!(existing.short_name, "duplicate-site");
+    }
+
+    #[tokio::test]
+    async fn admin_site_import_replaces_existing_site_when_requested() {
+        let db = Arc::new(test_db_start().await);
+        let admin = crate::entities::user::create_user(
+            db.as_ref(),
+            "admin",
+            Some("admin@example.com"),
+            Some("Admin"),
+            true,
+        )
+        .await
+        .expect("failed to create admin");
+        let existing = crate::create_site(
+            db.as_ref(),
+            "duplicate-site".to_string(),
+            "Existing Site".to_string(),
+            DEFAULT_TEMPLATE_NAME.to_string(),
+        )
+        .await
+        .expect("failed to create existing site");
+        let export = crate::SiteExport {
+            format_version: crate::SITE_EXPORT_FORMAT_VERSION,
+            exported_at: Utc::now(),
+            site: crate::site_export::ExportSite {
+                id: Uuid::now_v7(),
+                short_name: "duplicate-site".to_string(),
+                full_title: "Replaced Site".to_string(),
+                template_name: DEFAULT_TEMPLATE_NAME.to_string(),
+                created_at: Utc::now(),
+                updated_at: None,
+            },
+            memberships: Vec::new(),
+            tags: Vec::new(),
+            content_items: Vec::new(),
+            assets: Vec::new(),
+            audit_events: Vec::new(),
+            template_overrides: Vec::new(),
+        };
+        let json =
+            crate::serialize_site_export_pretty(&export).expect("failed to serialize import json");
+        let (boundary, body) = multipart_json_request_body_with_replace(&json, true);
+
+        let session_store = MemoryStore::default();
+        let router = site_transfer_test_router(test_admin_state(db.clone()), session_store.clone());
+        let cookie = seed_session_cookie(
+            test_admin_state(db.clone()),
+            session_store.clone(),
+            admin.id,
+        )
+        .await;
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/sites/import")
+                    .header(header::COOKIE, cookie)
+                    .header(
+                        header::CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .expect("failed to build replace import request"),
+            )
+            .await
+            .expect("failed to call replace import route");
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::LOCATION)
+                .expect("missing location header")
+                .to_str()
+                .expect("invalid location header"),
+            "/admin?imported=1"
+        );
+
+        let imported_site = crate::entities::site::Entity::find()
+            .filter(crate::entities::site::Column::ShortName.eq("duplicate-site"))
+            .one(db.as_ref())
+            .await
+            .expect("failed to query replaced site")
+            .expect("expected replaced site to exist");
+        assert_eq!(imported_site.id, export.site.id);
+        assert_eq!(imported_site.full_title, "Replaced Site");
+        assert_ne!(imported_site.id, existing.id);
     }
 
     #[tokio::test]
