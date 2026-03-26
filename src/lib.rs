@@ -2228,22 +2228,27 @@ pub async fn get_asset_for_site(
 }
 
 /// Creates an uploaded image asset and derivative thumbnail files under the provided upload root.
-pub async fn store_uploaded_asset<C: ConnectionTrait>(
-    db: &C,
+pub(crate) struct PersistedAssetFiles {
+    pub byte_length: i32,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub mime_type: String,
+    pub thumbnail_filename: Option<String>,
+}
+
+pub(crate) async fn persist_asset_files(
     upload_root: &Path,
-    site_id: Uuid,
-    uploader_sub: &str,
+    storage_basename: &str,
     bytes: Vec<u8>,
-    original_filename: String,
+    original_filename: &str,
     mime_type: Option<String>,
-) -> Result<entities::asset::Model, SiteError> {
-    let extension = Path::new(&original_filename)
+) -> Result<PersistedAssetFiles, SiteError> {
+    let extension = Path::new(original_filename)
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("bin")
         .to_lowercase();
-    let storage_basename = format!("{}.{}", Uuid::now_v7(), extension);
-    let storage_path = upload_root.join(&storage_basename);
+    let storage_path = upload_root.join(storage_basename);
 
     fs::create_dir_all(upload_root).await.map_err(|error| {
         SiteError::internal(format!("failed to create upload directory: {error}"))
@@ -2272,6 +2277,54 @@ pub async fn store_uploaded_asset<C: ConnectionTrait>(
     };
     let mime_type = mime_type.unwrap_or_else(|| mime_from_extension(&extension).to_string());
 
+    let thumbnail_filename = if let Some(thumbnail) = thumbnail {
+        let stem = Path::new(storage_basename)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("asset");
+        let filename = format!("{stem}_thumb.{}", thumbnail.extension);
+        let thumb_path = upload_root.join(&filename);
+        fs::write(&thumb_path, &thumbnail.bytes)
+            .await
+            .map_err(|error| SiteError::internal(format!("failed to write thumbnail: {error}")))?;
+        Some(filename)
+    } else {
+        None
+    };
+
+    Ok(PersistedAssetFiles {
+        byte_length,
+        width: width_i32,
+        height: height_i32,
+        mime_type,
+        thumbnail_filename,
+    })
+}
+
+pub async fn store_uploaded_asset<C: ConnectionTrait>(
+    db: &C,
+    upload_root: &Path,
+    site_id: Uuid,
+    uploader_sub: &str,
+    bytes: Vec<u8>,
+    original_filename: String,
+    mime_type: Option<String>,
+) -> Result<entities::asset::Model, SiteError> {
+    let extension = Path::new(&original_filename)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("bin")
+        .to_lowercase();
+    let storage_basename = format!("{}.{}", Uuid::now_v7(), extension);
+    let file_details = persist_asset_files(
+        upload_root,
+        &storage_basename,
+        bytes,
+        &original_filename,
+        mime_type,
+    )
+    .await?;
+
     let asset = create_asset(
         db,
         NewAsset {
@@ -2279,10 +2332,10 @@ pub async fn store_uploaded_asset<C: ConnectionTrait>(
             uploader_sub: uploader_sub.to_string(),
             original_filename,
             storage_basename: storage_basename.clone(),
-            mime_type: mime_type.clone(),
-            byte_length,
-            width: width_i32,
-            height: height_i32,
+            mime_type: file_details.mime_type.clone(),
+            byte_length: file_details.byte_length,
+            width: file_details.width,
+            height: file_details.height,
         },
     )
     .await
@@ -2294,35 +2347,26 @@ pub async fn store_uploaded_asset<C: ConnectionTrait>(
             asset_id: asset.id,
             variant_kind: "original".to_string(),
             filename: storage_basename,
-            mime_type: mime_type.clone(),
-            byte_length,
-            width: width_i32,
-            height: height_i32,
+            mime_type: file_details.mime_type.clone(),
+            byte_length: file_details.byte_length,
+            width: file_details.width,
+            height: file_details.height,
         },
     )
     .await
     .map_err(|error| SiteError::internal(format!("failed to create asset variant: {error}")))?;
 
-    if let Some(thumbnail) = thumbnail {
-        let stem = Path::new(&asset.storage_basename)
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or("asset");
-        let filename = format!("{stem}_thumb.{}", thumbnail.extension);
-        let thumb_path = upload_root.join(&filename);
-        fs::write(&thumb_path, &thumbnail.bytes)
-            .await
-            .map_err(|error| SiteError::internal(format!("failed to write thumbnail: {error}")))?;
+    if let Some(filename) = file_details.thumbnail_filename {
         create_asset_variant(
             db,
             NewAssetVariant {
                 asset_id: asset.id,
                 variant_kind: "thumbnail".to_string(),
                 filename,
-                mime_type: thumbnail.mime_type,
-                byte_length: thumbnail.byte_length,
-                width: thumbnail.width,
-                height: thumbnail.height,
+                mime_type: file_details.mime_type.clone(),
+                byte_length: file_details.byte_length,
+                width: file_details.width,
+                height: file_details.height,
             },
         )
         .await
