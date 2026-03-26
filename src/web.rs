@@ -358,7 +358,6 @@ struct AdminSiteSettingsTemplate {
     template_name: String,
     can_delete_site: bool,
     can_import_wordpress: bool,
-    export_href: Option<String>,
     templates: Vec<String>,
     template_files: Vec<AdminSiteTemplateFileRow>,
 }
@@ -4631,25 +4630,27 @@ async fn admin_site_settings(
         || membership
             .as_ref()
             .is_some_and(|membership| role_satisfies(membership.role, SiteRole::Author));
-    let export_href = if viewer.admin
+    let mut links = vec![
+        AdminLink::new(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
+        AdminLink::new(
+            &format!("/admin/site/{site_id}/content/scan"),
+            "Scan content",
+        ),
+    ];
+    if viewer.admin
         || membership
             .as_ref()
             .is_some_and(|membership| role_satisfies(membership.role, SiteRole::Owner))
     {
-        Some(format!("/admin/site/{site_id}/export.json"))
-    } else {
-        None
-    };
+        links.push(AdminLink::new(
+            &format!("/admin/site/{site_id}/export.json"),
+            "Download site export JSON",
+        ));
+    }
 
     let template_shared = AdminTemplateData::new("Site Settings")
         .with_site_context(site.id, &site.full_title)
-        .with_links(vec![
-            AdminLink::new(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
-            AdminLink::new(
-                &format!("/admin/site/{site_id}/content/scan"),
-                "Scan content",
-            ),
-        ]);
+        .with_links(links);
     let template_shared = if let Some(imported) = query.imported {
         template_shared.with_toast_message(wordpress_import_message(imported), "imported")
     } else {
@@ -4664,7 +4665,6 @@ async fn admin_site_settings(
         template_name: site.template_name,
         can_delete_site: viewer.admin,
         can_import_wordpress,
-        export_href,
         templates,
         template_files,
     })

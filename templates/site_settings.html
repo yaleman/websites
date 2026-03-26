@@ -33,12 +33,6 @@
       <dt class="text-sm font-medium text-slate-600">Short Name</dt>
       <dd class="text-sm text-slate-800">{{ site_short_name }}</dd>
     </div>
-    {% if let Some(export_href) = export_href %}
-    <div class="grid gap-0.5">
-      <dt class="text-sm font-medium text-slate-600">Export</dt>
-      <dd class="text-sm text-slate-800"><a href="{{ export_href }}">Download site export JSON</a></dd>
-    </div>
-    {% endif %}
   </dl>
 </section>
 
