@@ -8,7 +8,14 @@
   <form method="post" action="/admin/sites/import" enctype="multipart/form-data" class="stack-form" data-site-import-form>
     <div class="form-field">
       <label for="file">Select File</label>
-      <input id="file" name="file" type="file" accept="application/json,.json" required data-site-import-file />
+      <input
+        id="file"
+        name="file"
+        type="file"
+        accept="application/json,.json"
+        required
+        class="site-import-file"
+        data-site-import-file />
     </div>
 
     <div
