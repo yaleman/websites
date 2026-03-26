@@ -182,7 +182,7 @@
 	}
 
 	.message--toast {
-		@apply fixed right-4 top-4 z-50 max-w-[min(30rem,calc(100vw-2rem))] border-emerald-200 bg-emerald-50 text-emerald-900;
+		@apply fixed right-4 top-4 z-50 min-w-[50vw] min-h-[50vh] max-w-[calc(100vw-2rem)] !border-emerald-700 !bg-emerald-600 !text-white shadow-2xl;
 	}
 
 	.inline-body {
