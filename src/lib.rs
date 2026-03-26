@@ -298,10 +298,8 @@ async fn render_site_with_overrides(
     let tera = load_site_templates(&template_root, override_root).await?;
 
     let rendered_root = rendered_dir.join(site.short_name.clone());
-    let tmp_root = tempfile::tempdir().map_err(SiteError::internal)?;
-
-    // make sure the final path exists
-    fs::create_dir_all(&rendered_root).await?;
+    fs::create_dir_all(rendered_dir).await?;
+    let tmp_root = tempfile::tempdir_in(rendered_dir).map_err(SiteError::internal)?;
 
     let mut files_written = 0usize;
     let mut index_items = Vec::new();
@@ -432,7 +430,7 @@ async fn render_site_with_overrides(
     if fs::metadata(&rendered_root).await.is_ok() {
         fs::remove_dir_all(&rendered_root).await?;
     }
-    fs::rename(&tmp_root, &rendered_root).await?;
+    fs::rename(tmp_root.path(), &rendered_root).await?;
 
     Ok(files_written)
 }
