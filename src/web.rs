@@ -74,7 +74,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use tower_http::services::ServeDir;
 use tower_sessions::{Expiry, Session, SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use url::Url;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -1894,17 +1894,18 @@ pub async fn run_admin_server(
         .with_secure(false)
         .with_expiry(Expiry::OnSessionEnd);
 
-    info!(
-        "admin server listening on https://{listen} / {}",
-        state.oidc_frontend_url
-    );
-    info!("admin assets dir: {}", assets_dir.display());
-    info!("upload root dir: {}", upload_root.display());
     if !assets_dir.join("editor.js").exists() {
         return Err(anyhow::anyhow!(
             "admin editor assets not found; run `pnpm run build:admin` to generate them",
         ));
     }
+    debug!("admin assets dir: {}", assets_dir.display());
+    debug!("upload root dir: {}", upload_root.display());
+
+    info!(
+        "Starting server on https://{listen} / {}",
+        state.oidc_frontend_url
+    );
 
     let app = build_admin_app(state, &assets_dir, &upload_root)
         .layer(session_layer)
