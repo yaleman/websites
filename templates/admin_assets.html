@@ -20,6 +20,7 @@
     {% for asset in assets %}
     <tr>
       <td>
+        {% if asset.original_exists %}
         <a href="{{ asset.original_url }}">
           {% if let Some(thumbnail_url) = asset.thumbnail_url %}
           <img src="{{ thumbnail_url }}" alt="{{ asset.original_filename }}" width="96" />
@@ -27,6 +28,9 @@
           <img src="{{ asset.original_url }}" alt="{{ asset.original_filename }}" width="96" />
           {% endif %}
         </a>
+        {% else %}
+        <a class="btn btn--danger" href="/admin/site/{{ site_id }}/assets/{{ asset.id }}/replace">missing</a>
+        {% endif %}
       </td>
       <td>
         <strong>{{ asset.original_filename }}</strong><br />

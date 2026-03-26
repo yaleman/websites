@@ -11,6 +11,18 @@
     <code>{{ asset.id }}</code>
   </div>
 
+  <div>
+    {% if asset.original_exists %}
+    {% if let Some(thumbnail_url) = asset.thumbnail_url %}
+    <a href="{{ asset.original_url }}"><img src="{{ thumbnail_url }}" alt="{{ asset.original_filename }}" width="160" /></a>
+    {% else %}
+    <a href="{{ asset.original_url }}"><img src="{{ asset.original_url }}" alt="{{ asset.original_filename }}" width="160" /></a>
+    {% endif %}
+    {% else %}
+    <span class="btn btn--danger">missing</span>
+    {% endif %}
+  </div>
+
   <form method="post" action enctype="multipart/form-data" class="stack-form">
     <div class="form-field">
       <label for="file">Replacement File</label>
