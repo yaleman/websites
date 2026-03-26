@@ -206,6 +206,51 @@ test.describe("content new editor", () => {
 		}
 	});
 
+	test("creates content and lands in the editor with a toast", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const userId = await createUser(harness, "create-content-user");
+			await addMembership(harness, userId, "owner");
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				"create-content-user",
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/new`,
+				{ waitUntil: "domcontentloaded" },
+			);
+
+			await page.locator("#title").fill("Created from the new page");
+			await expect(page.locator("#slug")).toHaveValue("created-from-the-new-page");
+			await page.locator(".ProseMirror").click();
+			await page.keyboard.type("Created body from the new page");
+
+			await Promise.all([
+				page.getByRole("button", { name: "Create content" }).click(),
+				page.waitForURL(
+					(newUrl) =>
+						newUrl.pathname.match(
+							new RegExp(
+								`^/admin/site/${harness.siteId}/content/[0-9a-f-]+/edit$`,
+							),
+						) !== null,
+				),
+			]);
+
+			const toast = page.locator(".message--toast");
+			await expect(toast).toBeVisible();
+			await expect(toast).toContainText("Content saved.");
+			await expect(page.getByRole("button", { name: "Save content" })).toBeVisible();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
 	test("allows access without membership", async ({ browser }) => {
 		const harness = await setupHarness();
 

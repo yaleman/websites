@@ -283,6 +283,7 @@ const routeCases: RouteCase[] = [
 				assertSuccess: async (response) => {
 					const location = response.headers()["location"] ?? "";
 					expect(location).toContain(`/admin/site/${harness.siteId}/content/`);
+					expect(location).toContain("/edit");
 				},
 			};
 		},
