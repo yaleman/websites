@@ -1,25 +1,27 @@
 {% extends "base_template.html" %}
 {% block body %}
-<p class="inline-body">
-  <strong>{{ title }}</strong> publishes at <code>{{ primary_route }}</code> and is currently <strong>{{ status }}</strong>.
-</p>
+<section class="surface grid gap-4 p-4 md:p-6">
+  <p class="inline-body">
+    <strong>{{ title }}</strong> publishes at <code>{{ primary_route }}</code> and is currently <strong>{{ status }}</strong>.
+  </p>
 
-<form method="POST" action="/admin/site/{{ site_id }}/content/scan" id="content-scan-form">
-  <label for="content-scan-domains">Scan this content for issues:</label>
-  <!-- TODO is the "leave blank for all" legit here? -->
-  <input
-    id="content-scan-domains"
-    type="text"
-    name="domains"
-    placeholder="Comma-separated list of domains to treat as local (leave blank for all)"
-  />
-  <input type="hidden" name="scan_limit" value="1" />
-  <input type="hidden" name="site_id" value="{{ site_id }}" />
-  <input type="hidden" name="content_id" value="{{ content_id }}" />
-  <input type="submit" value="Scan for Issues" id="scan-button" />
-</form>
+  <form method="POST" action="/admin/site/{{ site_id }}/content/scan" id="content-scan-form">
+    <label for="content-scan-domains">Scan this content for issues:</label>
+    <!-- TODO is the "leave blank for all" legit here? -->
+    <input
+      id="content-scan-domains"
+      type="text"
+      name="domains"
+      placeholder="Comma-separated list of domains to treat as local (leave blank for all)"
+    />
+    <input type="hidden" name="scan_limit" value="1" />
+    <input type="hidden" name="site_id" value="{{ site_id }}" />
+    <input type="hidden" name="content_id" value="{{ content_id }}" />
+    <input type="submit" value="Scan for Issues" id="scan-button" />
+  </form>
+</section>
 
-<section id="content-metadata">
+<section id="content-metadata" class="surface grid gap-4 p-4 md:p-6">
   <table>
     <tr>
       <th>Page Type</th>
@@ -40,12 +42,14 @@
   </table>
 </section>
 
-<section>
-  <h2>Raw Content</h2>
+<details class="surface grid gap-4 p-4 md:p-6">
+  <summary class="flex cursor-pointer list-none items-center rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm transition hover:border-slate-400 hover:bg-white">
+    Show Raw Content
+  </summary>
   <pre>{{ page_content }}</pre>
-</section>
+</details>
 
-<section>
+<section class="surface grid gap-4 p-4 md:p-6">
   <h2>Tags</h2>
   {% if tags.is_empty() %}
   <p class="inline-body">No tags assigned yet.</p>
@@ -58,7 +62,7 @@
   {% endif %}
 </section>
 
-<section>
+<section class="surface grid gap-4 p-4 md:p-6">
   <h2>Routes</h2>
   <table>
     <thead>
@@ -82,7 +86,7 @@
   </table>
 </section>
 
-<section>
+<section class="surface grid gap-4 p-4 md:p-6">
   <h2>Content Metadata</h2>
   <table>
     <thead>
