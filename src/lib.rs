@@ -538,9 +538,16 @@ async fn load_template(
             );
             let fallback_path = template_root
                 .parent()
-                .map(|parent| parent.join("default").join(filename))
-                .filter(|path| path.exists())
-                .unwrap_or_else(|| resolve_site_templates_root().join("default").join(filename));
+                .unwrap_or(template_root)
+                .join("default")
+                .join(filename);
+            let fallback_path = if fallback_path.exists() {
+                fallback_path
+            } else {
+                PathBuf::from(SITE_TEMPLATES_DIR)
+                    .join("default")
+                    .join(filename)
+            };
             let fallback = fs::read_to_string(fallback_path).await.inspect_err(|err| {
                 error!(
                     error=?err,

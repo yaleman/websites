@@ -1859,6 +1859,7 @@ pub async fn run_admin_server(
     db: Arc<DatabaseConnection>,
     listen: &str,
     oidc: &OidcConfig,
+    site_templates_root: PathBuf,
 ) -> Result<(), anyhow::Error> {
     let jwt_secret = ensure_jwt_hs256_secret(db.as_ref())
         .await
@@ -1877,7 +1878,7 @@ pub async fn run_admin_server(
         jwt_signer: Arc::new(jwt_signer),
         jwt_issuer: oidc.frontend_url.to_string(),
         upload_root: upload_root.clone(),
-        site_templates_root: PathBuf::from(crate::constants::SITE_TEMPLATES_DIR),
+        site_templates_root,
     };
 
     let pool = db.get_sqlite_connection_pool();
