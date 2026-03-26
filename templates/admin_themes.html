@@ -1,6 +1,6 @@
 {% extends "base_template.html" %}
 {% block body %}
-<section>
+<section class="surface grid gap-4 p-4 md:p-6">
   <h2>Managed Themes</h2>
   {% if themes.is_empty() %}
   <p class="inline-body">No themes are registered yet.</p>
@@ -25,12 +25,14 @@
         <td>{% if theme.installed %}Installed{% else %}Missing files{% endif %}</td>
         <td>{{ theme.site_count }}</td>
         <td>
-          <form method="post" action="{{ theme.update_href }}">
-            <button type="submit">Update</button>
-          </form>
-          <form method="post" action="{{ theme.delete_href }}">
-            <button type="submit">Delete</button>
-          </form>
+          <div class="flex flex-wrap gap-2">
+            <form method="post" action="{{ theme.update_href }}" class="flex">
+              <button type="submit" class="btn">Update</button>
+            </form>
+            <form method="post" action="{{ theme.delete_href }}" class="flex">
+              <button type="submit" class="btn btn--danger">Delete</button>
+            </form>
+          </div>
         </td>
       </tr>
       {% endfor %}
@@ -39,9 +41,9 @@
   {% endif %}
 </section>
 
-<section>
+<section class="surface grid gap-4 p-4 md:p-6">
   <h2>Install Theme</h2>
-  <form method="post" action="/admin/themes" class="editor-form">
+  <form method="post" action="/admin/themes" class="stack-form">
     <div class="form-field">
       <label for="repo_url">Repository URL</label>
       <input id="repo_url" name="repo_url" required />
@@ -58,7 +60,7 @@
     </div>
 
     <div class="form-actions">
-      <button type="submit">Install theme</button>
+      <button type="submit" class="btn">Install theme</button>
     </div>
   </form>
 </section>

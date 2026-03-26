@@ -5595,6 +5595,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admin_themes_page_uses_shared_admin_styles() {
+        let db = std::sync::Arc::new(test_db_start().await);
+        let admin = crate::entities::user::create_user(
+            db.as_ref(),
+            "admin",
+            Some("admin@example.com"),
+            Some("Admin"),
+            true,
+        )
+        .await
+        .expect("failed to create admin");
+        let repo = create_theme_repo("version-one");
+        let session_store = MemoryStore::default();
+        let router = test_app_router(test_admin_state(db.clone()), session_store.clone());
+        let cookie = seed_session_cookie(
+            test_admin_state(db.clone()),
+            session_store.clone(),
+            admin.id,
+        )
+        .await;
+        let install_body = urlencoded_theme_form(
+            repo.path().to_str().expect("repo path should be utf-8"),
+            Some("sample-theme"),
+        );
+
+        let install_response = router
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/themes")
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(install_body))
+                    .expect("failed to build install request"),
+            )
+            .await
+            .expect("failed to install theme");
+        assert_eq!(install_response.status(), StatusCode::SEE_OTHER);
+
+        let page = router
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/themes")
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .expect("failed to build themes request"),
+            )
+            .await
+            .expect("failed to load themes page");
+        assert_eq!(page.status(), StatusCode::OK);
+
+        let body = to_bytes(page.into_body(), usize::MAX)
+            .await
+            .expect("failed to read themes page body");
+        let html = String::from_utf8_lossy(&body);
+        assert!(
+            html.contains(r#"class="surface grid gap-4 p-4 md:p-6""#),
+            "expected theme management sections to use shared surface styling"
+        );
+        assert!(
+            html.contains(r#"class="stack-form""#),
+            "expected install form to use shared stacked form styling"
+        );
+        assert!(
+            html.contains(r#"class="btn btn--danger""#),
+            "expected destructive theme action to use danger button styling"
+        );
+        assert!(
+            html.contains(r#"class="flex flex-wrap gap-2""#),
+            "expected theme action buttons to stay compact inside the table"
+        );
+    }
+
+    #[tokio::test]
     async fn admin_themes_install_rejects_non_admin_users() {
         let db = std::sync::Arc::new(test_db_start().await);
         let user = crate::entities::user::create_user(
