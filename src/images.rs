@@ -4,6 +4,7 @@ use image::{GenericImageView, ImageFormat};
 
 use crate::constants::THUMBNAIL_MAX_SIZE;
 
+#[allow(dead_code)]
 pub(crate) struct ThumbnailResult {
     pub(crate) bytes: Vec<u8>,
     pub(crate) extension: String,

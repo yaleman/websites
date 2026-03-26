@@ -1,0 +1,31 @@
+{% extends "base_template.html" %}
+{% block body %}
+<p class="inline-body">
+  Replace the uploaded asset for <strong>{{ site_full_title }}</strong>.
+</p>
+
+<section class="surface grid gap-4 p-4 md:p-6">
+  <div class="inline-body">
+    <strong>{{ asset.original_filename }}</strong><br />
+    <code>{{ asset.storage_basename }}</code><br />
+    <code>{{ asset.id }}</code>
+  </div>
+
+  <form method="post" action enctype="multipart/form-data" class="stack-form">
+    <div class="form-field">
+      <label for="file">Replacement File</label>
+      <input id="file" name="file" type="file" />
+      <p class="inline-body">Choose a new file to replace the current asset.</p>
+    </div>
+    <div class="form-field">
+      <label for="source_url">Replace From URL</label>
+      <input id="source_url" name="source_url" type="url" placeholder="https://example.com/image.png" />
+      <p class="inline-body">Copy a remote image into the existing asset slot.</p>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" name="Replace" class="save">Replace</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

@@ -125,6 +125,14 @@ pub struct Cli {
         help = "Root directory containing site templates"
     )]
     pub site_templates_dir: PathBuf,
+    #[arg(
+        long = "rendered-dir",
+        env = "WEBSITES_RENDERED_DIR",
+        default_value = crate::constants::RENDERED_DIR,
+        value_name = "DIR",
+        help = "Root directory where rendered site output is written"
+    )]
+    pub rendered_dir: PathBuf,
     #[command(flatten)]
     pub oidc: OidcConfigArgs,
     #[command(subcommand)]
@@ -237,8 +245,6 @@ pub enum SiteCommands {
         site_id: Uuid,
         #[arg(long)]
         templates_dir: Option<PathBuf>,
-        #[arg(long, default_value = crate::constants::RENDERED_DIR)]
-        rendered_dir: PathBuf,
     },
     /// Export site data as a versioned JSON document.
     Export {
@@ -437,6 +443,7 @@ pub async fn execute(
     command: Commands,
     db_path: &Path,
     site_templates_dir: &Path,
+    rendered_dir: &Path,
     oidc: &OidcConfigArgs,
 ) -> Result<(), String> {
     let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
@@ -480,6 +487,7 @@ pub async fn execute(
             println!("oidc_client_id={oidc_client_id}");
             println!("oidc_discovery_url={oidc_discovery_url}");
             println!("site_templates_dir={}", site_templates_dir.display());
+            println!("rendered_dir={}", rendered_dir.display());
             Ok(())
         }
         Commands::Site { command } => match command {
@@ -649,13 +657,12 @@ pub async fn execute(
             SiteCommands::Render {
                 site_id,
                 templates_dir,
-                rendered_dir,
             } => {
                 let upload_root = resolve_upload_root();
                 let templates_dir =
                     resolve_site_render_templates_dir(templates_dir, site_templates_dir);
                 let files_written =
-                    render_site(db_ref, site_id, &templates_dir, &rendered_dir, &upload_root)
+                    render_site(db_ref, site_id, &templates_dir, rendered_dir, &upload_root)
                         .await
                         .map_err(|err| err.to_string())?;
                 println!("rendered site {} files {}", site_id, files_written);
@@ -909,6 +916,7 @@ pub async fn execute(
                     &listen,
                     &oidc,
                     site_templates_dir.to_path_buf(),
+                    rendered_dir.to_path_buf(),
                 )
                 .await
                 .map_err(|err| err.to_string())
@@ -1511,7 +1519,40 @@ mod tests {
     }
 
     #[test]
+    fn rendered_dir_can_be_loaded_from_flag() {
+        let cli = Cli::try_parse_from(["websites", "--rendered-dir", "/tmp/rendered-from-flag"])
+            .expect("failed to parse CLI arguments with rendered flag");
+
+        assert_eq!(cli.rendered_dir, PathBuf::from("/tmp/rendered-from-flag"));
+    }
+
+    #[test]
+    fn rendered_dir_can_be_loaded_from_env() {
+        let _guard = env_lock().lock().expect("failed to lock env");
+        let original = std::env::var_os("WEBSITES_RENDERED_DIR");
+
+        unsafe {
+            std::env::set_var("WEBSITES_RENDERED_DIR", "/tmp/rendered-from-env");
+        }
+
+        let cli = Cli::try_parse_from(["websites"])
+            .expect("failed to parse CLI arguments with rendered env override");
+
+        assert_eq!(cli.rendered_dir, PathBuf::from("/tmp/rendered-from-env"));
+
+        match original {
+            Some(value) => unsafe {
+                std::env::set_var("WEBSITES_RENDERED_DIR", value);
+            },
+            None => unsafe {
+                std::env::remove_var("WEBSITES_RENDERED_DIR");
+            },
+        }
+    }
+
+    #[test]
     fn site_render_uses_global_templates_dir_when_command_override_is_missing() {
+        let _guard = env_lock().lock().expect("failed to lock env");
         let cli = Cli::try_parse_from([
             "websites",
             "--site-templates-dir",
@@ -1530,7 +1571,6 @@ mod tests {
                     SiteCommands::Render {
                         site_id,
                         templates_dir,
-                        rendered_dir,
                     },
             } => {
                 assert_eq!(
@@ -1539,10 +1579,13 @@ mod tests {
                         .expect("failed to parse uuid")
                 );
                 assert!(templates_dir.is_none());
-                assert_eq!(rendered_dir, PathBuf::from(crate::constants::RENDERED_DIR));
                 let resolved =
                     resolve_site_render_templates_dir(templates_dir, &site_templates_dir);
                 assert_eq!(resolved, PathBuf::from("/tmp/site-templates-global"));
+                assert_eq!(
+                    cli.rendered_dir,
+                    PathBuf::from(crate::constants::RENDERED_DIR)
+                );
             }
             other => panic!("unexpected parsed command: {other:?}"),
         }
@@ -1550,6 +1593,7 @@ mod tests {
 
     #[test]
     fn site_render_prefers_explicit_templates_dir_override() {
+        let _guard = env_lock().lock().expect("failed to lock env");
         let cli = Cli::try_parse_from([
             "websites",
             "--site-templates-dir",

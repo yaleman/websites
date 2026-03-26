@@ -1265,6 +1265,8 @@ mod tests {
             jwt_issuer: "https://example.com".to_string(),
             upload_root: upload_root.to_path_buf(),
             site_templates_root: site_templates_root.to_path_buf(),
+            rendered_root: std::env::temp_dir()
+                .join(format!("websites-rendered-test-{}", Uuid::now_v7())),
         }
     }
 
