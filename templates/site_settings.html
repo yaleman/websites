@@ -20,6 +20,12 @@
       <button type="submit" class="btn">Save settings</button>
     </div>
   </form>
+  {% if can_manage_publish %}
+  <p class="inline-body">
+    Publishing is configured on the
+    <a href="/admin/site/{{ site_id }}/publish">publish settings page</a>.
+  </p>
+  {% endif %}
 </section>
 
 <section class="surface grid gap-4 p-4 md:p-6">

@@ -1,0 +1,131 @@
+{% extends "base_template.html" %}
+{% block body %}
+
+<section class="surface grid gap-4 p-4 md:p-6">
+  <div class="grid gap-2">
+    <h2>Publish Configuration</h2>
+    <p class="inline-body">
+      Configure how this site publishes to a secondary destination. The current backend is an S3-compatible mirror of the rendered site tree.
+    </p>
+    <p class="text-sm text-slate-600">
+      Method: <strong>{{ method_label }}</strong>
+    </p>
+  </div>
+
+  <form method="post" action="/admin/site/{{ site_id }}/publish" class="stack-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+    <div class="form-field">
+      <label for="method">Publish Method</label>
+      <select id="method" name="method" required>
+        <option value="s3_compatible" {% if config_present %}selected{% endif %}>S3-compatible store</option>
+      </select>
+    </div>
+    <div class="form-field">
+      <label for="endpoint_url">Endpoint URL</label>
+      <input id="endpoint_url" name="endpoint_url" value="{{ endpoint_url }}" required />
+    </div>
+    <div class="form-field">
+      <label for="bucket">Bucket</label>
+      <input id="bucket" name="bucket" value="{{ bucket }}" required />
+    </div>
+    <div class="form-field">
+      <label for="prefix">Prefix</label>
+      <input id="prefix" name="prefix" value="{{ prefix }}" placeholder="Optional object prefix" />
+    </div>
+    <div class="form-field">
+      <label for="region">Region</label>
+      <input id="region" name="region" value="{{ region }}" required />
+    </div>
+    <div class="form-field">
+      <label for="access_key_id">Access Key ID</label>
+      <input id="access_key_id" name="access_key_id" value="{{ access_key_id }}" required />
+    </div>
+    <div class="form-field">
+      <label for="secret_access_key">Secret Access Key</label>
+      <input
+        id="secret_access_key"
+        name="secret_access_key"
+        type="password"
+        autocomplete="off"
+        placeholder="{% if secret_present %}Leave blank to keep the stored secret{% else %}Required{% endif %}"
+      />
+    </div>
+    <label class="inline-flex items-center gap-2 text-sm text-slate-700">
+      <input type="checkbox" name="force_path_style" {% if force_path_style %}checked{% endif %} />
+      Force path-style requests
+    </label>
+    <div class="form-actions">
+      <button type="submit" class="btn">Save publish config</button>
+    </div>
+  </form>
+</section>
+
+<section class="surface grid gap-4 p-4 md:p-6">
+  <h2>Publish Now</h2>
+  {% if can_publish_now %}
+  <p class="inline-body">
+    Queue a publish job to render the site and mirror the rendered files to the configured backend.
+  </p>
+  <form method="post" action="/admin/site/{{ site_id }}/publish/run" class="stack-form">
+    <input type="hidden" name="csrf_token" value="{{ publish_csrf_token }}" />
+    <div class="form-actions">
+      <button type="submit">Queue publish</button>
+    </div>
+  </form>
+  {% else %}
+  <p class="inline-body">
+    Save a publish configuration before queueing a run.
+  </p>
+  {% endif %}
+
+  {% if config_present %}
+  <form method="post" action="/admin/site/{{ site_id }}/publish/delete" data-confirm-message="Delete this site's publish configuration?">
+    <input type="hidden" name="csrf_token" value="{{ delete_csrf_token }}" />
+    <button type="submit" class="btn btn--danger">Delete configuration</button>
+  </form>
+  {% endif %}
+</section>
+
+<section class="surface grid gap-4 p-4 md:p-6">
+  <h2>Recent Runs</h2>
+  {% if runs.is_empty() %}
+  <p class="inline-body">No publish runs recorded yet.</p>
+  {% else %}
+  <table>
+    <thead>
+      <tr>
+        <th>Run ID</th>
+        <th>Status</th>
+        <th>Method</th>
+        <th>Actor</th>
+        <th>Created</th>
+        <th>Started</th>
+        <th>Finished</th>
+        <th>Rendered</th>
+        <th>Published</th>
+        <th>Deleted</th>
+        <th>Error</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in runs %}
+      <tr>
+        <td><code>{{ run.id }}</code></td>
+        <td>{{ run.status }}</td>
+        <td>{{ run.method }}</td>
+        <td>{{ run.actor_sub }}</td>
+        <td><code>{{ run.created_at }}</code></td>
+        <td><code>{{ run.started_at }}</code></td>
+        <td><code>{{ run.finished_at }}</code></td>
+        <td>{{ run.rendered_file_count }}</td>
+        <td>{{ run.published_file_count }}</td>
+        <td>{{ run.deleted_object_count }}</td>
+        <td>{% if run.error_message.is_empty() %}-{% else %}{{ run.error_message }}{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+{% endblock %}
