@@ -48,15 +48,16 @@ FROM gcr.io/distroless/cc-debian12 AS final
 WORKDIR /
 COPY --from=builder /app/target/release/websites /websites
 COPY --from=admin-assets /app/admin-ui-assets /admin-ui-assets
-COPY site_templates /site_templates
+COPY site_templates /data/site_templates
 
 ENV WEBSITES_LISTEN_ADDR="0.0.0.0:9000"
 ENV WEBSITES_DB_PATH="/data/websites.sqlite"
+ENV WEBSITES_UPLOAD_ROOT="/data/uploads"
 ENV WEBSITES_RENDERED_DIR="/data/rendered"
+ENV WEBSITES_SITE_TEMPLATES_DIR="/data/site_templates"
 ENV WEBSITES_TLS_CERT_PATH="/certs/tls.crt"
 ENV WEBSITES_TLS_KEY_PATH="/certs/tls.key"
 ENV WEBSITES_ADMIN_ASSETS_DIR="/admin-ui-assets"
-ENV WEBSITES_SITE_TEMPLATES_DIR="/site_templates"
 
 EXPOSE 9000
 USER nonroot

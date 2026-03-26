@@ -126,6 +126,13 @@ pub struct Cli {
     )]
     pub site_templates_dir: PathBuf,
     #[arg(
+        long = "upload-dir",
+        env = "WEBSITES_UPLOAD_ROOT",
+        value_name = "DIR",
+        help = "Root directory where uploaded media files are written"
+    )]
+    pub upload_dir: Option<PathBuf>,
+    #[arg(
         long = "rendered-dir",
         env = "WEBSITES_RENDERED_DIR",
         default_value = crate::constants::RENDERED_DIR,
@@ -487,6 +494,7 @@ pub async fn execute(
             println!("oidc_client_id={oidc_client_id}");
             println!("oidc_discovery_url={oidc_discovery_url}");
             println!("site_templates_dir={}", site_templates_dir.display());
+            println!("upload_dir={}", crate::resolve_upload_root().display());
             println!("rendered_dir={}", rendered_dir.display());
             Ok(())
         }
@@ -1514,6 +1522,41 @@ mod tests {
             },
             None => unsafe {
                 std::env::remove_var("WEBSITES_SITE_TEMPLATES_DIR");
+            },
+        }
+    }
+
+    #[test]
+    fn upload_dir_can_be_loaded_from_flag() {
+        let cli = Cli::try_parse_from(["websites", "--upload-dir", "/tmp/uploads-from-flag"])
+            .expect("failed to parse CLI arguments with upload flag");
+
+        assert_eq!(
+            cli.upload_dir,
+            Some(PathBuf::from("/tmp/uploads-from-flag"))
+        );
+    }
+
+    #[test]
+    fn upload_dir_can_be_loaded_from_env() {
+        let _guard = env_lock().lock().expect("failed to lock env");
+        let original = std::env::var_os("WEBSITES_UPLOAD_ROOT");
+
+        unsafe {
+            std::env::set_var("WEBSITES_UPLOAD_ROOT", "/tmp/uploads-from-env");
+        }
+
+        let cli = Cli::try_parse_from(["websites"])
+            .expect("failed to parse CLI arguments with upload env override");
+
+        assert_eq!(cli.upload_dir, Some(PathBuf::from("/tmp/uploads-from-env")));
+
+        match original {
+            Some(value) => unsafe {
+                std::env::set_var("WEBSITES_UPLOAD_ROOT", value);
+            },
+            None => unsafe {
+                std::env::remove_var("WEBSITES_UPLOAD_ROOT");
             },
         }
     }

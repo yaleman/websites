@@ -3,12 +3,16 @@ use clap::Parser;
 use websites::{
     cli::execute,
     cli::{Commands, ServeCommands},
-    telemetry,
+    resolve_upload_root, telemetry,
 };
 
 #[tokio::main]
 async fn main() {
     let cli = websites::cli::Cli::parse();
+    let upload_root = cli.upload_dir.clone().unwrap_or_else(resolve_upload_root);
+    unsafe {
+        std::env::set_var("WEBSITES_UPLOAD_ROOT", &upload_root);
+    }
 
     if let Err(err) = telemetry::init("websites") {
         eprintln!("failed to initialize telemetry: {}", err);
