@@ -124,6 +124,88 @@ test.describe("content new editor", () => {
 		}
 	});
 
+	test("auto-fills and unlocks the new content slug on demand", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const userId = await createUser(harness, "slug-flow-user");
+			await addMembership(harness, userId, "owner");
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				"slug-flow-user",
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/new`,
+				{ waitUntil: "domcontentloaded" },
+			);
+
+			await expect(page.locator("#slug")).not.toBeEditable();
+			await page.locator("#title").fill("A Fresh Title");
+			await expect(page.locator("#slug")).toHaveValue("a-fresh-title");
+
+			const focusableOrder = await page.locator("form.editor-form").evaluate(
+				(form) => {
+					const visible = (element: HTMLElement) => {
+						const style = window.getComputedStyle(element);
+						return (
+							style.display !== "none" &&
+							style.visibility !== "hidden" &&
+							!element.hidden
+						);
+					};
+
+					return Array.from(
+						form.querySelectorAll<HTMLElement>(
+							"button, input, select, textarea, [contenteditable='true']",
+						),
+					)
+						.filter(
+							(element) =>
+								visible(element) &&
+								!element.closest("[hidden]") &&
+								!(element as HTMLInputElement).disabled &&
+								element.tabIndex >= 0,
+						)
+						.map(
+							(element) =>
+								element.id ||
+								element.getAttribute("data-slug-reset") ||
+								element.getAttribute("data-command") ||
+								element.tagName.toLowerCase(),
+						);
+				},
+			);
+			expect(focusableOrder[focusableOrder.length - 1]).toBe("slug");
+
+			await page.once("dialog", async (dialog) => {
+				expect(dialog.message()).toContain(
+					"Edit the slug manually? It will stop following the title until you reset it.",
+				);
+				await dialog.accept();
+			});
+			await page.locator("#slug").click();
+			await expect(page.locator("#slug")).toBeEditable();
+			await page.locator("#slug").fill("manual-slug");
+			await expect(page.locator("#slug")).toHaveValue("manual-slug");
+
+			await page.locator("#title").fill("Changed Title");
+			await expect(page.locator("#slug")).toHaveValue("manual-slug");
+
+			await page.getByRole("button", { name: "Use title slug" }).click();
+			await expect(page.locator("#slug")).toHaveValue("changed-title");
+			await page.locator("#title").fill("Another Title");
+			await expect(page.locator("#slug")).toHaveValue("another-title");
+
+			await context.close();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
 	test("allows access without membership", async ({ browser }) => {
 		const harness = await setupHarness();
 

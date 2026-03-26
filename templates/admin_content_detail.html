@@ -5,9 +5,14 @@
 </p>
 
 <form method="POST" action="/admin/site/{{ site_id }}/content/scan" id="content-scan-form">
-  <label for="content-scan-form">Scan this content for issues:</label>
+  <label for="content-scan-domains">Scan this content for issues:</label>
   <!-- TODO is the "leave blank for all" legit here? -->
-  <input type="text" name="domains" , placeholder="Comma-separated list of domains to treat as local (leave blank for all)" />
+  <input
+    id="content-scan-domains"
+    type="text"
+    name="domains"
+    placeholder="Comma-separated list of domains to treat as local (leave blank for all)"
+  />
   <input type="hidden" name="scan_limit" value="1" />
   <input type="hidden" name="site_id" value="{{ site_id }}" />
   <input type="hidden" name="content_id" value="{{ content_id }}" />
@@ -30,7 +35,7 @@
     </tr>
     <tr>
       <th>Creator</th>
-      <td>{{ creator_sub }}</td>
+      <td>{{ creator_label }}</td>
     </tr>
   </table>
 </section>
