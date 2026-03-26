@@ -810,8 +810,9 @@ pub async fn import_site_export<C: ConnectionTrait>(
             event.entity_id.clone()
         };
 
+        // Audit event primary keys are internal identifiers, so imports assign fresh IDs.
         entities::audit_event::ActiveModel {
-            id: Set(event.id),
+            id: Set(Uuid::now_v7()),
             site_id: Set(event.site_id.map(|_| site_id)),
             actor_sub: Set(event.actor_sub.clone()),
             event_type: Set(event.event_type.clone()),
@@ -1381,6 +1382,10 @@ mod tests {
             .await
             .expect("failed to list imported audit events");
         assert_eq!(imported_audit_events.len(), 1);
+        assert_ne!(
+            imported_audit_events[0].id, export.audit_events[0].id,
+            "imported audit events should receive fresh ids"
+        );
 
         let imported_tags = entities::tag::Entity::find()
             .filter(entities::tag::Column::SiteId.eq(imported_site.id))
