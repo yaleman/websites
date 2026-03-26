@@ -21,7 +21,15 @@ async fn main() {
         }
     });
 
-    if let Err(error) = execute(command, &cli.db_path, &cli.site_templates_dir, &cli.oidc).await {
+    if let Err(error) = execute(
+        command,
+        &cli.db_path,
+        &cli.site_templates_dir,
+        &cli.rendered_dir,
+        &cli.oidc,
+    )
+    .await
+    {
         eprintln!("error: {}", error);
         std::process::exit(1);
     }

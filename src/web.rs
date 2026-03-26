@@ -174,6 +174,7 @@ pub(crate) struct AdminState {
     pub(crate) jwt_issuer: String,
     pub(crate) upload_root: PathBuf,
     pub(crate) site_templates_root: PathBuf,
+    pub(crate) rendered_root: PathBuf,
 }
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
@@ -275,6 +276,15 @@ struct AdminAssetsNewTemplate {
     site_id: Uuid,
     site_full_title: String,
     recent_assets: Vec<AdminAssetRow>,
+}
+#[allow(dead_code)]
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_assets_replace.html")]
+struct AdminAssetReplaceTemplate {
+    template_shared: AdminTemplateData,
+    site_id: Uuid,
+    site_full_title: String,
+    asset: AdminAssetRow,
 }
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
@@ -560,6 +570,7 @@ struct AdminUserProfileViewState {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct AdminAssetRow {
     id: Uuid,
     original_filename: String,
@@ -571,6 +582,8 @@ struct AdminAssetRow {
     created_at: String,
     original_url: String,
     thumbnail_url: Option<String>,
+    original_exists: bool,
+    thumbnail_exists: bool,
 }
 
 #[derive(Debug)]
@@ -1874,6 +1887,7 @@ pub async fn run_admin_server(
     listen: &str,
     oidc: &OidcConfig,
     site_templates_root: PathBuf,
+    rendered_root: PathBuf,
 ) -> Result<(), anyhow::Error> {
     let jwt_secret = ensure_jwt_hs256_secret(db.as_ref())
         .await
@@ -1893,6 +1907,7 @@ pub async fn run_admin_server(
         jwt_issuer: oidc.frontend_url.to_string(),
         upload_root: upload_root.clone(),
         site_templates_root,
+        rendered_root,
     };
 
     let pool = db.get_sqlite_connection_pool();
@@ -4332,8 +4347,91 @@ fn format_asset_dimensions(width: Option<i32>, height: Option<i32>) -> String {
     }
 }
 
+#[allow(dead_code)]
+async fn parse_asset_upload(
+    mut multipart: Multipart,
+) -> Result<
+    (
+        Option<(Vec<u8>, Option<String>, Option<String>)>,
+        Option<Url>,
+    ),
+    SiteError,
+> {
+    let mut upload_bytes: Option<(Vec<u8>, Option<String>, Option<String>)> = None;
+    let mut source_url: Option<Url> = None;
+
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(field) => field,
+            Err(error) => {
+                return Err(SiteError::internal(format!(
+                    "failed to parse upload: {error}"
+                )));
+            }
+        };
+
+        let Some(field) = field else { break };
+        match field.name() {
+            Some("file") => {
+                let field_filename = field.file_name().map(|value| value.to_string());
+                let field_mime_type = field.content_type().map(|value| value.to_string());
+                let bytes = match field.bytes().await {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        return Err(SiteError::internal(format!(
+                            "failed to read upload: {error}"
+                        )));
+                    }
+                };
+                if bytes.is_empty() {
+                    continue;
+                }
+
+                upload_bytes = Some((bytes.to_vec(), field_filename, field_mime_type));
+            }
+            Some("source_url") => {
+                let value = match field.text().await {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return Err(SiteError::internal(format!(
+                            "failed to read asset import url: {error}"
+                        )));
+                    }
+                };
+                source_url = normalize_remote_asset_url(value)?;
+            }
+            _ => continue,
+        }
+    }
+
+    Ok((upload_bytes, source_url))
+}
+
+#[allow(dead_code)]
+async fn resolve_asset_upload(
+    client: &reqwest::Client,
+    upload_bytes: Option<(Vec<u8>, Option<String>, Option<String>)>,
+    source_url: Option<Url>,
+) -> Result<(Vec<u8>, String, Option<String>), SiteError> {
+    if let Some((bytes, original_filename, mime_type)) = upload_bytes {
+        let Some(original_filename) = original_filename else {
+            return Err(SiteError::internal("missing original filename".to_string()));
+        };
+        return Ok((bytes, original_filename, mime_type));
+    }
+
+    if let Some(source_url) = source_url {
+        return fetch_remote_asset(client, source_url).await;
+    }
+
+    Err(SiteError::internal(
+        "provide a file upload or an image url".to_string(),
+    ))
+}
+
 async fn build_admin_asset_rows<C: ConnectionTrait>(
     db: &C,
+    upload_root: &StdPath,
     assets: Vec<entities::asset::Model>,
 ) -> Result<Vec<AdminAssetRow>, SiteError> {
     if assets.is_empty() {
@@ -4353,27 +4451,43 @@ async fn build_admin_asset_rows<C: ConnectionTrait>(
         .map(|variant| (variant.asset_id, variant))
         .collect::<HashMap<_, _>>();
 
-    Ok(assets
-        .into_iter()
-        .map(|asset| {
-            let thumbnail_url = thumbnails_by_asset
-                .get(&asset.id)
-                .map(|variant| format!("/media/images/{}", variant.filename));
-
-            AdminAssetRow {
-                id: asset.id,
-                original_filename: asset.original_filename,
-                storage_basename: asset.storage_basename.clone(),
-                uploader_sub: asset.uploader_sub,
-                mime_type: asset.mime_type,
-                byte_length: asset.byte_length,
-                dimensions: format_asset_dimensions(asset.width, asset.height),
-                created_at: asset.created_at.to_rfc3339(),
-                original_url: format!("/media/images/{}", asset.storage_basename),
-                thumbnail_url,
+    let mut rows = Vec::with_capacity(assets.len());
+    for asset in assets {
+        let original_exists = fs::try_exists(upload_root.join(&asset.storage_basename))
+            .await
+            .unwrap_or(false);
+        let thumbnail_url = if let Some(variant) = thumbnails_by_asset.get(&asset.id) {
+            if fs::try_exists(upload_root.join(&variant.filename))
+                .await
+                .unwrap_or(false)
+            {
+                Some(format!("/media/images/{}", variant.filename))
+            } else {
+                None
             }
-        })
-        .collect())
+        } else {
+            None
+        };
+
+        let thumbnail_exists = thumbnail_url.is_some();
+
+        rows.push(AdminAssetRow {
+            id: asset.id,
+            original_filename: asset.original_filename,
+            storage_basename: asset.storage_basename.clone(),
+            uploader_sub: asset.uploader_sub,
+            mime_type: asset.mime_type,
+            byte_length: asset.byte_length,
+            dimensions: format_asset_dimensions(asset.width, asset.height),
+            created_at: asset.created_at.to_rfc3339(),
+            original_url: format!("/media/images/{}", asset.storage_basename),
+            thumbnail_url,
+            original_exists,
+            thumbnail_exists,
+        });
+    }
+
+    Ok(rows)
 }
 
 async fn admin_site_assets(
@@ -4388,7 +4502,7 @@ async fn admin_site_assets(
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?
         .ok_or(SiteError::SiteNotFound(site_id.to_string()))?;
-    let asset_rows = build_admin_asset_rows(state.db.as_ref(), assets).await?;
+    let asset_rows = build_admin_asset_rows(state.db.as_ref(), &state.upload_root, assets).await?;
 
     Ok(AdminAssetsTemplate {
         template_shared: AdminTemplateData::new("Assets")
@@ -4417,7 +4531,9 @@ async fn admin_site_assets_new(
             let mut recent_assets = list_assets(state.db.as_ref(), site_id).await?;
             recent_assets.sort_by(|left, right| right.created_at.cmp(&left.created_at));
             let recent_assets = recent_assets.into_iter().take(10).collect::<Vec<_>>();
-            let recent_assets = build_admin_asset_rows(state.db.as_ref(), recent_assets).await?;
+            let recent_assets =
+                build_admin_asset_rows(state.db.as_ref(), &state.upload_root, recent_assets)
+                    .await?;
 
             Ok(AdminAssetsNewTemplate {
                 template_shared: AdminTemplateData::new("Upload Asset")
@@ -5168,7 +5284,7 @@ async fn admin_site_render(
         state.db.as_ref(),
         site_id,
         state.site_templates_root.as_path(),
-        std::path::Path::new(crate::constants::RENDERED_DIR),
+        state.rendered_root.as_path(),
         &resolve_upload_root(),
     )
     .await
@@ -5451,6 +5567,8 @@ mod tests {
             upload_root: std::env::temp_dir().join(format!("websites-test-{}", Uuid::now_v7())),
             site_templates_root: std::env::temp_dir()
                 .join(format!("websites-templates-test-{}", Uuid::now_v7())),
+            rendered_root: std::env::temp_dir()
+                .join(format!("websites-rendered-test-{}", Uuid::now_v7())),
         }
     }
 

@@ -52,6 +52,7 @@ COPY site_templates /site_templates
 
 ENV WEBSITES_LISTEN_ADDR="0.0.0.0:9000"
 ENV WEBSITES_DB_PATH="/data/websites.sqlite"
+ENV WEBSITES_RENDERED_DIR="/data/rendered"
 ENV WEBSITES_TLS_CERT_PATH="/certs/tls.crt"
 ENV WEBSITES_TLS_KEY_PATH="/certs/tls.key"
 ENV WEBSITES_ADMIN_ASSETS_DIR="/admin-ui-assets"
