@@ -3486,7 +3486,7 @@ async fn admin_site_content_create(
     })?;
 
     Ok(Redirect::to(&format!(
-        "/admin/site/{}/content/{}",
+        "/admin/site/{}/content/{}/edit?saved=1",
         content.site_id, content.id
     )))
 }
