@@ -104,6 +104,10 @@ test.describe("content admin", () => {
 				"Test Site",
 			);
 			await expect(page.locator("body")).toContainText("Primary Route");
+			await expect(page.locator("body")).not.toContainText(
+				"Scan this content for issues:",
+			);
+			await expect(page.getByRole("button", { name: "Scan for Issues" })).toHaveCount(0);
 			await expect(page.locator("body")).toContainText("/guide-to-testing");
 			await expect(page.locator("body")).toContainText("/legacy/testing-guide");
 			await expect(page.locator("body")).toContainText("guides");
