@@ -10,6 +10,8 @@ RUN corepack enable
 
 COPY package.json pnpm-lock.yaml rspack.config.ts tsconfig.json /app/
 COPY assets /app/assets
+COPY templates /app/templates
+COPY postcss.config.mjs /app/postcss.config.mjs
 
 RUN pnpm install --frozen-lockfile
 RUN pnpm run build:admin
