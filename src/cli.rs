@@ -140,6 +140,14 @@ pub struct Cli {
         help = "Root directory where rendered site output is written"
     )]
     pub rendered_dir: PathBuf,
+    #[arg(
+        long = "log-dir",
+        env = "WEBSITES_LOG_DIR",
+        default_value = crate::constants::LOGS_DIR,
+        value_name = "DIR",
+        help = "Root directory where persistent application logs are written"
+    )]
+    pub log_dir: PathBuf,
     #[command(flatten)]
     pub oidc: OidcConfigArgs,
     #[command(subcommand)]
@@ -1589,6 +1597,38 @@ mod tests {
             },
             None => unsafe {
                 std::env::remove_var("WEBSITES_RENDERED_DIR");
+            },
+        }
+    }
+
+    #[test]
+    fn log_dir_can_be_loaded_from_flag() {
+        let cli = Cli::try_parse_from(["websites", "--log-dir", "/tmp/logs-from-flag"])
+            .expect("failed to parse CLI arguments with log dir flag");
+
+        assert_eq!(cli.log_dir, PathBuf::from("/tmp/logs-from-flag"));
+    }
+
+    #[test]
+    fn log_dir_can_be_loaded_from_env() {
+        let _guard = env_lock().lock().expect("failed to lock env");
+        let original = std::env::var_os("WEBSITES_LOG_DIR");
+
+        unsafe {
+            std::env::set_var("WEBSITES_LOG_DIR", "/tmp/logs-from-env");
+        }
+
+        let cli = Cli::try_parse_from(["websites"])
+            .expect("failed to parse CLI arguments with log dir env override");
+
+        assert_eq!(cli.log_dir, PathBuf::from("/tmp/logs-from-env"));
+
+        match original {
+            Some(value) => unsafe {
+                std::env::set_var("WEBSITES_LOG_DIR", value);
+            },
+            None => unsafe {
+                std::env::remove_var("WEBSITES_LOG_DIR");
             },
         }
     }

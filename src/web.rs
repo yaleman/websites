@@ -37,9 +37,10 @@ use crate::{
     import_site_export, import_wordpress_xml, list_aliases, list_assets, list_content,
     list_content_tags, list_memberships, list_memberships_for_user_id, list_revisions, list_sites,
     list_sites_for_subject, list_tags, list_users, list_users_by_ids, persist_asset_files,
-    render_content_preview, render_site, resolve_site_template_override_root, resolve_upload_root,
-    search_all_content, search_content, serialize_site_export_pretty, store_uploaded_asset,
-    sync_tags_to_content, update_content, update_membership_role, update_site_settings,
+    render_content_preview, render_site, resolve_log_root, resolve_site_template_override_root,
+    resolve_upload_root, search_all_content, search_content, serialize_site_export_pretty,
+    store_uploaded_asset, sync_tags_to_content, update_content, update_membership_role,
+    update_site_settings,
 };
 use anyhow::Context;
 use askama::Template;
@@ -71,11 +72,13 @@ use similar::TextDiff;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::io::ErrorKind;
+use std::io::SeekFrom;
 use std::net::SocketAddr;
 use std::path::{Component, Path as StdPath, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::fs;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 #[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
 use tower_http::services::ServeDir;
@@ -180,6 +183,7 @@ pub(crate) struct AdminState {
     pub(crate) jwt_signer: Arc<compact_jwt::JwsHs256Signer>,
     pub(crate) jwt_issuer: String,
     pub(crate) upload_root: PathBuf,
+    pub(crate) log_root: PathBuf,
     pub(crate) site_templates_root: PathBuf,
     pub(crate) rendered_root: PathBuf,
 }
@@ -402,6 +406,21 @@ struct AdminSitePublishTemplate {
     publish_csrf_token: String,
     delete_csrf_token: String,
     runs: Vec<AdminSitePublishRunRow>,
+}
+
+#[allow(dead_code)]
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_logs.html")]
+struct AdminLogsTemplate {
+    template_shared: AdminTemplateData,
+    log_file_path: String,
+    search_query: String,
+    level_filter: String,
+    line_limit: usize,
+    total_lines: usize,
+    matched_lines: usize,
+    truncated: bool,
+    lines: Vec<String>,
 }
 
 #[allow(dead_code)]
@@ -805,6 +824,13 @@ struct AdminSitePublishQuery {
     saved: Option<usize>,
     queued: Option<usize>,
     deleted: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminLogsQuery {
+    q: Option<String>,
+    level: Option<String>,
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1971,6 +1997,7 @@ fn build_admin_app(state: AdminState, assets_dir: &StdPath, upload_root: &StdPat
         .route("/admin/login", get(admin_login))
         .route("/oauth2/callback", get(admin_login_callback))
         .route("/admin/logout", get(admin_logout))
+        .route("/admin/logs", get(admin_logs))
         .merge(
             SwaggerUi::new("/api-docs")
                 .url("/api-doc/openapi.json", ApiDoc::openapi())
@@ -1995,6 +2022,7 @@ pub async fn run_admin_server(
     let jwt_signer =
         signer_from_secret(&jwt_secret).map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let upload_root = resolve_upload_root();
+    let log_root = resolve_log_root();
     let state = AdminState {
         db: db.clone(),
         oidc_client_id: ClientId::new(oidc.oidc_client_id.clone()),
@@ -2006,6 +2034,7 @@ pub async fn run_admin_server(
         jwt_signer: Arc::new(jwt_signer),
         jwt_issuer: oidc.frontend_url.to_string(),
         upload_root: upload_root.clone(),
+        log_root: log_root.clone(),
         site_templates_root,
         rendered_root,
     };
@@ -2035,6 +2064,7 @@ pub async fn run_admin_server(
     }
     debug!("admin assets dir: {}", assets_dir.display());
     debug!("upload root dir: {}", upload_root.display());
+    debug!("log root dir: {}", log_root.display());
 
     info!(
         "Starting server on https://{listen} / {}",
@@ -2214,6 +2244,7 @@ async fn get_index(
         links.push(AdminLink::new("/admin/sites/import", "Import site"));
         links.push(AdminLink::new("/admin/themes", "Themes"));
         links.push(AdminLink::new("/admin/users", "Users"));
+        links.push(AdminLink::new("/admin/logs", "Logs"));
     }
 
     let template_shared = AdminTemplateData::new("Admin Dashboard").with_links(links);
@@ -2228,6 +2259,121 @@ async fn get_index(
     Ok(AdminIndexTemplate {
         template_shared,
         sites,
+    })
+}
+
+fn normalize_log_level_filter(level: Option<&str>) -> Option<String> {
+    let level = level?.trim().to_lowercase();
+    match level.as_str() {
+        "trace" | "debug" | "info" | "warn" | "error" => Some(level),
+        _ => None,
+    }
+}
+
+fn log_line_matches(line: &str, search_query: Option<&str>, level_filter: Option<&str>) -> bool {
+    if let Some(level_filter) = level_filter {
+        let level_token = format!(" {} ", level_filter.to_uppercase());
+        if !line.contains(&level_token) {
+            return false;
+        }
+    }
+
+    if let Some(search_query) = search_query {
+        let search_query = search_query.trim();
+        if !search_query.is_empty() && !line.to_lowercase().contains(&search_query.to_lowercase()) {
+            return false;
+        }
+    }
+
+    true
+}
+
+async fn tail_log_file(path: &StdPath, max_bytes: usize) -> Result<Option<String>, SiteError> {
+    let metadata = match fs::metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(SiteError::from(error)),
+    };
+
+    if !metadata.is_file() {
+        return Ok(None);
+    }
+
+    let file_size = metadata.len() as usize;
+    let start = file_size.saturating_sub(max_bytes);
+    let mut file = fs::File::open(path).await?;
+    if start > 0 {
+        file.seek(SeekFrom::Start(start as u64)).await?;
+    }
+
+    let mut buffer = Vec::with_capacity(file_size.saturating_sub(start));
+    file.read_to_end(&mut buffer).await?;
+    let mut contents = String::from_utf8_lossy(&buffer).into_owned();
+
+    if start > 0
+        && let Some(split_at) = contents.find('\n')
+    {
+        contents = contents[split_at + 1..].to_string();
+    }
+
+    Ok(Some(contents))
+}
+
+async fn load_log_view(
+    path: &StdPath,
+    line_limit: usize,
+    search_query: Option<&str>,
+    level_filter: Option<&str>,
+) -> Result<(Vec<String>, usize, usize, bool), SiteError> {
+    let Some(contents) = tail_log_file(path, 512 * 1024).await? else {
+        return Ok((Vec::new(), 0, 0, false));
+    };
+
+    let raw_lines: Vec<String> = contents.lines().map(|line| line.to_string()).collect();
+    let total_lines = raw_lines.len();
+    let mut filtered: Vec<String> = raw_lines
+        .into_iter()
+        .filter(|line| log_line_matches(line, search_query, level_filter))
+        .collect();
+    let matched_lines = filtered.len();
+    let truncated = matched_lines > line_limit;
+
+    if truncated {
+        filtered = filtered.into_iter().rev().take(line_limit).collect();
+        filtered.reverse();
+    }
+
+    Ok((filtered, total_lines, matched_lines, truncated))
+}
+
+async fn admin_logs(
+    State(state): State<AdminState>,
+    session: Session,
+    Query(query): Query<AdminLogsQuery>,
+) -> Result<AdminLogsTemplate, SiteError> {
+    require_global_admin(&session).await?;
+    let line_limit = query.limit.unwrap_or(200).clamp(1, 1000);
+    let level_filter = normalize_log_level_filter(query.level.as_deref());
+    let search_query = query.q.unwrap_or_default();
+    let log_file_path = state.log_root.join(crate::constants::LOG_FILE_NAME);
+    let (lines, total_lines, matched_lines, truncated) = load_log_view(
+        &log_file_path,
+        line_limit,
+        (!search_query.is_empty()).then_some(search_query.as_str()),
+        level_filter.as_deref(),
+    )
+    .await?;
+
+    Ok(AdminLogsTemplate {
+        template_shared: AdminTemplateData::new("Logs"),
+        log_file_path: log_file_path.display().to_string(),
+        search_query,
+        level_filter: level_filter.unwrap_or_default(),
+        line_limit,
+        total_lines,
+        matched_lines,
+        truncated,
+        lines,
     })
 }
 
@@ -6196,11 +6342,110 @@ mod tests {
             jwt_signer: Arc::new(jwt_signer),
             jwt_issuer: "https://example.com".to_string(),
             upload_root: std::env::temp_dir().join(format!("websites-test-{}", Uuid::now_v7())),
+            log_root: std::env::temp_dir().join(format!("websites-logs-test-{}", Uuid::now_v7())),
             site_templates_root: std::env::temp_dir()
                 .join(format!("websites-templates-test-{}", Uuid::now_v7())),
             rendered_root: std::env::temp_dir()
                 .join(format!("websites-rendered-test-{}", Uuid::now_v7())),
         }
+    }
+
+    fn write_test_log_file(log_root: &StdPath, contents: &str) {
+        std::fs::create_dir_all(log_root).expect("failed to create test log root");
+        std::fs::write(log_root.join(crate::constants::LOG_FILE_NAME), contents)
+            .expect("failed to write test log file");
+    }
+
+    #[tokio::test]
+    async fn admin_logs_view_shows_filtered_entries() {
+        let db = Arc::new(test_db_start().await);
+        let admin = crate::entities::user::create_user(
+            db.as_ref(),
+            "admin",
+            Some("admin@example.com"),
+            Some("Admin"),
+            true,
+        )
+        .await
+        .expect("failed to create admin");
+        let state = test_admin_state(db.clone());
+        write_test_log_file(
+            &state.log_root,
+            concat!(
+                "2026-03-27T03:45:56.170588Z INFO websites::publish: starting site publish site_id=123 bucket=example prefix=site endpoint_url=aws-default\n",
+                "2026-03-27T03:45:56.171588Z ERROR websites::publish: publish job failed run_id=123 site_id=123 site_short_name=demo bucket=example prefix=site endpoint_url=aws-default error=dispatch failure\n",
+            ),
+        );
+
+        let session_store = MemoryStore::default();
+        let router = test_app_router(state, session_store.clone()).router;
+        let cookie = seed_session_cookie(
+            test_admin_state(db.clone()),
+            session_store.clone(),
+            admin.id,
+        )
+        .await;
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/logs?level=error&q=publish&limit=50")
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .expect("failed to build logs request"),
+            )
+            .await
+            .expect("failed to call logs route");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("failed to read logs body");
+        let body = String::from_utf8(body.to_vec()).expect("invalid logs response body");
+        assert!(body.contains("publish job failed"));
+        assert!(!body.contains("starting site publish"));
+        assert!(body.contains("dispatch failure"));
+    }
+
+    #[tokio::test]
+    async fn admin_logs_view_blocks_non_admins() {
+        let db = Arc::new(test_db_start().await);
+        let viewer = crate::entities::user::create_user(
+            db.as_ref(),
+            "viewer",
+            Some("viewer@example.com"),
+            Some("Viewer"),
+            false,
+        )
+        .await
+        .expect("failed to create viewer");
+        let state = test_admin_state(db.clone());
+        write_test_log_file(
+            &state.log_root,
+            "2026-03-27T03:45:56.170588Z INFO websites::publish: starting site publish\n",
+        );
+
+        let session_store = MemoryStore::default();
+        let router = test_app_router(state, session_store.clone()).router;
+        let cookie = seed_session_cookie(
+            test_admin_state(db.clone()),
+            session_store.clone(),
+            viewer.id,
+        )
+        .await;
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/logs")
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .expect("failed to build logs request"),
+            )
+            .await
+            .expect("failed to call logs route");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     fn site_transfer_test_router(state: AdminState, session_store: MemoryStore) -> Router {

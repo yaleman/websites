@@ -1,0 +1,52 @@
+{% extends "base_template.html" %}
+{% block body %}
+
+<section class="surface grid gap-4 p-4 md:p-6">
+  <div class="grid gap-2">
+    <h2>Logs</h2>
+    <p class="inline-body">
+      Recent application logs are written to <code>{{ log_file_path }}</code>. This viewer shows the tail of that file and filters it in the browser request.
+    </p>
+    <p class="text-sm text-slate-600">
+      Showing {{ matched_lines }} matching lines from {{ total_lines }} scanned lines.
+      {% if truncated %}Only the newest {{ line_limit }} matches are shown.{% endif %}
+    </p>
+  </div>
+
+  <form method="get" action="/admin/logs" class="grid gap-4 md:grid-cols-3">
+    <div class="form-field">
+      <label for="q">Search</label>
+      <input id="q" name="q" value="{{ search_query }}" placeholder="Substring match" />
+    </div>
+    <div class="form-field">
+      <label for="level">Level</label>
+      <select id="level" name="level">
+        <option value="" {% if level_filter == "" %}selected{% endif %}>All levels</option>
+        <option value="error" {% if level_filter == "error" %}selected{% endif %}>Error</option>
+        <option value="warn" {% if level_filter == "warn" %}selected{% endif %}>Warn</option>
+        <option value="info" {% if level_filter == "info" %}selected{% endif %}>Info</option>
+        <option value="debug" {% if level_filter == "debug" %}selected{% endif %}>Debug</option>
+        <option value="trace" {% if level_filter == "trace" %}selected{% endif %}>Trace</option>
+      </select>
+    </div>
+    <div class="form-field">
+      <label for="limit">Max lines</label>
+      <input id="limit" name="limit" type="number" min="1" max="1000" value="{{ line_limit }}" />
+    </div>
+    <div class="form-actions md:col-span-3">
+      <button type="submit" class="btn">Refresh</button>
+    </div>
+  </form>
+</section>
+
+<section class="surface grid gap-4 p-4 md:p-6">
+  <h2>Recent Entries</h2>
+  {% if lines.is_empty() %}
+  <p class="inline-body">No log entries matched the current filters.</p>
+  {% else %}
+  <pre class="max-h-[70vh] overflow-auto whitespace-pre-wrap break-words rounded-xl bg-slate-950 p-4 text-sm leading-6 text-slate-100">{% for line in lines %}{{ line }}{% if !loop.last %}
+{% endif %}{% endfor %}</pre>
+  {% endif %}
+</section>
+
+{% endblock %}

@@ -68,6 +68,7 @@ tower-sessions = "0.15.0"
 # TODO: remove this vendored tower-sessions-sqlx-store dependency once the upstream dependencies are updated.
 tower-sessions-sqlx-store = { path = "vendor/tower-sessions-sqlx-store", features = ["sqlite"] }
 tracing = { version = "0.1.44", features = ["log"] }
+tracing-appender = "0.2.4"
 tracing-subscriber = { version = "0.3.23", features = [
     "json",
     "serde",
