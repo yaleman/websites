@@ -1,5 +1,5 @@
 import { expect, request as playwrightRequest, test } from "@playwright/test";
-
+import { defaultTimeout } from "./global_setup";
 import {
 	cleanupHarness,
 	createAuthenticatedPage,
@@ -7,12 +7,13 @@ import {
 	createUser,
 	setupHarness,
 } from "./support";
-import { defaultTimeout } from "./global_setup";
 
 test.describe("api token admin flows", () => {
 	test.setTimeout(defaultTimeout);
 
-	test("global admin can manually create a user from the UI", async ({ browser }) => {
+	test("global admin can manually create a user from the UI", async ({
+		browser,
+	}) => {
 		const harness = await setupHarness();
 		try {
 			const { context, page } = await createAuthenticatedPage(
@@ -48,7 +49,11 @@ test.describe("api token admin flows", () => {
 		try {
 			const targetSubject = "api-token-user";
 			const targetUserId = await createUser(harness, targetSubject);
-			const membershipId = await createMembership(harness, targetUserId, "author");
+			const membershipId = await createMembership(
+				harness,
+				targetUserId,
+				"author",
+			);
 
 			const { context, page } = await createAuthenticatedPage(
 				browser,
@@ -102,9 +107,7 @@ test.describe("api token admin flows", () => {
 			expect(downgraded.status()).toBe(200);
 
 			await tokenRow.getByRole("button", { name: "Revoke" }).click();
-			await expect(page).toHaveURL(
-				new RegExp(`/admin/users/${targetUserId}$`),
-			);
+			await expect(page).toHaveURL(new RegExp(`/admin/users/${targetUserId}$`));
 			await expect(page.locator(".message--toast")).toContainText(
 				"Token revoked.",
 			);
