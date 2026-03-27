@@ -16,11 +16,12 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::fs;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use uuid::Uuid;
 
 pub const DEFAULT_S3_REGION: &str = "us-east-1";
@@ -61,6 +62,7 @@ pub trait PublishBackend: Send + Sync {
 pub struct S3PublishBackend {
     client: S3Client,
     bucket: String,
+    endpoint_url: Option<String>,
 }
 
 impl S3CompatiblePublishConfig {
@@ -127,8 +129,19 @@ impl S3PublishBackend {
         Ok(Self {
             client,
             bucket: config.bucket.clone(),
+            endpoint_url: config.endpoint_url.clone(),
         })
     }
+}
+
+fn error_chain(error: &dyn StdError) -> String {
+    let mut messages = vec![error.to_string()];
+    let mut current = error.source();
+    while let Some(source) = current {
+        messages.push(source.to_string());
+        current = source.source();
+    }
+    messages.join(": ")
 }
 
 #[async_trait::async_trait]
@@ -139,6 +152,12 @@ impl PublishBackend for S3PublishBackend {
         let mut keys = Vec::new();
 
         loop {
+            debug!(
+                bucket = %self.bucket,
+                prefix = %prefix,
+                endpoint_url = self.endpoint_url.as_deref().unwrap_or("aws-default"),
+                "listing published objects"
+            );
             let response = self
                 .client
                 .list_objects_v2()
@@ -147,7 +166,17 @@ impl PublishBackend for S3PublishBackend {
                 .set_continuation_token(continuation_token.take())
                 .send()
                 .await
-                .map_err(|error| SiteError::internal(format!("list s3 objects failed: {error}")))?;
+                .map_err(|error| {
+                    let detail = error_chain(&error);
+                    error!(
+                        bucket = %self.bucket,
+                        prefix = %prefix,
+                        endpoint_url = self.endpoint_url.as_deref().unwrap_or("aws-default"),
+                        error = %detail,
+                        "list s3 objects failed"
+                    );
+                    SiteError::internal(format!("list s3 objects failed: {detail}"))
+                })?;
 
             if let Some(objects) = response.contents {
                 for object in objects {
@@ -173,6 +202,14 @@ impl PublishBackend for S3PublishBackend {
         bytes: Vec<u8>,
         content_type: &str,
     ) -> Result<(), SiteError> {
+        debug!(
+            bucket = %self.bucket,
+            key = %key,
+            content_type = %content_type,
+            byte_length = bytes.len(),
+            endpoint_url = self.endpoint_url.as_deref().unwrap_or("aws-default"),
+            "uploading published object"
+        );
         self.client
             .put_object()
             .bucket(&self.bucket)
@@ -181,7 +218,18 @@ impl PublishBackend for S3PublishBackend {
             .content_type(content_type)
             .send()
             .await
-            .map_err(|error| SiteError::internal(format!("s3 upload failed: {error}")))?;
+            .map_err(|error| {
+                let detail = error_chain(&error);
+                error!(
+                    bucket = %self.bucket,
+                    key = %key,
+                    content_type = %content_type,
+                    endpoint_url = self.endpoint_url.as_deref().unwrap_or("aws-default"),
+                    error = %detail,
+                    "s3 upload failed"
+                );
+                SiteError::internal(format!("s3 upload failed: {detail}"))
+            })?;
 
         Ok(())
     }
@@ -192,6 +240,12 @@ impl PublishBackend for S3PublishBackend {
         }
 
         for chunk in keys.chunks(1000) {
+            debug!(
+                bucket = %self.bucket,
+                endpoint_url = self.endpoint_url.as_deref().unwrap_or("aws-default"),
+                delete_count = chunk.len(),
+                "deleting stale published objects"
+            );
             let objects = chunk
                 .iter()
                 .map(|key| {
@@ -212,7 +266,17 @@ impl PublishBackend for S3PublishBackend {
                 .delete(delete)
                 .send()
                 .await
-                .map_err(|error| SiteError::internal(format!("s3 delete failed: {error}")))?;
+                .map_err(|error| {
+                    let detail = error_chain(&error);
+                    error!(
+                        bucket = %self.bucket,
+                        endpoint_url = self.endpoint_url.as_deref().unwrap_or("aws-default"),
+                        delete_count = chunk.len(),
+                        error = %detail,
+                        "s3 delete failed"
+                    );
+                    SiteError::internal(format!("s3 delete failed: {detail}"))
+                })?;
         }
 
         Ok(())
@@ -396,6 +460,14 @@ pub async fn queue_site_publish(
     )
     .await?;
     let run_id = run.id;
+    let site_id_for_log = site.id;
+    let site_short_name_for_log = site.short_name.clone();
+    let bucket_for_log = config.bucket.clone();
+    let prefix_for_log = config.normalized_prefix();
+    let endpoint_for_log = config
+        .endpoint_url
+        .clone()
+        .unwrap_or_else(|| "aws-default".to_string());
     let db_for_job = Arc::clone(&db);
     let db_for_failure = Arc::clone(&db);
     let site_templates_root = site_templates_root.clone();
@@ -422,7 +494,16 @@ pub async fn queue_site_publish(
                 Some(error.to_string()),
             )
             .await;
-            error!(%run_id, error = %error, "publish job failed");
+            error!(
+                %run_id,
+                site_id = %site_id_for_log,
+                site_short_name = %site_short_name_for_log,
+                bucket = %bucket_for_log,
+                prefix = %prefix_for_log,
+                endpoint_url = %endpoint_for_log,
+                error = %error,
+                "publish job failed"
+            );
         }
     });
 
@@ -461,6 +542,14 @@ async fn publish_site_job(
     .await?;
 
     let backend = S3PublishBackend::from_config(&config).await?;
+    info!(
+        site_id = %site.id,
+        site_short_name = %site.short_name,
+        bucket = %config.bucket,
+        prefix = %config.normalized_prefix(),
+        endpoint_url = config.endpoint_url.as_deref().unwrap_or("aws-default"),
+        "starting site publish"
+    );
     let outcome =
         mirror_rendered_tree_to_backend(tmp_dir.path(), &config.normalized_prefix(), &backend)
             .await?;
@@ -507,6 +596,13 @@ pub async fn mirror_rendered_tree_to_backend<B: PublishBackend>(
             .first_or_octet_stream()
             .essence_str()
             .to_string();
+        debug!(
+            relative_path = %file.relative_path.display(),
+            key = %key,
+            content_type = %content_type,
+            byte_length = bytes.len(),
+            "publishing rendered file"
+        );
         backend.put_object(&key, bytes, &content_type).await?;
         expected_keys.insert(key);
     }
