@@ -33,3 +33,4 @@
 - 2026-03-26: Creating new content now redirects directly to the content edit screen and shows a success toast so the user can continue editing immediately after the initial save.
 - 2026-03-27: Added a site publish workflow with a dedicated publish settings page linked from site settings. Publish configuration is stored per site, publish runs are tracked in the database, and the initial backend mirrors rendered output to an S3-compatible destination from a monitored background job.
 - 2026-03-27: Application logs are now written to the persistent file configured by `WEBSITES_LOG_PATH` in addition to stdout, and the admin dashboard exposes a global-admin-only log viewer that tails and filters the current log file.
+- 2026-03-27: Publish runs now link to a dedicated site-scoped detail page that shows the run record and the matching log events for that run ID.

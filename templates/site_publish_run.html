@@ -1,0 +1,108 @@
+{% extends "base_template.html" %}
+{% block body %}
+
+<section class="surface grid gap-4 p-4 md:p-6">
+  <div class="grid gap-2">
+    <h2>Publish Run</h2>
+    <p class="inline-body">
+      This page shows the publish run record and the log lines that match this run.
+      The run UUID is <code>{{ run_id }}</code>.
+    </p>
+    <p class="text-sm text-slate-600">
+      Log file: <code>{{ log_file_path }}</code>
+    </p>
+  </div>
+
+  <div class="grid gap-3 md:grid-cols-2">
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <h3 class="mb-3 text-base font-semibold text-slate-900">Run Details</h3>
+      <dl class="grid gap-2 text-sm">
+        <div class="flex flex-wrap gap-2">
+          <dt class="font-medium text-slate-500">Status</dt>
+          <dd><code>{{ status }}</code></dd>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <dt class="font-medium text-slate-500">Method</dt>
+          <dd><code>{{ method }}</code></dd>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <dt class="font-medium text-slate-500">Actor</dt>
+          <dd><code>{{ actor_sub }}</code></dd>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <dt class="font-medium text-slate-500">Created</dt>
+          <dd><code>{{ created_at }}</code></dd>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <dt class="font-medium text-slate-500">Started</dt>
+          <dd><code>{{ started_at }}</code></dd>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <dt class="font-medium text-slate-500">Finished</dt>
+          <dd><code>{{ finished_at }}</code></dd>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <dt class="font-medium text-slate-500">Rendered</dt>
+          <dd>{{ rendered_file_count }}</dd>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <dt class="font-medium text-slate-500">Published</dt>
+          <dd>{{ published_file_count }}</dd>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <dt class="font-medium text-slate-500">Deleted</dt>
+          <dd>{{ deleted_object_count }}</dd>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <dt class="font-medium text-slate-500">Error</dt>
+          <dd>{% if error_message.is_empty() %}-{% else %}{{ error_message }}{% endif %}</dd>
+        </div>
+      </dl>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <h3 class="mb-3 text-base font-semibold text-slate-900">Log Filters</h3>
+      <form method="get" action="/admin/site/{{ site_id }}/publish/run/{{ run_id }}" class="grid gap-4">
+        <div class="form-field">
+          <label for="q">Search</label>
+          <input id="q" name="q" value="{{ search_query }}" placeholder="Substring match" />
+        </div>
+        <div class="form-field">
+          <label for="level">Level</label>
+          <select id="level" name="level">
+            <option value="" {% if level_filter == "" %}selected{% endif %}>All levels</option>
+            <option value="error" {% if level_filter == "error" %}selected{% endif %}>Error</option>
+            <option value="warn" {% if level_filter == "warn" %}selected{% endif %}>Warn</option>
+            <option value="info" {% if level_filter == "info" %}selected{% endif %}>Info</option>
+            <option value="debug" {% if level_filter == "debug" %}selected{% endif %}>Debug</option>
+            <option value="trace" {% if level_filter == "trace" %}selected{% endif %}>Trace</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label for="limit">Max lines</label>
+          <input id="limit" name="limit" type="number" min="1" max="1000" value="{{ line_limit }}" />
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn">Refresh</button>
+          <a class="btn" href="/admin/logs?q={{ run_id }}&amp;limit={{ line_limit }}">Open in log viewer</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</section>
+
+<section class="surface grid gap-4 p-4 md:p-6">
+  <h2>Relevant Events</h2>
+  <p class="text-sm text-slate-600">
+    Showing {{ matched_lines }} matching lines from {{ total_lines }} scanned lines.
+    {% if truncated %}Only the newest {{ line_limit }} matches are shown.{% endif %}
+  </p>
+  {% if lines.is_empty() %}
+  <p class="inline-body">No log entries matched the current filters.</p>
+  {% else %}
+  <pre class="max-h-[70vh] overflow-auto whitespace-pre-wrap break-words rounded-xl bg-slate-950 p-4 text-sm leading-6 text-slate-100">{% for line in lines %}{{ line }}{% if !loop.last %}
+{% endif %}{% endfor %}</pre>
+  {% endif %}
+</section>
+
+{% endblock %}

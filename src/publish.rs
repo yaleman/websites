@@ -63,6 +63,7 @@ pub struct S3PublishBackend {
     client: S3Client,
     bucket: String,
     endpoint_url: Option<String>,
+    run_id: Uuid,
 }
 
 impl S3CompatiblePublishConfig {
@@ -106,7 +107,10 @@ impl S3CompatiblePublishConfig {
 }
 
 impl S3PublishBackend {
-    pub async fn from_config(config: &S3CompatiblePublishConfig) -> Result<Self, SiteError> {
+    pub async fn from_config(
+        config: &S3CompatiblePublishConfig,
+        run_id: Uuid,
+    ) -> Result<Self, SiteError> {
         config.validate()?;
         let shared_config = aws_config::defaults(BehaviorVersion::latest())
             .region(Region::new(config.region.clone()))
@@ -130,6 +134,7 @@ impl S3PublishBackend {
             client,
             bucket: config.bucket.clone(),
             endpoint_url: config.endpoint_url.clone(),
+            run_id,
         })
     }
 }
@@ -153,6 +158,7 @@ impl PublishBackend for S3PublishBackend {
 
         loop {
             debug!(
+                run_id = %self.run_id,
                 bucket = %self.bucket,
                 prefix = %prefix,
                 endpoint_url = self.endpoint_url.as_deref().unwrap_or("aws-default"),
@@ -169,6 +175,7 @@ impl PublishBackend for S3PublishBackend {
                 .map_err(|error| {
                     let detail = error_chain(&error);
                     error!(
+                        run_id = %self.run_id,
                         bucket = %self.bucket,
                         prefix = %prefix,
                         endpoint_url = self.endpoint_url.as_deref().unwrap_or("aws-default"),
@@ -203,6 +210,7 @@ impl PublishBackend for S3PublishBackend {
         content_type: &str,
     ) -> Result<(), SiteError> {
         debug!(
+            run_id = %self.run_id,
             bucket = %self.bucket,
             key = %key,
             content_type = %content_type,
@@ -221,6 +229,7 @@ impl PublishBackend for S3PublishBackend {
             .map_err(|error| {
                 let detail = error_chain(&error);
                 error!(
+                    run_id = %self.run_id,
                     bucket = %self.bucket,
                     key = %key,
                     content_type = %content_type,
@@ -241,6 +250,7 @@ impl PublishBackend for S3PublishBackend {
 
         for chunk in keys.chunks(1000) {
             debug!(
+                run_id = %self.run_id,
                 bucket = %self.bucket,
                 endpoint_url = self.endpoint_url.as_deref().unwrap_or("aws-default"),
                 delete_count = chunk.len(),
@@ -269,6 +279,7 @@ impl PublishBackend for S3PublishBackend {
                 .map_err(|error| {
                     let detail = error_chain(&error);
                     error!(
+                        run_id = %self.run_id,
                         bucket = %self.bucket,
                         endpoint_url = self.endpoint_url.as_deref().unwrap_or("aws-default"),
                         delete_count = chunk.len(),
@@ -375,6 +386,18 @@ pub async fn list_site_publish_runs(
         .map_err(SiteError::from)
 }
 
+pub async fn get_site_publish_run(
+    db: &DatabaseConnection,
+    site_id: Uuid,
+    run_id: Uuid,
+) -> Result<Option<entities::site_publish_run::Model>, SiteError> {
+    entities::site_publish_run::Entity::find_by_id(run_id)
+        .filter(entities::site_publish_run::Column::SiteId.eq(site_id))
+        .one(db)
+        .await
+        .map_err(SiteError::from)
+}
+
 async fn create_publish_run<C: ConnectionTrait>(
     db: &C,
     site_id: Uuid,
@@ -473,6 +496,16 @@ pub async fn queue_site_publish(
     let site_templates_root = site_templates_root.clone();
     let upload_root = upload_root.clone();
 
+    info!(
+        %run_id,
+        site_id = %site_id_for_log,
+        site_short_name = %site_short_name_for_log,
+        bucket = %bucket_for_log,
+        prefix = %prefix_for_log,
+        endpoint_url = %endpoint_for_log,
+        "publish job queued"
+    );
+
     tokio::spawn(async move {
         if let Err(error) = publish_site_job(
             db_for_job,
@@ -541,8 +574,9 @@ async fn publish_site_job(
     )
     .await?;
 
-    let backend = S3PublishBackend::from_config(&config).await?;
+    let backend = S3PublishBackend::from_config(&config, run_id).await?;
     info!(
+        %run_id,
         site_id = %site.id,
         site_short_name = %site.short_name,
         bucket = %config.bucket,
@@ -570,6 +604,7 @@ async fn publish_site_job(
     .await?;
 
     info!(
+        %run_id,
         site_id = %site.id,
         site_short_name = %site.short_name,
         rendered_file_count = rendered_count,

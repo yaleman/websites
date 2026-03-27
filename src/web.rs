@@ -18,7 +18,7 @@ use crate::middleware::log_requests;
 use crate::oidc::{admin_login_callback, build_http_client, build_oidc_client};
 use crate::publish::{
     S3CompatiblePublishConfig, delete_site_publish_config, get_s3_publish_config,
-    list_site_publish_runs, queue_site_publish, save_s3_publish_config,
+    get_site_publish_run, list_site_publish_runs, queue_site_publish, save_s3_publish_config,
 };
 use crate::theme_registry::{
     ThemeAdminRow, ThemeInstallRequest, available_template_names, delete_theme, install_theme,
@@ -425,6 +425,35 @@ struct AdminLogsTemplate {
 
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
+#[template(path = "site_publish_run.html")]
+struct AdminSitePublishRunTemplate {
+    template_shared: AdminTemplateData,
+    site_id: Uuid,
+    site_short_name: String,
+    full_title: String,
+    run_id: Uuid,
+    status: String,
+    method: String,
+    actor_sub: String,
+    created_at: String,
+    started_at: String,
+    finished_at: String,
+    rendered_file_count: i32,
+    published_file_count: i32,
+    deleted_object_count: i32,
+    error_message: String,
+    log_file_path: String,
+    search_query: String,
+    level_filter: String,
+    line_limit: usize,
+    total_lines: usize,
+    matched_lines: usize,
+    truncated: bool,
+    lines: Vec<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Template, WebTemplate)]
 #[template(path = "site_delete_confirm.html")]
 struct AdminSiteDeleteConfirmTemplate {
     template_shared: AdminTemplateData,
@@ -693,6 +722,7 @@ struct AdminSiteTemplateFileRow {
 #[derive(Debug)]
 struct AdminSitePublishRunRow {
     id: Uuid,
+    detail_href: String,
     status: String,
     method: String,
     actor_sub: String,
@@ -828,6 +858,13 @@ struct AdminSitePublishQuery {
 
 #[derive(Debug, Deserialize)]
 struct AdminLogsQuery {
+    q: Option<String>,
+    level: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminSitePublishRunQuery {
     q: Option<String>,
     level: Option<String>,
     limit: Option<usize>,
@@ -1960,6 +1997,10 @@ fn build_admin_app(state: AdminState, assets_dir: &StdPath, upload_root: &StdPat
         .route(
             "/admin/site/{site_id}/publish/run",
             axum::routing::post(admin_site_publish_run),
+        )
+        .route(
+            "/admin/site/{site_id}/publish/run/{run_id}",
+            get(admin_site_publish_run_detail),
         )
         .route(
             "/admin/site/{site_id}/publish/delete",
@@ -5460,6 +5501,7 @@ async fn admin_site_publish(
             .into_iter()
             .map(|run| AdminSitePublishRunRow {
                 id: run.id,
+                detail_href: format!("/admin/site/{site_id}/publish/run/{}", run.id),
                 status: run.status.to_string(),
                 method: run.method.to_string(),
                 actor_sub: run.actor_sub,
@@ -5478,6 +5520,79 @@ async fn admin_site_publish(
                 error_message: run.error_message.unwrap_or_default(),
             })
             .collect(),
+    })
+}
+
+async fn admin_site_publish_run_detail(
+    State(state): State<AdminState>,
+    session: Session,
+    Path((site_id, run_id)): Path<(Uuid, Uuid)>,
+    Query(query): Query<AdminSitePublishRunQuery>,
+) -> Result<AdminSitePublishRunTemplate, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Owner).await?;
+    let site = get_by_id(state.db.as_ref(), site_id)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
+    let run = get_site_publish_run(state.db.as_ref(), site_id, run_id)
+        .await?
+        .ok_or(SiteError::NotFound)?;
+
+    let line_limit = query.limit.unwrap_or(200).clamp(1, 1000);
+    let level_filter = normalize_log_level_filter(query.level.as_deref());
+    let search_query = query
+        .q
+        .filter(|query| !query.trim().is_empty())
+        .unwrap_or_else(|| run_id.to_string());
+    let log_file_path = state.log_path.clone();
+    let (lines, total_lines, matched_lines, truncated) = load_log_view(
+        &log_file_path,
+        line_limit,
+        Some(search_query.as_str()),
+        level_filter.as_deref(),
+    )
+    .await?;
+
+    let template_shared = AdminTemplateData::new("Publish Run")
+        .with_site_context(site.id, &site.full_title)
+        .with_links(vec![
+            AdminLink::new(
+                &format!("/admin/site/{site_id}/publish"),
+                "Back to publish settings",
+            ),
+            AdminLink::new(&format!("/admin/logs?q={run_id}"), "Open in log viewer"),
+            AdminLink::new(&format!("/admin/site/{site_id}/render"), "Render site"),
+        ]);
+
+    Ok(AdminSitePublishRunTemplate {
+        template_shared,
+        site_id: site.id,
+        site_short_name: site.short_name,
+        full_title: site.full_title,
+        run_id,
+        status: run.status.to_string(),
+        method: run.method.to_string(),
+        actor_sub: run.actor_sub,
+        created_at: run.created_at.to_rfc3339(),
+        started_at: run
+            .started_at
+            .map(|value| value.to_rfc3339())
+            .unwrap_or_else(|| "not started".to_string()),
+        finished_at: run
+            .finished_at
+            .map(|value| value.to_rfc3339())
+            .unwrap_or_else(|| "not finished".to_string()),
+        rendered_file_count: run.rendered_file_count,
+        published_file_count: run.published_file_count,
+        deleted_object_count: run.deleted_object_count,
+        error_message: run.error_message.unwrap_or_default(),
+        log_file_path: log_file_path.display().to_string(),
+        search_query,
+        level_filter: level_filter.unwrap_or_default(),
+        line_limit,
+        total_lines,
+        matched_lines,
+        truncated,
+        lines,
     })
 }
 
@@ -6358,6 +6473,31 @@ mod tests {
         std::fs::write(log_path, contents).expect("failed to write test log file");
     }
 
+    async fn insert_test_publish_run(
+        db: &DatabaseConnection,
+        site_id: Uuid,
+        run_id: Uuid,
+    ) -> entities::site_publish_run::Model {
+        let now = Utc::now();
+        entities::site_publish_run::ActiveModel {
+            id: Set(run_id),
+            site_id: Set(site_id),
+            method: Set(entities::site_publish_config::PublishMethod::S3Compatible),
+            status: Set(entities::site_publish_run::PublishRunStatus::Succeeded),
+            actor_sub: Set("admin".to_string()),
+            rendered_file_count: Set(3),
+            published_file_count: Set(3),
+            deleted_object_count: Set(1),
+            error_message: Set(Option::<String>::None),
+            created_at: Set(now),
+            started_at: Set(Some(now)),
+            finished_at: Set(Some(now)),
+        }
+        .insert(db)
+        .await
+        .expect("failed to insert publish run")
+    }
+
     #[tokio::test]
     async fn admin_logs_view_shows_filtered_entries() {
         let db = Arc::new(test_db_start().await);
@@ -6407,6 +6547,87 @@ mod tests {
         assert!(body.contains("publish job failed"));
         assert!(!body.contains("starting site publish"));
         assert!(body.contains("dispatch failure"));
+    }
+
+    #[tokio::test]
+    async fn publish_run_id_links_to_run_detail_view() {
+        let db = Arc::new(test_db_start().await);
+        let admin = crate::entities::user::create_user(
+            db.as_ref(),
+            "admin",
+            Some("admin@example.com"),
+            Some("Admin"),
+            true,
+        )
+        .await
+        .expect("failed to create admin");
+        let site = crate::create_site(
+            db.as_ref(),
+            "publish-detail".to_string(),
+            "Publish Detail".to_string(),
+            DEFAULT_TEMPLATE_NAME.to_string(),
+        )
+        .await
+        .expect("failed to create site");
+        let run_id = Uuid::now_v7();
+        let _run = insert_test_publish_run(db.as_ref(), site.id, run_id).await;
+
+        let state = test_admin_state(db.clone());
+        write_test_log_file(
+            &state.log_path,
+            &format!(
+                "2026-03-27T03:45:56.170588Z INFO websites::publish: publish job queued run_id={run_id} site_id={} site_short_name=detail bucket=example prefix=site endpoint_url=aws-default\n2026-03-27T03:45:56.171588Z INFO websites::publish: starting site publish run_id={run_id} site_id={} site_short_name=detail bucket=example prefix=site endpoint_url=aws-default\n2026-03-27T03:45:56.172588Z INFO websites::publish: site publish completed run_id={run_id} site_id={} site_short_name=detail rendered_file_count=3 published_file_count=3 deleted_object_count=1\n",
+                site.id, site.id, site.id
+            ),
+        );
+
+        let session_store = MemoryStore::default();
+        let router = test_app_router(state, session_store.clone()).router;
+        let cookie = seed_session_cookie(
+            test_admin_state(db.clone()),
+            session_store.clone(),
+            admin.id,
+        )
+        .await;
+
+        let publish_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/admin/site/{}/publish", site.id))
+                    .header(header::COOKIE, cookie.clone())
+                    .body(Body::empty())
+                    .expect("failed to build publish request"),
+            )
+            .await
+            .expect("failed to call publish page");
+        assert_eq!(publish_response.status(), StatusCode::OK);
+        let publish_body = to_bytes(publish_response.into_body(), usize::MAX)
+            .await
+            .expect("failed to read publish body");
+        let publish_body = String::from_utf8(publish_body.to_vec()).expect("invalid publish body");
+        let run_link = format!("/admin/site/{}/publish/run/{run_id}", site.id);
+        assert!(publish_body.contains(&run_link));
+
+        let detail_response = router
+            .oneshot(
+                Request::builder()
+                    .uri(&run_link)
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .expect("failed to build run detail request"),
+            )
+            .await
+            .expect("failed to call run detail page");
+        assert_eq!(detail_response.status(), StatusCode::OK);
+        let detail_body = to_bytes(detail_response.into_body(), usize::MAX)
+            .await
+            .expect("failed to read run detail body");
+        let detail_body = String::from_utf8(detail_body.to_vec()).expect("invalid run detail body");
+        assert!(detail_body.contains("Publish Run"));
+        assert!(detail_body.contains(&run_id.to_string()));
+        assert!(detail_body.contains("publish job queued"));
+        assert!(detail_body.contains("site publish completed"));
     }
 
     #[tokio::test]
