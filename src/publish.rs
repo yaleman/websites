@@ -27,7 +27,8 @@ pub const DEFAULT_S3_REGION: &str = "us-east-1";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct S3CompatiblePublishConfig {
-    pub endpoint_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_url: Option<String>,
     pub bucket: String,
     pub prefix: String,
     pub region: String,
@@ -64,9 +65,13 @@ pub struct S3PublishBackend {
 
 impl S3CompatiblePublishConfig {
     pub fn validate(&self) -> Result<(), SiteError> {
-        if self.endpoint_url.trim().is_empty() {
+        if self
+            .endpoint_url
+            .as_deref()
+            .is_some_and(|endpoint_url| endpoint_url.trim().is_empty())
+        {
             return Err(SiteError::BadRequest(
-                "publish endpoint_url is required".to_string(),
+                "publish endpoint_url cannot be blank".to_string(),
             ));
         }
         if self.bucket.trim().is_empty() {
@@ -112,9 +117,11 @@ impl S3PublishBackend {
             ))
             .load()
             .await;
-        let builder = aws_sdk_s3::config::Builder::from(&shared_config)
-            .endpoint_url(config.endpoint_url.clone())
-            .force_path_style(config.force_path_style);
+        let mut builder = aws_sdk_s3::config::Builder::from(&shared_config);
+        if let Some(endpoint_url) = &config.endpoint_url {
+            builder = builder.endpoint_url(endpoint_url.clone());
+        }
+        builder = builder.force_path_style(config.force_path_style);
         let client = S3Client::from_conf(builder.build());
 
         Ok(Self {
@@ -666,7 +673,7 @@ mod tests {
     #[tokio::test]
     async fn s3_config_round_trips_through_json() {
         let config = S3CompatiblePublishConfig {
-            endpoint_url: "https://example.invalid".to_string(),
+            endpoint_url: None,
             bucket: "bucket".to_string(),
             prefix: "site".to_string(),
             region: "us-east-1".to_string(),
@@ -692,7 +699,7 @@ mod tests {
         .expect("create site");
 
         let config = S3CompatiblePublishConfig {
-            endpoint_url: "https://example.invalid".to_string(),
+            endpoint_url: None,
             bucket: "bucket".to_string(),
             prefix: "site".to_string(),
             region: "us-east-1".to_string(),

@@ -5265,7 +5265,7 @@ async fn admin_site_publish(
     let (endpoint_url, bucket, prefix, region, access_key_id, secret_present, force_path_style) =
         if let Some(config) = publish_config {
             (
-                config.endpoint_url,
+                config.endpoint_url.unwrap_or_default(),
                 config.bucket,
                 config.prefix,
                 config.region,
@@ -5354,7 +5354,7 @@ async fn admin_site_publish_update(
         )));
     }
 
-    let endpoint_url = form.endpoint_url.trim().to_string();
+    let endpoint_url = normalize_optional(Some(form.endpoint_url));
     let bucket = form.bucket.trim().to_string();
     let prefix = normalize_optional(form.prefix).unwrap_or_default();
     let region = form.region.trim().to_string();
@@ -5362,11 +5362,6 @@ async fn admin_site_publish_update(
     let secret_access_key = normalize_optional(form.secret_access_key);
     let force_path_style = form.force_path_style.is_some();
 
-    if endpoint_url.is_empty() {
-        return Err(SiteError::BadRequest(
-            "publish endpoint_url is required".to_string(),
-        ));
-    }
     if bucket.is_empty() {
         return Err(SiteError::BadRequest(
             "publish bucket is required".to_string(),
