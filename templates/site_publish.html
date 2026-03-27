@@ -17,6 +17,7 @@
     <div class="form-field">
       <label for="method">Publish Method</label>
       <select id="method" name="method" required>
+        <option value="disabled" {% if !config_present %}selected{% endif %}>Disabled</option>
         <option value="s3_compatible" {% if config_present %}selected{% endif %}>S3-compatible store</option>
       </select>
     </div>
@@ -26,7 +27,7 @@
     </div>
     <div class="form-field">
       <label for="bucket">Bucket</label>
-      <input id="bucket" name="bucket" value="{{ bucket }}" required />
+      <input id="bucket" name="bucket" value="{{ bucket }}" />
     </div>
     <div class="form-field">
       <label for="prefix">Prefix</label>
@@ -34,11 +35,11 @@
     </div>
     <div class="form-field">
       <label for="region">Region</label>
-      <input id="region" name="region" value="{{ region }}" required />
+      <input id="region" name="region" value="{{ region }}" />
     </div>
     <div class="form-field">
       <label for="access_key_id">Access Key ID</label>
-      <input id="access_key_id" name="access_key_id" value="{{ access_key_id }}" required />
+      <input id="access_key_id" name="access_key_id" value="{{ access_key_id }}" />
     </div>
     <div class="form-field">
       <label for="secret_access_key">Secret Access Key</label>
@@ -58,6 +59,9 @@
       <button type="submit" class="btn">Save publish config</button>
     </div>
   </form>
+  <p class="text-sm text-slate-600">
+    Set the method to <strong>Disabled</strong> and save to clear the stored publish configuration.
+  </p>
 </section>
 
 <section class="surface grid gap-4 p-4 md:p-6">
@@ -76,13 +80,6 @@
   <p class="inline-body">
     Save a publish configuration before queueing a run.
   </p>
-  {% endif %}
-
-  {% if config_present %}
-  <form method="post" action="/admin/site/{{ site_id }}/publish/delete" data-confirm-message="Delete this site's publish configuration?">
-    <input type="hidden" name="csrf_token" value="{{ delete_csrf_token }}" />
-    <button type="submit" class="btn btn--danger">Delete configuration</button>
-  </form>
   {% endif %}
 </section>
 

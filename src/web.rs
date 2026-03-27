@@ -404,7 +404,6 @@ struct AdminSitePublishTemplate {
     can_publish_now: bool,
     csrf_token: String,
     publish_csrf_token: String,
-    delete_csrf_token: String,
     runs: Vec<AdminSitePublishRunRow>,
 }
 
@@ -853,7 +852,7 @@ struct AdminSiteSettingsQuery {
 struct AdminSitePublishQuery {
     saved: Option<usize>,
     queued: Option<usize>,
-    deleted: Option<usize>,
+    disabled: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1227,10 +1226,6 @@ fn site_publish_csrf_scope(site_id: Uuid) -> String {
 
 fn site_publish_run_csrf_scope(site_id: Uuid) -> String {
     format!("site-publish-run:{site_id}")
-}
-
-fn site_publish_delete_csrf_scope(site_id: Uuid) -> String {
-    format!("site-publish-delete:{site_id}")
 }
 
 fn admin_user_create_csrf_scope() -> &'static str {
@@ -2001,10 +1996,6 @@ fn build_admin_app(state: AdminState, assets_dir: &StdPath, upload_root: &StdPat
         .route(
             "/admin/site/{site_id}/publish/run/{run_id}",
             get(admin_site_publish_run_detail),
-        )
-        .route(
-            "/admin/site/{site_id}/publish/delete",
-            axum::routing::post(admin_site_publish_delete),
         )
         .route("/admin/themes", get(admin_themes).post(admin_themes_create))
         .route(
@@ -5435,42 +5426,52 @@ async fn admin_site_publish(
             },
             "queued",
         )
-    } else if let Some(deleted) = query.deleted {
+    } else if let Some(disabled) = query.disabled {
         template_shared.with_toast_message(
-            if deleted == 1 {
-                "Publish configuration deleted.".to_string()
+            if disabled == 1 {
+                "Publish configuration disabled.".to_string()
             } else {
-                format!("{deleted} publish configurations deleted.")
+                format!("{disabled} publish configurations disabled.")
             },
-            "deleted",
+            "disabled",
         )
     } else {
         template_shared
     };
 
     let config_present = publish_config.is_some();
-    let (endpoint_url, bucket, prefix, region, access_key_id, secret_present, force_path_style) =
-        if let Some(config) = publish_config {
-            (
-                config.endpoint_url.unwrap_or_default(),
-                config.bucket,
-                config.prefix,
-                config.region,
-                config.access_key_id,
-                true,
-                config.force_path_style,
-            )
-        } else {
-            (
-                String::new(),
-                String::new(),
-                String::new(),
-                crate::publish::DEFAULT_S3_REGION.to_string(),
-                String::new(),
-                false,
-                false,
-            )
-        };
+    let (
+        method_label,
+        endpoint_url,
+        bucket,
+        prefix,
+        region,
+        access_key_id,
+        secret_present,
+        force_path_style,
+    ) = if let Some(config) = publish_config {
+        (
+            "S3-compatible store".to_string(),
+            config.endpoint_url.unwrap_or_default(),
+            config.bucket,
+            config.prefix,
+            config.region,
+            config.access_key_id,
+            true,
+            config.force_path_style,
+        )
+    } else {
+        (
+            "Disabled".to_string(),
+            String::new(),
+            String::new(),
+            String::new(),
+            crate::publish::DEFAULT_S3_REGION.to_string(),
+            String::new(),
+            false,
+            false,
+        )
+    };
     let can_publish_now = secret_present;
 
     Ok(AdminSitePublishTemplate {
@@ -5479,7 +5480,7 @@ async fn admin_site_publish(
         site_short_name: site.short_name,
         full_title: site.full_title,
         config_present,
-        method_label: "S3-compatible store".to_string(),
+        method_label,
         endpoint_url,
         bucket,
         prefix,
@@ -5493,9 +5494,6 @@ async fn admin_site_publish(
             .await?,
         publish_csrf_token: session
             .issue_csrf_token(&site_publish_run_csrf_scope(site_id))
-            .await?,
-        delete_csrf_token: session
-            .issue_csrf_token(&site_publish_delete_csrf_scope(site_id))
             .await?,
         runs: runs
             .into_iter()
@@ -5609,6 +5607,31 @@ async fn admin_site_publish_update(
     let actor = current_user(&session).await?.subject;
 
     let method = form.method.trim();
+    if method == "disabled" {
+        let txn = state.db.begin().await?;
+        delete_site_publish_config(&txn, site_id).await?;
+        log_audit_event(
+            &txn,
+            &actor,
+            "disable_site_publish_config",
+            "site_publish_config",
+            &site_id.to_string(),
+            Some(site_id),
+            Some(json!({ "method": "disabled" })),
+        )
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!(
+                "failed to log publish config disable audit: {error}"
+            ))
+        })?;
+        txn.commit().await?;
+
+        return Ok(Redirect::to(&format!(
+            "/admin/site/{site_id}/publish?disabled=1"
+        )));
+    }
+
     if method != "s3_compatible" {
         return Err(SiteError::BadRequest(format!(
             "unsupported publish method: {method}"
@@ -5682,40 +5705,6 @@ async fn admin_site_publish_update(
 
     Ok(Redirect::to(&format!(
         "/admin/site/{site_id}/publish?saved=1"
-    )))
-}
-
-async fn admin_site_publish_delete(
-    State(state): State<AdminState>,
-    session: Session,
-    Path(site_id): Path<Uuid>,
-    Form(form): Form<SitePublishActionForm>,
-) -> Result<Redirect, SiteError> {
-    require_site_role(&state, &session, site_id, SiteRole::Owner).await?;
-    session
-        .validate_csrf_token(&site_publish_delete_csrf_scope(site_id), &form.csrf_token)
-        .await?;
-    let actor = current_user(&session).await?.subject;
-
-    let txn = state.db.begin().await?;
-    delete_site_publish_config(&txn, site_id).await?;
-    log_audit_event(
-        &txn,
-        &actor,
-        "delete_site_publish_config",
-        "site_publish_config",
-        &site_id.to_string(),
-        Some(site_id),
-        Some(json!({ "site_id": site_id })),
-    )
-    .await
-    .map_err(|error| {
-        SiteError::internal(format!("failed to log publish config delete: {error}"))
-    })?;
-    txn.commit().await?;
-
-    Ok(Redirect::to(&format!(
-        "/admin/site/{site_id}/publish?deleted=1"
     )))
 }
 
@@ -6628,6 +6617,112 @@ mod tests {
         assert!(detail_body.contains(&run_id.to_string()));
         assert!(detail_body.contains("publish job queued"));
         assert!(detail_body.contains("site publish completed"));
+    }
+
+    #[tokio::test]
+    async fn publish_settings_can_be_disabled_from_the_method_selector() {
+        let db = Arc::new(test_db_start().await);
+        let admin = crate::entities::user::create_user(
+            db.as_ref(),
+            "admin",
+            Some("admin@example.com"),
+            Some("Admin"),
+            true,
+        )
+        .await
+        .expect("failed to create admin");
+        let site = crate::create_site(
+            db.as_ref(),
+            "publish-disable".to_string(),
+            "Publish Disable".to_string(),
+            DEFAULT_TEMPLATE_NAME.to_string(),
+        )
+        .await
+        .expect("failed to create site");
+
+        save_s3_publish_config(
+            db.as_ref(),
+            site.id,
+            S3CompatiblePublishConfig {
+                endpoint_url: None,
+                bucket: "bucket".to_string(),
+                prefix: "site".to_string(),
+                region: "us-east-1".to_string(),
+                access_key_id: "key".to_string(),
+                secret_access_key: "secret".to_string(),
+                force_path_style: false,
+            },
+        )
+        .await
+        .expect("failed to seed publish config");
+
+        let state = test_admin_state(db.clone());
+        let session_store = MemoryStore::default();
+        let router = test_app_router(state, session_store.clone()).router;
+        let cookie = seed_session_cookie(
+            test_admin_state(db.clone()),
+            session_store.clone(),
+            admin.id,
+        )
+        .await;
+
+        let page_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/admin/site/{}/publish", site.id))
+                    .header(header::COOKIE, cookie.clone())
+                    .body(Body::empty())
+                    .expect("failed to build publish page request"),
+            )
+            .await
+            .expect("failed to load publish page");
+        assert_eq!(page_response.status(), StatusCode::OK);
+        let page_body = to_bytes(page_response.into_body(), usize::MAX)
+            .await
+            .expect("failed to read publish page body");
+        let page_body = String::from_utf8(page_body.to_vec()).expect("invalid publish page body");
+        assert!(!page_body.contains("Delete configuration"));
+
+        let csrf_token = page_body
+            .split("name=\"csrf_token\" value=\"")
+            .nth(1)
+            .expect("missing publish csrf token")
+            .split('"')
+            .next()
+            .expect("missing publish csrf token value");
+
+        let encoded_csrf_token =
+            url::form_urlencoded::byte_serialize(csrf_token.as_bytes()).collect::<String>();
+
+        let disable_response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/admin/site/{}/publish", site.id))
+                    .header(header::COOKIE, cookie)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(format!(
+                        "csrf_token={encoded_csrf_token}&method=disabled&endpoint_url=&bucket=&prefix=&region=&access_key_id=&secret_access_key=&force_path_style="
+                    )))
+                    .expect("failed to build disable request"),
+            )
+            .await
+            .expect("failed to submit disable form");
+
+        assert_eq!(disable_response.status(), StatusCode::SEE_OTHER);
+        let location = disable_response
+            .headers()
+            .get(header::LOCATION)
+            .expect("missing redirect location")
+            .to_str()
+            .expect("invalid redirect location");
+        assert!(location.ends_with(&format!("/admin/site/{}/publish?disabled=1", site.id)));
+
+        let saved_config = get_s3_publish_config(db.as_ref(), site.id)
+            .await
+            .expect("load publish config");
+        assert!(saved_config.is_none(), "publish config should be cleared");
     }
 
     #[tokio::test]
