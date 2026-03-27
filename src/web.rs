@@ -11,6 +11,7 @@ use crate::content_scan::{
 use crate::csrf::SessionCsrfExt;
 use crate::entities::audit_event::log_audit_event;
 use crate::entities::site::get_by_id;
+use crate::entities::site_publish_config::PublishMethod;
 use crate::entities::user::upsert_user_login;
 use crate::entities::{self, PageType};
 use crate::errors::SiteError;
@@ -63,8 +64,8 @@ use sea_orm::prelude::StringLen;
 
 use sea_orm::{
     ActiveModelTrait, ColumnTrait as _, Condition, ConnectionTrait, DatabaseConnection,
-    DeriveActiveEnum, EntityTrait, EnumIter, IntoActiveModel, QueryFilter, QueryOrder, Set,
-    TransactionTrait,
+    DeriveActiveEnum, EntityTrait, EnumIter, IntoActiveModel, Iterable, QueryFilter, QueryOrder,
+    Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -392,7 +393,6 @@ struct AdminSitePublishTemplate {
     site_id: Uuid,
     site_short_name: String,
     full_title: String,
-    config_present: bool,
     method_label: String,
     endpoint_url: String,
     bucket: String,
@@ -405,6 +405,8 @@ struct AdminSitePublishTemplate {
     csrf_token: String,
     publish_csrf_token: String,
     runs: Vec<AdminSitePublishRunRow>,
+    publish_methods: Vec<PublishMethod>,
+    current_publish_method: PublishMethod,
 }
 
 #[allow(dead_code)]
@@ -5439,7 +5441,11 @@ async fn admin_site_publish(
         template_shared
     };
 
-    let config_present = publish_config.is_some();
+    let current_publish_method = if publish_config.is_some() {
+        PublishMethod::S3Compatible
+    } else {
+        PublishMethod::Disabled
+    };
     let (
         method_label,
         endpoint_url,
@@ -5479,7 +5485,6 @@ async fn admin_site_publish(
         site_id: site.id,
         site_short_name: site.short_name,
         full_title: site.full_title,
-        config_present,
         method_label,
         endpoint_url,
         bucket,
@@ -5518,6 +5523,8 @@ async fn admin_site_publish(
                 error_message: run.error_message.unwrap_or_default(),
             })
             .collect(),
+        publish_methods: PublishMethod::iter().collect(),
+        current_publish_method,
     })
 }
 

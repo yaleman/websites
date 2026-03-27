@@ -3,13 +3,7 @@
 
 <section class="surface grid gap-4 p-4 md:p-6">
   <div class="grid gap-2">
-    <h2>Publish Configuration</h2>
-    <p class="inline-body">
-      Configure how this site publishes to a secondary destination. The current backend is an S3-compatible mirror of the rendered site tree.
-    </p>
-    <p class="text-sm text-slate-600">
-      Method: <strong>{{ method_label }}</strong>
-    </p>
+    <h2>Publishing Configuration</h2>
   </div>
 
   <form method="post" action="/admin/site/{{ site_id }}/publish" class="stack-form">
@@ -17,9 +11,11 @@
     <div class="form-field">
       <label for="method">Publish Method</label>
       <select id="method" name="method" required>
-        <option value="disabled" {% if !config_present %}selected{% endif %}>Disabled</option>
-        <option value="s3_compatible" {% if config_present %}selected{% endif %}>S3-compatible store</option>
+        {% for method in publish_methods %}
+        <option value="{{ method }}" {% if method == &current_publish_method %}selected{% endif %}>{{ method.label() }}</option>
+        {% endfor %}
       </select>
+
     </div>
     <div class="form-field">
       <label for="endpoint_url">Endpoint URL</label>
@@ -48,8 +44,7 @@
         name="secret_access_key"
         type="password"
         autocomplete="off"
-        placeholder="{% if secret_present %}Leave blank to keep the stored secret{% else %}Required{% endif %}"
-      />
+        placeholder="{% if secret_present %}Leave blank to keep the stored secret{% else %}Required{% endif %}" />
     </div>
     <label class="inline-flex items-center gap-2 text-sm text-slate-700">
       <input type="checkbox" name="force_path_style" {% if force_path_style %}checked{% endif %} />

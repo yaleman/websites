@@ -1,8 +1,12 @@
+use std::str::FromStr;
+
 use chrono::DateTime as ChronoDateTime;
 use chrono::Utc;
 use sea_orm::prelude::StringLen;
 use sea_orm::{ActiveModelBehavior, DeriveActiveEnum, EnumIter, entity::prelude::*};
 use serde::{Deserialize, Serialize};
+
+use crate::errors::SiteError;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(
@@ -12,7 +16,43 @@ use serde::{Deserialize, Serialize};
 )]
 #[serde(rename_all = "snake_case")]
 pub enum PublishMethod {
+    Disabled,
     S3Compatible,
+}
+
+impl PublishMethod {
+    pub fn label(&self) -> &'static str {
+        match self {
+            PublishMethod::Disabled => "Disabled",
+            PublishMethod::S3Compatible => "S3-compatible store",
+        }
+    }
+}
+
+impl PublishMethod {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PublishMethod::Disabled => "disabled",
+            PublishMethod::S3Compatible => "s3_compatible",
+        }
+    }
+}
+
+impl FromStr for PublishMethod {
+    type Err = SiteError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let method = s.trim();
+        if method == "disabled" || method == "" {
+            Ok(PublishMethod::Disabled)
+        } else if method == "s3_compatible" {
+            Ok(PublishMethod::S3Compatible)
+        } else {
+            Err(SiteError::BadRequest(format!(
+                "unsupported publish method: {method}"
+            )))
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
@@ -34,6 +74,7 @@ impl ActiveModelBehavior for ActiveModel {}
 impl std::fmt::Display for PublishMethod {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            PublishMethod::Disabled => f.write_str("disabled"),
             PublishMethod::S3Compatible => f.write_str("s3_compatible"),
         }
     }

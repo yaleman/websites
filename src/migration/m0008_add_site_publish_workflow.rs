@@ -1,4 +1,7 @@
+use sea_orm::Iterable;
 use sea_orm_migration::prelude::*;
+
+use crate::entities::site_publish_config::PublishMethod;
 
 pub struct Migration;
 
@@ -27,7 +30,11 @@ impl MigrationTrait for Migration {
                             .string()
                             .not_null()
                             .check(
-                                Expr::col(SitePublishConfig::Method).is_in(vec!["s3_compatible"]),
+                                Expr::col(SitePublishConfig::Method).is_in(
+                                    PublishMethod::iter()
+                                        .map(|m| m.as_str())
+                                        .collect::<Vec<_>>(),
+                                ),
                             ),
                     )
                     .col(
