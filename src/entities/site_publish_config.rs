@@ -43,7 +43,7 @@ impl FromStr for PublishMethod {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let method = s.trim();
-        if method == "disabled" || method == "" {
+        if method == "disabled" || method.is_empty() {
             Ok(PublishMethod::Disabled)
         } else if method == "s3_compatible" {
             Ok(PublishMethod::S3Compatible)
