@@ -3,7 +3,7 @@ pub(crate) static THUMBNAIL_MAX_SIZE: u32 = 320;
 
 pub static SITE_TEMPLATES_DIR: &str = "./site_templates/";
 pub static RENDERED_DIR: &str = "./rendered/";
-pub static LOGS_DIR: &str = "./logs/";
+pub static LOG_PATH: &str = "/data/websites.log";
 pub static LOG_FILE_NAME: &str = "websites.log";
 
 pub static REQUIRED_TEMPLATES: &[&str] = &[

@@ -37,7 +37,7 @@ use crate::{
     import_site_export, import_wordpress_xml, list_aliases, list_assets, list_content,
     list_content_tags, list_memberships, list_memberships_for_user_id, list_revisions, list_sites,
     list_sites_for_subject, list_tags, list_users, list_users_by_ids, persist_asset_files,
-    render_content_preview, render_site, resolve_log_root, resolve_site_template_override_root,
+    render_content_preview, render_site, resolve_log_path, resolve_site_template_override_root,
     resolve_upload_root, search_all_content, search_content, serialize_site_export_pretty,
     store_uploaded_asset, sync_tags_to_content, update_content, update_membership_role,
     update_site_settings,
@@ -183,7 +183,7 @@ pub(crate) struct AdminState {
     pub(crate) jwt_signer: Arc<compact_jwt::JwsHs256Signer>,
     pub(crate) jwt_issuer: String,
     pub(crate) upload_root: PathBuf,
-    pub(crate) log_root: PathBuf,
+    pub(crate) log_path: PathBuf,
     pub(crate) site_templates_root: PathBuf,
     pub(crate) rendered_root: PathBuf,
 }
@@ -2022,7 +2022,7 @@ pub async fn run_admin_server(
     let jwt_signer =
         signer_from_secret(&jwt_secret).map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let upload_root = resolve_upload_root();
-    let log_root = resolve_log_root();
+    let log_path = resolve_log_path();
     let state = AdminState {
         db: db.clone(),
         oidc_client_id: ClientId::new(oidc.oidc_client_id.clone()),
@@ -2034,7 +2034,7 @@ pub async fn run_admin_server(
         jwt_signer: Arc::new(jwt_signer),
         jwt_issuer: oidc.frontend_url.to_string(),
         upload_root: upload_root.clone(),
-        log_root: log_root.clone(),
+        log_path: log_path.clone(),
         site_templates_root,
         rendered_root,
     };
@@ -2064,7 +2064,7 @@ pub async fn run_admin_server(
     }
     debug!("admin assets dir: {}", assets_dir.display());
     debug!("upload root dir: {}", upload_root.display());
-    debug!("log root dir: {}", log_root.display());
+    debug!("log path: {}", log_path.display());
 
     info!(
         "Starting server on https://{listen} / {}",
@@ -2355,7 +2355,7 @@ async fn admin_logs(
     let line_limit = query.limit.unwrap_or(200).clamp(1, 1000);
     let level_filter = normalize_log_level_filter(query.level.as_deref());
     let search_query = query.q.unwrap_or_default();
-    let log_file_path = state.log_root.join(crate::constants::LOG_FILE_NAME);
+    let log_file_path = state.log_path.clone();
     let (lines, total_lines, matched_lines, truncated) = load_log_view(
         &log_file_path,
         line_limit,
@@ -6342,7 +6342,9 @@ mod tests {
             jwt_signer: Arc::new(jwt_signer),
             jwt_issuer: "https://example.com".to_string(),
             upload_root: std::env::temp_dir().join(format!("websites-test-{}", Uuid::now_v7())),
-            log_root: std::env::temp_dir().join(format!("websites-logs-test-{}", Uuid::now_v7())),
+            log_path: std::env::temp_dir()
+                .join(format!("websites-logs-test-{}", Uuid::now_v7()))
+                .join(crate::constants::LOG_FILE_NAME),
             site_templates_root: std::env::temp_dir()
                 .join(format!("websites-templates-test-{}", Uuid::now_v7())),
             rendered_root: std::env::temp_dir()
@@ -6350,10 +6352,10 @@ mod tests {
         }
     }
 
-    fn write_test_log_file(log_root: &StdPath, contents: &str) {
-        std::fs::create_dir_all(log_root).expect("failed to create test log root");
-        std::fs::write(log_root.join(crate::constants::LOG_FILE_NAME), contents)
-            .expect("failed to write test log file");
+    fn write_test_log_file(log_path: &StdPath, contents: &str) {
+        std::fs::create_dir_all(log_path.parent().expect("test log path missing parent"))
+            .expect("failed to create test log root");
+        std::fs::write(log_path, contents).expect("failed to write test log file");
     }
 
     #[tokio::test]
@@ -6370,7 +6372,7 @@ mod tests {
         .expect("failed to create admin");
         let state = test_admin_state(db.clone());
         write_test_log_file(
-            &state.log_root,
+            &state.log_path,
             concat!(
                 "2026-03-27T03:45:56.170588Z INFO websites::publish: starting site publish site_id=123 bucket=example prefix=site endpoint_url=aws-default\n",
                 "2026-03-27T03:45:56.171588Z ERROR websites::publish: publish job failed run_id=123 site_id=123 site_short_name=demo bucket=example prefix=site endpoint_url=aws-default error=dispatch failure\n",
@@ -6421,7 +6423,7 @@ mod tests {
         .expect("failed to create viewer");
         let state = test_admin_state(db.clone());
         write_test_log_file(
-            &state.log_root,
+            &state.log_path,
             "2026-03-27T03:45:56.170588Z INFO websites::publish: starting site publish\n",
         );
 

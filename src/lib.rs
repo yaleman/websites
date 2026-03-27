@@ -1,5 +1,5 @@
 use crate::constants::{
-    CUSTOMIZABLE_TEMPLATE_FILES, LOGS_DIR, REQUIRED_TEMPLATES, SITE_TEMPLATES_DIR,
+    CUSTOMIZABLE_TEMPLATE_FILES, LOG_PATH, REQUIRED_TEMPLATES, SITE_TEMPLATES_DIR,
 };
 use crate::content_scan::expand_asset_shortcodes;
 use crate::images::{generate_thumbnail, mime_from_extension};
@@ -159,12 +159,12 @@ pub fn resolve_upload_root() -> PathBuf {
     cwd.join("uploads/media-storage")
 }
 
-pub fn resolve_log_root() -> PathBuf {
-    if let Ok(value) = env::var("WEBSITES_LOG_DIR") {
+pub fn resolve_log_path() -> PathBuf {
+    if let Ok(value) = env::var("WEBSITES_LOG_PATH") {
         return PathBuf::from(value);
     }
 
-    PathBuf::from(LOGS_DIR)
+    PathBuf::from(LOG_PATH)
 }
 
 pub fn resolve_site_template_override_root(site_id: Uuid) -> PathBuf {

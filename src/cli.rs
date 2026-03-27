@@ -141,13 +141,13 @@ pub struct Cli {
     )]
     pub rendered_dir: PathBuf,
     #[arg(
-        long = "log-dir",
-        env = "WEBSITES_LOG_DIR",
-        default_value = crate::constants::LOGS_DIR,
-        value_name = "DIR",
-        help = "Root directory where persistent application logs are written"
+        long = "log-path",
+        env = "WEBSITES_LOG_PATH",
+        default_value = crate::constants::LOG_PATH,
+        value_name = "FILE",
+        help = "File path where persistent application logs are written"
     )]
-    pub log_dir: PathBuf,
+    pub log_path: PathBuf,
     #[command(flatten)]
     pub oidc: OidcConfigArgs,
     #[command(subcommand)]
@@ -1602,33 +1602,33 @@ mod tests {
     }
 
     #[test]
-    fn log_dir_can_be_loaded_from_flag() {
-        let cli = Cli::try_parse_from(["websites", "--log-dir", "/tmp/logs-from-flag"])
-            .expect("failed to parse CLI arguments with log dir flag");
+    fn log_path_can_be_loaded_from_flag() {
+        let cli = Cli::try_parse_from(["websites", "--log-path", "/tmp/logs-from-flag"])
+            .expect("failed to parse CLI arguments with log path flag");
 
-        assert_eq!(cli.log_dir, PathBuf::from("/tmp/logs-from-flag"));
+        assert_eq!(cli.log_path, PathBuf::from("/tmp/logs-from-flag"));
     }
 
     #[test]
-    fn log_dir_can_be_loaded_from_env() {
+    fn log_path_can_be_loaded_from_env() {
         let _guard = env_lock().lock().expect("failed to lock env");
-        let original = std::env::var_os("WEBSITES_LOG_DIR");
+        let original = std::env::var_os("WEBSITES_LOG_PATH");
 
         unsafe {
-            std::env::set_var("WEBSITES_LOG_DIR", "/tmp/logs-from-env");
+            std::env::set_var("WEBSITES_LOG_PATH", "/tmp/logs-from-env");
         }
 
         let cli = Cli::try_parse_from(["websites"])
-            .expect("failed to parse CLI arguments with log dir env override");
+            .expect("failed to parse CLI arguments with log path env override");
 
-        assert_eq!(cli.log_dir, PathBuf::from("/tmp/logs-from-env"));
+        assert_eq!(cli.log_path, PathBuf::from("/tmp/logs-from-env"));
 
         match original {
             Some(value) => unsafe {
-                std::env::set_var("WEBSITES_LOG_DIR", value);
+                std::env::set_var("WEBSITES_LOG_PATH", value);
             },
             None => unsafe {
-                std::env::remove_var("WEBSITES_LOG_DIR");
+                std::env::remove_var("WEBSITES_LOG_PATH");
             },
         }
     }

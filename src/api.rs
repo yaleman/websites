@@ -1208,7 +1208,7 @@ mod tests {
     use crate::constants::SESSION_USER;
     use crate::db::test_db_start;
     use crate::entities::user::create_user;
-    use crate::resolve_log_root;
+    use crate::resolve_log_path;
     use crate::token_auth::{JwtHs256SecretSetting, signer_from_secret};
     use axum::body::{Body, to_bytes};
     use axum::extract::Path;
@@ -1265,7 +1265,7 @@ mod tests {
             jwt_signer: Arc::new(jwt_signer),
             jwt_issuer: "https://example.com".to_string(),
             upload_root: upload_root.to_path_buf(),
-            log_root: resolve_log_root(),
+            log_path: resolve_log_path(),
             site_templates_root: site_templates_root.to_path_buf(),
             rendered_root: std::env::temp_dir()
                 .join(format!("websites-rendered-test-{}", Uuid::now_v7())),

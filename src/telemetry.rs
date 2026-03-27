@@ -12,15 +12,36 @@ static LOG_GUARD: OnceLock<Mutex<Option<tracing_appender::non_blocking::WorkerGu
     OnceLock::new();
 
 pub async fn init(service: &str) -> anyhow::Result<()> {
-    init_with_log_root(service, crate::resolve_log_root()).await
+    init_with_log_path(service, crate::resolve_log_path()).await
 }
 
-pub async fn init_with_log_root(service: &str, log_root: std::path::PathBuf) -> anyhow::Result<()> {
-    fs::create_dir_all(&log_root)
-        .await
-        .map_err(|error| anyhow::anyhow!("failed to create log directory: {error}"))?;
-    let file_appender =
-        tracing_appender::rolling::never(&log_root, crate::constants::LOG_FILE_NAME);
+pub async fn init_with_log_path(service: &str, log_path: std::path::PathBuf) -> anyhow::Result<()> {
+    let log_dir = log_path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let log_file_name = match log_path.file_name() {
+        Some(value) => value.to_string_lossy().into_owned(),
+        None => {
+            init_writer(service, std::io::stdout)?;
+            tracing::warn!(
+                log_path = %log_path.display(),
+                "failed to initialize file logging; using stdout only"
+            );
+            return Ok(());
+        }
+    };
+
+    if let Err(error) = fs::create_dir_all(&log_dir).await {
+        init_writer(service, std::io::stdout)?;
+        tracing::warn!(
+            log_path = %log_path.display(),
+            error = %error,
+            "failed to initialize file logging; using stdout only"
+        );
+        return Ok(());
+    }
+    let file_appender = tracing_appender::rolling::never(&log_dir, log_file_name);
     let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
     let guard_slot = LOG_GUARD.get_or_init(|| Mutex::new(None));
     *guard_slot

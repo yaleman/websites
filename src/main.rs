@@ -12,7 +12,7 @@ async fn main() {
     let upload_root = cli.upload_dir.clone().unwrap_or_else(resolve_upload_root);
     unsafe {
         std::env::set_var("WEBSITES_UPLOAD_ROOT", &upload_root);
-        std::env::set_var("WEBSITES_LOG_DIR", &cli.log_dir);
+        std::env::set_var("WEBSITES_LOG_PATH", &cli.log_path);
     }
 
     if let Err(err) = telemetry::init("websites").await {
