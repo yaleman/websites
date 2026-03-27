@@ -58,7 +58,7 @@ pub(crate) async fn set_cache(request: Request, next: Next) -> Response {
         let request_uri = request.uri().clone();
         let mut response = next.run(request).await;
         // because 404's might be fixed quick
-        if request_uri.path().starts_with("/assets/") && response.status().is_success() {
+        if request_uri.path().contains("/assets/") && response.status().is_success() {
             response.headers_mut().insert(
                 header::CACHE_CONTROL,
                 header::HeaderValue::from_static("private, max-age=300"),
