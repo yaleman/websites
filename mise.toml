@@ -102,6 +102,10 @@ run = [
     "cd python_api_client && uv run pytest",
 ]
 
+[tasks.python_coverage]
+depends = ["frontend_build", "python_gen"]
+run = "cd python_api_client && uv run --with pytest-cov pytest --cov=websites --cov-report=term-missing"
+
 [tasks.docker_run]
 run = '''
 docker run --rm -it \
