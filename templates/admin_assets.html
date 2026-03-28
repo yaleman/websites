@@ -1,7 +1,8 @@
 {% extends "base_template.html" %}
 {% block body %}
 <p class="inline-body">
-  Uploaded assets for <strong>{{ site_full_title }}</strong>. Files are served from the runtime upload root and are available under <code>/media/images/...</code>.
+  Uploaded assets for <strong>{{ site_full_title }}</strong>. Files are served from the runtime upload root and are available under
+  <code>/media/images/...</code>.
 </p>
 
 {% if assets.is_empty() %}
@@ -23,9 +24,9 @@
         {% if asset.original_exists %}
         <a href="{{ asset.original_url }}">
           {% if let Some(thumbnail_url) = asset.thumbnail_url %}
-          <img src="{{ thumbnail_url }}" alt="{{ asset.original_filename }}" width="96" />
+          <img src="{{ thumbnail_url }}" alt="{{ asset.original_filename }}" loading="lazy" width="96" />
           {% else %}
-          <img src="{{ asset.original_url }}" alt="{{ asset.original_filename }}" width="96" />
+          <img src="{{ asset.original_url }}" alt="{{ asset.original_filename }}" loading="lazy" width="96" />
           {% endif %}
         </a>
         {% else %}

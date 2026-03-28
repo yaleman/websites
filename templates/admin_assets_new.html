@@ -41,9 +41,9 @@
           {% if asset.original_exists %}
           <a href="{{ asset.original_url }}">
             {% if let Some(thumbnail_url) = asset.thumbnail_url %}
-            <img src="{{ thumbnail_url }}" alt="{{ asset.original_filename }}" width="72" />
+            <img src="{{ thumbnail_url }}" alt="{{ asset.original_filename }}" loading="lazy" width="72" />
             {% else %}
-            <img src="{{ asset.original_url }}" alt="{{ asset.original_filename }}" width="72" />
+            <img src="{{ asset.original_url }}" alt="{{ asset.original_filename }}" loading="lazy" width="72" />
             {% endif %}
           </a>
           {% else %}
