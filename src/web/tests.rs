@@ -1221,6 +1221,91 @@ async fn admin_themes_page_uses_shared_admin_styles() {
 }
 
 #[tokio::test]
+async fn publish_site_nav_link_only_shows_when_publish_on_render_is_enabled() {
+    let db = std::sync::Arc::new(test_db_start().await);
+    let admin = crate::entities::user::create_user(
+        db.as_ref(),
+        "admin",
+        Some("admin@example.com"),
+        Some("Admin"),
+        true,
+    )
+    .await
+    .expect("failed to create admin");
+    let site = crate::create_site(
+        db.as_ref(),
+        "publish-nav".to_string(),
+        "Publish Nav Site".to_string(),
+        DEFAULT_TEMPLATE_NAME.to_string(),
+    )
+    .await
+    .expect("failed to create site");
+
+    let session_store = MemoryStore::default();
+    let router = test_app_router(test_admin_state(db.clone()), session_store.clone());
+    let cookie = seed_session_cookie(
+        test_admin_state(db.clone()),
+        session_store.clone(),
+        admin.id,
+    )
+    .await;
+
+    let disabled_response = router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/admin/site/{}/settings", site.id))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("failed to build settings request"),
+        )
+        .await
+        .expect("failed to load settings page with publishing disabled");
+    assert_eq!(disabled_response.status(), StatusCode::OK);
+    let disabled_body = to_bytes(disabled_response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read disabled settings body");
+    let disabled_html = String::from_utf8(disabled_body.to_vec()).expect("invalid disabled body");
+    assert!(
+        !disabled_html.contains(&format!("/admin/site/{}/render?publish=1", site.id)),
+        "expected publish link to be hidden when publish on render is disabled"
+    );
+
+    crate::update_site_settings(
+        db.as_ref(),
+        site.id,
+        site.full_title.clone(),
+        site.template_name.clone(),
+        true,
+    )
+    .await
+    .expect("failed to enable publish on render");
+
+    let enabled_response = router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/admin/site/{}/settings", site.id))
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .expect("failed to build enabled settings request"),
+        )
+        .await
+        .expect("failed to load settings page with publishing enabled");
+    assert_eq!(enabled_response.status(), StatusCode::OK);
+    let enabled_body = to_bytes(enabled_response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read enabled settings body");
+    let enabled_html = String::from_utf8(enabled_body.to_vec()).expect("invalid enabled body");
+    assert!(
+        enabled_html.contains(&format!("/admin/site/{}/render?publish=1", site.id)),
+        "expected publish link to be visible when publish on render is enabled"
+    );
+}
+
+#[tokio::test]
 async fn admin_themes_install_rejects_non_admin_users() {
     let db = std::sync::Arc::new(test_db_start().await);
     let user = crate::entities::user::create_user(

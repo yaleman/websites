@@ -275,7 +275,7 @@ test.describe("site settings", () => {
 			}
 		});
 
-	test("publish on render hides the navbar publish button when enabled", async ({
+	test("publish on render shows the navbar publish button when enabled", async ({
 		browser,
 	}) => {
 		const harness = await setupHarness();
@@ -298,7 +298,7 @@ test.describe("site settings", () => {
 				);
 
 				const publishButton = page.getByRole("link", { name: "Publish Site" });
-				await expect(publishButton).toBeVisible();
+				await expect(publishButton).toHaveCount(0);
 				await expect(page.getByLabel("Publish on render")).not.toBeChecked();
 
 				await page.getByLabel("Publish on render").check();
@@ -308,9 +308,7 @@ test.describe("site settings", () => {
 					`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content`,
 					{ waitUntil: "domcontentloaded" },
 				);
-				await expect(
-					page.getByRole("link", { name: "Publish Site" }),
-				).toHaveCount(0);
+				await expect(page.getByRole("link", { name: "Publish Site" })).toBeVisible();
 
 				await page.goto(
 					`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/settings`,
@@ -324,7 +322,9 @@ test.describe("site settings", () => {
 					`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content`,
 					{ waitUntil: "domcontentloaded" },
 				);
-				await expect(publishButton).toBeVisible();
+				await expect(page.getByRole("link", { name: "Publish Site" })).toHaveCount(
+					0,
+				);
 			} finally {
 				await context.close();
 			}
