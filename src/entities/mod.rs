@@ -149,7 +149,7 @@ mod revision_entity_tests {
         .await
         .expect("failed to create site");
 
-        let content = create_content(
+        create_content(
             db,
             NewContent {
                 site_id: site.id,
@@ -163,9 +163,7 @@ mod revision_entity_tests {
             },
         )
         .await
-        .expect("failed to create content");
-
-        content
+        .expect("failed to create content")
     }
 
     #[tokio::test]
