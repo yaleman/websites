@@ -85,3 +85,87 @@ pub fn test() {
         .with_target(true)
         .try_init();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    const CHILD_SCENARIO_ENV: &str = "WEBSITES_TELEMETRY_TEST_SCENARIO";
+
+    fn run_child(test_name: &str, scenario: &str) {
+        let status = Command::new(std::env::current_exe().expect("failed to resolve test binary"))
+            .arg("--exact")
+            .arg(test_name)
+            .arg("--nocapture")
+            .env(CHILD_SCENARIO_ENV, scenario)
+            .status()
+            .expect("failed to spawn telemetry test child");
+
+        assert!(status.success(), "telemetry test child failed");
+    }
+
+    #[test]
+    fn test_initializes_tracing_once_in_child_process() {
+        if std::env::var(CHILD_SCENARIO_ENV).ok().as_deref() == Some("test") {
+            super::test();
+            tracing::debug!("telemetry test smoke");
+            return;
+        }
+
+        run_child("test_initializes_tracing_once_in_child_process", "test");
+    }
+
+    #[test]
+    fn init_writer_accepts_a_custom_writer() {
+        if std::env::var(CHILD_SCENARIO_ENV).ok().as_deref() == Some("writer") {
+            init_writer("websites", std::io::sink).expect("failed to initialize writer");
+            tracing::info!("telemetry writer smoke");
+            return;
+        }
+
+        run_child("init_writer_accepts_a_custom_writer", "writer");
+    }
+
+    #[tokio::test]
+    async fn init_with_log_path_writes_to_the_requested_file() {
+        if std::env::var(CHILD_SCENARIO_ENV).ok().as_deref() == Some("file") {
+            let temp_dir = TempDir::new().expect("failed to create temp dir");
+            let log_path = temp_dir.path().join("telemetry.log");
+
+            init_with_log_path("websites", log_path.clone())
+                .await
+                .expect("failed to initialize file logging");
+            tracing::info!("telemetry file smoke");
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            let contents = fs::read_to_string(&log_path)
+                .await
+                .expect("failed to read telemetry log file");
+            assert!(contents.contains("telemetry file smoke"));
+            assert!(contents.contains("websites"));
+            return;
+        }
+
+        run_child("init_with_log_path_writes_to_the_requested_file", "file");
+    }
+
+    #[tokio::test]
+    async fn init_with_log_path_falls_back_when_no_filename_is_available() {
+        if std::env::var(CHILD_SCENARIO_ENV).ok().as_deref() == Some("fallback") {
+            init_with_log_path("websites", std::path::PathBuf::from("/"))
+                .await
+                .expect("failed to initialize fallback logging");
+            tracing::warn!("telemetry fallback smoke");
+            return;
+        }
+
+        run_child(
+            "init_with_log_path_falls_back_when_no_filename_is_available",
+            "fallback",
+        );
+    }
+}
