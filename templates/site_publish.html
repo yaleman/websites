@@ -4,52 +4,80 @@
 <section class="surface grid gap-4 p-4 md:p-6">
   <div class="grid gap-2">
     <h2>Publishing Configuration</h2>
+    <p class="inline-body">
+      Current method: <strong>{{ method_label }}</strong>
+      {% if method_description != "" %}{{ method_description }}{% endif %}
+    </p>
   </div>
 
   <form method="post" action="/admin/site/{{ site_id }}/publish" class="stack-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
     <div class="form-field">
-      <label for="method">Publish Method</label>
-      <select id="method" name="method" required>
+      <label for="method" class="form-label">Publish Method</label>
+      <select id="method" name="method" required data-publish-method-select>
         {% for method in publish_methods %}
         <option value="{{ method }}" {% if method == &current_publish_method %}selected{% endif %}>{{ method.label() }}</option>
         {% endfor %}
       </select>
 
     </div>
-    <div class="form-field">
-      <label for="endpoint_url">Endpoint URL</label>
-      <input id="endpoint_url" name="endpoint_url" value="{{ endpoint_url }}" placeholder="Leave blank for the default S3 endpoint" />
-    </div>
-    <div class="form-field">
-      <label for="bucket">Bucket</label>
-      <input id="bucket" name="bucket" value="{{ bucket }}" />
-    </div>
-    <div class="form-field">
-      <label for="prefix">Prefix</label>
-      <input id="prefix" name="prefix" value="{{ prefix }}" placeholder="Optional object prefix" />
-    </div>
-    <div class="form-field">
-      <label for="region">Region</label>
-      <input id="region" name="region" value="{{ region }}" />
-    </div>
-    <div class="form-field">
-      <label for="access_key_id">Access Key ID</label>
-      <input id="access_key_id" name="access_key_id" value="{{ access_key_id }}" />
-    </div>
-    <div class="form-field">
-      <label for="secret_access_key">Secret Access Key</label>
-      <input
-        id="secret_access_key"
-        name="secret_access_key"
-        type="password"
-        autocomplete="off"
-        placeholder="{% if secret_present %}Leave blank to keep the stored secret{% else %}Required{% endif %}" />
-    </div>
-    <label class="inline-flex items-center gap-2 text-sm text-slate-700">
-      <input type="checkbox" name="force_path_style" {% if force_path_style %}checked{% endif %} />
-      Force path-style requests
-    </label>
+    <section class="grid gap-4" data-publish-method-panel="s3_compatible" {% if !show_s3_config %}hidden{% endif %}>
+      <div class="form-field">
+        <label for="endpoint_url">Endpoint URL</label>
+        <input id="endpoint_url" name="endpoint_url" value="{{ endpoint_url }}" placeholder="Leave blank for the default S3 endpoint" />
+      </div>
+      <div class="form-field">
+        <label for="bucket">Bucket</label>
+        <input id="bucket" name="bucket" value="{{ bucket }}" />
+      </div>
+      <div class="form-field">
+        <label for="prefix">Prefix</label>
+        <input id="prefix" name="prefix" value="{{ prefix }}" placeholder="Optional object prefix" />
+      </div>
+      <div class="form-field">
+        <label for="region">Region</label>
+        <input id="region" name="region" value="{{ region }}" />
+      </div>
+      <div class="form-field">
+        <label for="access_key_id">Access Key ID</label>
+        <input id="access_key_id" name="access_key_id" value="{{ access_key_id }}" />
+      </div>
+      <div class="form-field">
+        <label for="secret_access_key">Secret Access Key</label>
+        <input
+          id="secret_access_key"
+          name="secret_access_key"
+          type="password"
+          autocomplete="off"
+          placeholder="{% if secret_present %}Leave blank to keep the stored secret{% else %}Required{% endif %}" />
+      </div>
+      <label class="inline-flex items-center gap-2 text-sm text-slate-700">
+        <input type="checkbox" name="force_path_style" {% if force_path_style %}checked{% endif %} />
+        Force path-style requests
+      </label>
+    </section>
+    <section class="grid gap-4" data-publish-method-panel="rsync_ssh" {% if !show_rsync_config %}hidden{% endif %}>
+      <div class="form-field">
+        <label for="ssh_host">SSH Host</label>
+        <input id="ssh_host" name="ssh_host" value="{{ ssh_host }}" placeholder="example.com" />
+      </div>
+      <div class="form-field">
+        <label for="ssh_user">SSH User</label>
+        <input id="ssh_user" name="ssh_user" value="{{ ssh_user }}" placeholder="Optional" />
+      </div>
+      <div class="form-field">
+        <label for="ssh_port">SSH Port</label>
+        <input id="ssh_port" name="ssh_port" value="{{ ssh_port }}" inputmode="numeric" placeholder="Optional" />
+      </div>
+      <div class="form-field">
+        <label for="remote_path">Remote Path</label>
+        <input id="remote_path" name="remote_path" value="{{ remote_path }}" placeholder="/var/www/example.com" />
+      </div>
+      <div class="form-field">
+        <label for="identity_file">Identity File</label>
+        <input id="identity_file" name="identity_file" value="{{ identity_file }}" placeholder="Optional private key path" />
+      </div>
+    </section>
     <div class="form-actions">
       <button type="submit" class="btn">Save publish config</button>
     </div>

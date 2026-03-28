@@ -18,6 +18,7 @@ use crate::errors::SiteError;
 pub enum PublishMethod {
     Disabled,
     S3Compatible,
+    RsyncSsh,
 }
 
 impl PublishMethod {
@@ -25,6 +26,7 @@ impl PublishMethod {
         match self {
             PublishMethod::Disabled => "Disabled",
             PublishMethod::S3Compatible => "S3-compatible store",
+            PublishMethod::RsyncSsh => "rsync over SSH",
         }
     }
 }
@@ -34,6 +36,7 @@ impl PublishMethod {
         match self {
             PublishMethod::Disabled => "disabled",
             PublishMethod::S3Compatible => "s3_compatible",
+            PublishMethod::RsyncSsh => "rsync_ssh",
         }
     }
 }
@@ -47,6 +50,8 @@ impl FromStr for PublishMethod {
             Ok(PublishMethod::Disabled)
         } else if method == "s3_compatible" {
             Ok(PublishMethod::S3Compatible)
+        } else if method == "rsync_ssh" {
+            Ok(PublishMethod::RsyncSsh)
         } else {
             Err(SiteError::BadRequest(format!(
                 "unsupported publish method: {method}"
@@ -76,6 +81,7 @@ impl std::fmt::Display for PublishMethod {
         match self {
             PublishMethod::Disabled => f.write_str("disabled"),
             PublishMethod::S3Compatible => f.write_str("s3_compatible"),
+            PublishMethod::RsyncSsh => f.write_str("rsync_ssh"),
         }
     }
 }

@@ -1,5 +1,5 @@
 use crate::errors::SiteError;
-use crate::publish::S3CompatiblePublishConfig;
+use crate::publish::{RsyncPublishConfig, S3CompatiblePublishConfig};
 use crate::{
     entities, list_asset_variants, list_audit_events, list_memberships, list_users_by_ids,
 };
@@ -14,7 +14,7 @@ use std::path::Path;
 use tokio::fs;
 use uuid::Uuid;
 
-pub const SITE_EXPORT_FORMAT_VERSION: u32 = 1;
+pub const SITE_EXPORT_FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SiteExport {
@@ -44,7 +44,10 @@ pub struct ExportSite {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportSitePublishConfig {
     pub method: entities::site_publish_config::PublishMethod,
-    pub s3: S3CompatiblePublishConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub s3: Option<S3CompatiblePublishConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rsync: Option<RsyncPublishConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -530,20 +533,33 @@ pub async fn export_site_with_roots(
     let publish_config = entities::site_publish_config::Entity::find_by_id(site_id)
         .one(db)
         .await?
-        .map(|row| {
-            if row.method != entities::site_publish_config::PublishMethod::S3Compatible {
-                return Err(SiteError::BadRequest(format!(
-                    "unsupported publish method in export: {}",
-                    row.method
-                )));
+        .map(|row| match row.method {
+            entities::site_publish_config::PublishMethod::S3Compatible => {
+                let s3 = serde_json::from_value::<S3CompatiblePublishConfig>(row.config_json)
+                    .map_err(|error| {
+                        SiteError::BadRequest(format!("invalid publish config in export: {error}"))
+                    })?;
+                Ok(ExportSitePublishConfig {
+                    method: row.method,
+                    s3: Some(s3),
+                    rsync: None,
+                })
             }
-            let s3 = serde_json::from_value::<S3CompatiblePublishConfig>(row.config_json).map_err(
-                |error| SiteError::BadRequest(format!("invalid publish config in export: {error}")),
-            )?;
-            Ok(ExportSitePublishConfig {
-                method: row.method,
-                s3,
-            })
+            entities::site_publish_config::PublishMethod::RsyncSsh => {
+                let rsync = serde_json::from_value::<RsyncPublishConfig>(row.config_json).map_err(
+                    |error| {
+                        SiteError::BadRequest(format!("invalid publish config in export: {error}"))
+                    },
+                )?;
+                Ok(ExportSitePublishConfig {
+                    method: row.method,
+                    s3: None,
+                    rsync: Some(rsync),
+                })
+            }
+            entities::site_publish_config::PublishMethod::Disabled => Err(SiteError::BadRequest(
+                format!("unsupported publish method in export: {}", row.method),
+            )),
         })
         .transpose()?;
 
@@ -627,7 +643,26 @@ pub async fn import_site_export<C: ConnectionTrait>(
     .await?;
 
     if let Some(publish_config) = &export.site.publish_config {
-        let config_json = serde_json::to_value(&publish_config.s3).map_err(|error| {
+        let config_json = match publish_config.method {
+            entities::site_publish_config::PublishMethod::S3Compatible => {
+                serde_json::to_value(publish_config.s3.as_ref().ok_or_else(|| {
+                    SiteError::BadRequest("export publish config missing S3 settings".to_string())
+                })?)
+            }
+            entities::site_publish_config::PublishMethod::RsyncSsh => {
+                serde_json::to_value(publish_config.rsync.as_ref().ok_or_else(|| {
+                    SiteError::BadRequest(
+                        "export publish config missing rsync settings".to_string(),
+                    )
+                })?)
+            }
+            entities::site_publish_config::PublishMethod::Disabled => {
+                return Err(SiteError::BadRequest(
+                    "disabled publish configs cannot be imported".to_string(),
+                ));
+            }
+        }
+        .map_err(|error| {
             SiteError::internal(format!("failed to serialize publish config: {error}"))
         })?;
         entities::site_publish_config::ActiveModel {
@@ -1195,6 +1230,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn export_and_import_preserve_rsync_publish_config() {
+        let source_db = test_db_start().await;
+        let site = create_site(
+            &source_db,
+            "publish-rsync".to_string(),
+            "Publish Rsync".to_string(),
+            "default".to_string(),
+        )
+        .await
+        .expect("failed to create source site");
+
+        let config = RsyncPublishConfig {
+            ssh_host: "example.com".to_string(),
+            ssh_user: Some("deploy".to_string()),
+            ssh_port: Some(2222),
+            remote_path: "/var/www/example".to_string(),
+            identity_file: Some("/tmp/id_ed25519".to_string()),
+        };
+        crate::publish::save_rsync_publish_config(&source_db, site.id, config.clone())
+            .await
+            .expect("failed to save rsync config");
+
+        let export = export_site(&source_db, site.id)
+            .await
+            .expect("failed to export site");
+        let publish_config = export
+            .site
+            .publish_config
+            .as_ref()
+            .expect("missing export publish config");
+        assert_eq!(
+            publish_config.method,
+            entities::site_publish_config::PublishMethod::RsyncSsh
+        );
+        assert_eq!(publish_config.rsync, Some(config.clone()));
+        assert!(publish_config.s3.is_none());
+
+        let target_db = test_db_start().await;
+        let import = import_site_export(&target_db, &export)
+            .await
+            .expect("failed to import site export");
+        let imported_config = entities::site_publish_config::Entity::find_by_id(import.site_id)
+            .one(&target_db)
+            .await
+            .expect("failed to fetch imported config")
+            .expect("missing imported config");
+        assert_eq!(
+            imported_config.method,
+            entities::site_publish_config::PublishMethod::RsyncSsh
+        );
+        let restored: RsyncPublishConfig =
+            serde_json::from_value(imported_config.config_json).expect("deserialize rsync config");
+        assert_eq!(restored, config);
+    }
+
+    #[tokio::test]
     async fn import_site_export_restores_database_records_and_reports_file_warnings() {
         let source_db = test_db_start().await;
         let upload_root = TempDir::new().expect("failed to create upload root");
@@ -1548,6 +1639,9 @@ mod tests {
         };
 
         let json = serialize_site_export_pretty(&export).expect("failed to serialize export");
-        assert!(json.contains("\n  \"format_version\": 1,"));
+        assert!(json.contains(&format!(
+            "\n  \"format_version\": {},",
+            SITE_EXPORT_FORMAT_VERSION
+        )));
     }
 }

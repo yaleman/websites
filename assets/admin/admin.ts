@@ -195,4 +195,30 @@ const initSiteImportPrompt = () => {
 	});
 };
 
+const initPublishMethodSwitcher = () => {
+	const select = document.querySelector<HTMLSelectElement>(
+		"[data-publish-method-select]",
+	);
+	const panels = Array.from(
+		document.querySelectorAll<HTMLElement>("[data-publish-method-panel]"),
+	);
+
+	if (!select || panels.length === 0) {
+		return;
+	}
+
+	const updatePanels = () => {
+		const selectedMethod = select.value;
+		for (const panel of panels) {
+			const matches = panel.dataset.publishMethodPanel === selectedMethod;
+			panel.hidden = !matches;
+			panel.setAttribute("aria-hidden", String(!matches));
+		}
+	};
+
+	select.addEventListener("change", updatePanels);
+	updatePanels();
+};
+
 initSiteImportPrompt();
+initPublishMethodSwitcher();

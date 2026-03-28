@@ -48,8 +48,9 @@ pub mod token_auth;
 pub mod web;
 
 pub use publish::{
-    PublishOutcome, S3CompatiblePublishConfig, delete_site_publish_config, get_s3_publish_config,
-    list_site_publish_runs, queue_site_publish, save_s3_publish_config,
+    PublishOutcome, RsyncPublishConfig, S3CompatiblePublishConfig, delete_site_publish_config,
+    get_rsync_publish_config, get_s3_publish_config, list_site_publish_runs, queue_site_publish,
+    save_rsync_publish_config, save_s3_publish_config,
 };
 pub use site_export::{
     SITE_EXPORT_FORMAT_VERSION, SiteExport, SiteImportResult, deserialize_site_export, export_site,

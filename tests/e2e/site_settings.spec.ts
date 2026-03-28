@@ -196,6 +196,85 @@ test.describe("site settings", () => {
 		}
 	});
 
+	test("publish settings only show the active method and preserve values when switching", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const ownerSubject = "publish-settings-owner";
+			const ownerId = await createUser(harness, ownerSubject);
+			await addMembership(harness, ownerId, "owner");
+
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				ownerSubject,
+			);
+
+			try {
+				await page.goto(
+					`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/publish`,
+					{ waitUntil: "domcontentloaded" },
+				);
+
+				const s3Panel = page.locator(
+					'[data-publish-method-panel="s3_compatible"]',
+				);
+				const rsyncPanel = page.locator('[data-publish-method-panel="rsync_ssh"]');
+
+				await page.selectOption("#method", "s3_compatible");
+				await expect(s3Panel).toBeVisible();
+				await expect(rsyncPanel).toBeHidden();
+
+				await page.getByLabel("Bucket").fill("example-bucket");
+				await page.getByLabel("Prefix").fill("site");
+				await page.getByLabel("Region").fill("us-east-1");
+				await page.getByLabel("Access Key ID").fill("access-key");
+				await page.getByLabel("Secret Access Key").fill("secret-key");
+				await page.getByLabel("Force path-style requests").check();
+
+				await page.selectOption("#method", "rsync_ssh");
+				await expect(s3Panel).toBeHidden();
+				await expect(rsyncPanel).toBeVisible();
+
+				await page.getByLabel("SSH Host").fill("publish.example.com");
+				await page.getByLabel("SSH User").fill("deploy");
+				await page.getByLabel("SSH Port").fill("2222");
+				await page.getByLabel("Remote Path").fill("/var/www/example");
+				await page.getByLabel("Identity File").fill("/tmp/id_ed25519");
+
+				await page.selectOption("#method", "s3_compatible");
+				await expect(s3Panel).toBeVisible();
+				await expect(rsyncPanel).toBeHidden();
+				await expect(page.getByLabel("Bucket")).toHaveValue("example-bucket");
+				await expect(page.getByLabel("Prefix")).toHaveValue("site");
+				await expect(page.getByLabel("Region")).toHaveValue("us-east-1");
+				await expect(page.getByLabel("Access Key ID")).toHaveValue("access-key");
+				await expect(page.getByLabel("Secret Access Key")).toHaveValue("secret-key");
+				await expect(
+					page.getByLabel("Force path-style requests"),
+				).toBeChecked();
+
+				await page.selectOption("#method", "disabled");
+				await expect(s3Panel).toBeHidden();
+				await expect(rsyncPanel).toBeHidden();
+
+				await page.selectOption("#method", "s3_compatible");
+				await expect(s3Panel).toBeVisible();
+				await expect(rsyncPanel).toBeHidden();
+				await expect(page.getByLabel("Bucket")).toHaveValue("example-bucket");
+				await expect(page.locator('input[name="ssh_host"]')).toHaveValue(
+					"publish.example.com",
+				);
+			} finally {
+				await context.close();
+			}
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
 	test("prompts to replace an existing site export before importing", async ({
 		browser,
 	}) => {

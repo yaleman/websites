@@ -18,8 +18,9 @@ use crate::errors::SiteError;
 use crate::middleware::log_requests;
 use crate::oidc::{admin_login_callback, build_http_client, build_oidc_client};
 use crate::publish::{
-    S3CompatiblePublishConfig, delete_site_publish_config, get_s3_publish_config,
-    get_site_publish_run, list_site_publish_runs, queue_site_publish, save_s3_publish_config,
+    RsyncPublishConfig, S3CompatiblePublishConfig, delete_site_publish_config,
+    get_s3_publish_config, get_site_publish_config, get_site_publish_run, list_site_publish_runs,
+    queue_site_publish, save_rsync_publish_config, save_s3_publish_config,
 };
 use crate::theme_registry::{
     ThemeAdminRow, ThemeInstallRequest, available_template_names, delete_theme, install_theme,
@@ -394,6 +395,7 @@ struct AdminSitePublishTemplate {
     site_short_name: String,
     full_title: String,
     method_label: String,
+    method_description: String,
     endpoint_url: String,
     bucket: String,
     prefix: String,
@@ -401,12 +403,19 @@ struct AdminSitePublishTemplate {
     access_key_id: String,
     secret_present: bool,
     force_path_style: bool,
+    ssh_host: String,
+    ssh_user: String,
+    ssh_port: String,
+    remote_path: String,
+    identity_file: String,
     can_publish_now: bool,
     csrf_token: String,
     publish_csrf_token: String,
     runs: Vec<AdminSitePublishRunRow>,
     publish_methods: Vec<PublishMethod>,
     current_publish_method: PublishMethod,
+    show_s3_config: bool,
+    show_rsync_config: bool,
 }
 
 #[allow(dead_code)]
@@ -783,6 +792,11 @@ struct UpdateSitePublishForm {
     access_key_id: String,
     secret_access_key: Option<String>,
     force_path_style: Option<String>,
+    ssh_host: String,
+    ssh_user: Option<String>,
+    ssh_port: Option<String>,
+    remote_path: String,
+    identity_file: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -5399,7 +5413,7 @@ async fn admin_site_publish(
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
 
-    let publish_config = get_s3_publish_config(state.db.as_ref(), site_id).await?;
+    let publish_config = get_site_publish_config(state.db.as_ref(), site_id).await?;
     let runs = list_site_publish_runs(state.db.as_ref(), site_id, 20).await?;
     let template_shared = AdminTemplateData::new("Publish Settings")
         .with_site_context(site.id, &site.full_title)
@@ -5441,13 +5455,13 @@ async fn admin_site_publish(
         template_shared
     };
 
-    let current_publish_method = if publish_config.is_some() {
-        PublishMethod::S3Compatible
-    } else {
-        PublishMethod::Disabled
-    };
+    let current_publish_method = publish_config
+        .as_ref()
+        .map(|config| config.method)
+        .unwrap_or(PublishMethod::Disabled);
     let (
         method_label,
+        method_description,
         endpoint_url,
         bucket,
         prefix,
@@ -5455,20 +5469,82 @@ async fn admin_site_publish(
         access_key_id,
         secret_present,
         force_path_style,
-    ) = if let Some(config) = publish_config {
-        (
-            "S3-compatible store".to_string(),
-            config.endpoint_url.unwrap_or_default(),
-            config.bucket,
-            config.prefix,
-            config.region,
-            config.access_key_id,
-            true,
-            config.force_path_style,
-        )
-    } else {
-        (
-            "Disabled".to_string(),
+        ssh_host,
+        ssh_user,
+        ssh_port,
+        remote_path,
+        identity_file,
+    ) = match publish_config {
+        Some(config) => match config.method {
+            PublishMethod::S3Compatible => {
+                let config: S3CompatiblePublishConfig = serde_json::from_value(config.config_json)
+                    .map_err(|error| {
+                        SiteError::BadRequest(format!("invalid publish config: {error}"))
+                    })?;
+                (
+                    PublishMethod::S3Compatible.label().to_string(),
+                    "Render the site and mirror the output to an S3-compatible object store."
+                        .to_string(),
+                    config.endpoint_url.unwrap_or_default(),
+                    config.bucket,
+                    config.prefix,
+                    config.region,
+                    config.access_key_id,
+                    true,
+                    config.force_path_style,
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                )
+            }
+            PublishMethod::RsyncSsh => {
+                let config: RsyncPublishConfig = serde_json::from_value(config.config_json)
+                    .map_err(|error| {
+                        SiteError::BadRequest(format!("invalid publish config: {error}"))
+                    })?;
+                (
+                    PublishMethod::RsyncSsh.label().to_string(),
+                    "Render the site and mirror the output to a remote SSH target using rsync."
+                        .to_string(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    crate::publish::DEFAULT_S3_REGION.to_string(),
+                    String::new(),
+                    false,
+                    false,
+                    config.ssh_host,
+                    config.ssh_user.unwrap_or_default(),
+                    config
+                        .ssh_port
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    config.remote_path,
+                    config.identity_file.unwrap_or_default(),
+                )
+            }
+            PublishMethod::Disabled => (
+                PublishMethod::Disabled.label().to_string(),
+                "Publishing is disabled for this site.".to_string(),
+                String::new(),
+                String::new(),
+                String::new(),
+                crate::publish::DEFAULT_S3_REGION.to_string(),
+                String::new(),
+                false,
+                false,
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
+        },
+        None => (
+            PublishMethod::Disabled.label().to_string(),
+            "Publishing is disabled for this site.".to_string(),
             String::new(),
             String::new(),
             String::new(),
@@ -5476,9 +5552,19 @@ async fn admin_site_publish(
             String::new(),
             false,
             false,
-        )
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+        ),
     };
-    let can_publish_now = secret_present;
+    let can_publish_now = matches!(
+        current_publish_method,
+        PublishMethod::S3Compatible | PublishMethod::RsyncSsh
+    );
+    let show_s3_config = current_publish_method == PublishMethod::S3Compatible;
+    let show_rsync_config = current_publish_method == PublishMethod::RsyncSsh;
 
     Ok(AdminSitePublishTemplate {
         template_shared,
@@ -5486,6 +5572,7 @@ async fn admin_site_publish(
         site_short_name: site.short_name,
         full_title: site.full_title,
         method_label,
+        method_description,
         endpoint_url,
         bucket,
         prefix,
@@ -5493,6 +5580,11 @@ async fn admin_site_publish(
         access_key_id,
         secret_present,
         force_path_style,
+        ssh_host,
+        ssh_user,
+        ssh_port,
+        remote_path,
+        identity_file,
         can_publish_now,
         csrf_token: session
             .issue_csrf_token(&site_publish_csrf_scope(site_id))
@@ -5525,6 +5617,8 @@ async fn admin_site_publish(
             .collect(),
         publish_methods: PublishMethod::iter().collect(),
         current_publish_method,
+        show_s3_config,
+        show_rsync_config,
     })
 }
 
@@ -5639,62 +5733,86 @@ async fn admin_site_publish_update(
         )));
     }
 
-    if method != "s3_compatible" {
+    let txn = state.db.begin().await?;
+    let saved = if method == "s3_compatible" {
+        let endpoint_url = normalize_optional(Some(form.endpoint_url));
+        let bucket = form.bucket.trim().to_string();
+        let prefix = normalize_optional(form.prefix).unwrap_or_default();
+        let region = form.region.trim().to_string();
+        let access_key_id = form.access_key_id.trim().to_string();
+        let secret_access_key = normalize_optional(form.secret_access_key);
+        let force_path_style = form.force_path_style.is_some();
+
+        if bucket.is_empty() {
+            return Err(SiteError::BadRequest(
+                "publish bucket is required".to_string(),
+            ));
+        }
+        if region.is_empty() {
+            return Err(SiteError::BadRequest(
+                "publish region is required".to_string(),
+            ));
+        }
+        if access_key_id.is_empty() {
+            return Err(SiteError::BadRequest(
+                "publish access_key_id is required".to_string(),
+            ));
+        }
+
+        let existing = get_s3_publish_config(state.db.as_ref(), site_id).await?;
+        let secret_access_key = match (secret_access_key, existing) {
+            (Some(secret_access_key), _) => secret_access_key,
+            (None, Some(existing)) => existing.secret_access_key,
+            (None, None) => {
+                return Err(SiteError::BadRequest(
+                    "publish secret_access_key is required".to_string(),
+                ));
+            }
+        };
+
+        save_s3_publish_config(
+            &txn,
+            site_id,
+            S3CompatiblePublishConfig {
+                endpoint_url,
+                bucket,
+                prefix,
+                region,
+                access_key_id,
+                secret_access_key,
+                force_path_style,
+            },
+        )
+        .await?
+    } else if method == "rsync_ssh" {
+        let ssh_host = form.ssh_host.trim().to_string();
+        let ssh_user = normalize_optional(form.ssh_user);
+        let ssh_port = match normalize_optional(form.ssh_port) {
+            Some(port) => Some(port.parse::<u16>().map_err(|error| {
+                SiteError::BadRequest(format!("publish ssh_port is invalid: {error}"))
+            })?),
+            None => None,
+        };
+        let remote_path = form.remote_path.trim().to_string();
+        let identity_file = normalize_optional(form.identity_file);
+
+        save_rsync_publish_config(
+            &txn,
+            site_id,
+            RsyncPublishConfig {
+                ssh_host,
+                ssh_user,
+                ssh_port,
+                remote_path,
+                identity_file,
+            },
+        )
+        .await?
+    } else {
         return Err(SiteError::BadRequest(format!(
             "unsupported publish method: {method}"
         )));
-    }
-
-    let endpoint_url = normalize_optional(Some(form.endpoint_url));
-    let bucket = form.bucket.trim().to_string();
-    let prefix = normalize_optional(form.prefix).unwrap_or_default();
-    let region = form.region.trim().to_string();
-    let access_key_id = form.access_key_id.trim().to_string();
-    let secret_access_key = normalize_optional(form.secret_access_key);
-    let force_path_style = form.force_path_style.is_some();
-
-    if bucket.is_empty() {
-        return Err(SiteError::BadRequest(
-            "publish bucket is required".to_string(),
-        ));
-    }
-    if region.is_empty() {
-        return Err(SiteError::BadRequest(
-            "publish region is required".to_string(),
-        ));
-    }
-    if access_key_id.is_empty() {
-        return Err(SiteError::BadRequest(
-            "publish access_key_id is required".to_string(),
-        ));
-    }
-
-    let existing = get_s3_publish_config(state.db.as_ref(), site_id).await?;
-    let secret_access_key = match (secret_access_key, existing) {
-        (Some(secret_access_key), _) => secret_access_key,
-        (None, Some(existing)) => existing.secret_access_key,
-        (None, None) => {
-            return Err(SiteError::BadRequest(
-                "publish secret_access_key is required".to_string(),
-            ));
-        }
     };
-
-    let txn = state.db.begin().await?;
-    let saved = save_s3_publish_config(
-        &txn,
-        site_id,
-        S3CompatiblePublishConfig {
-            endpoint_url,
-            bucket,
-            prefix,
-            region,
-            access_key_id,
-            secret_access_key,
-            force_path_style,
-        },
-    )
-    .await?;
     log_audit_event(
         &txn,
         &actor,
@@ -6228,6 +6346,8 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use axum::routing::get;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use tower::ServiceExt;
     use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer};
 
@@ -6461,6 +6581,62 @@ mod tests {
             rendered_root: std::env::temp_dir()
                 .join(format!("websites-rendered-test-{}", Uuid::now_v7())),
         }
+    }
+
+    #[cfg(unix)]
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    #[cfg(unix)]
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            // SAFETY: this test restores the variable in Drop and runs in isolation.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: this restores the prior process environment value for the test.
+            unsafe {
+                if let Some(previous) = &self.previous {
+                    std::env::set_var(self.key, previous);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn write_fake_rsync_binary(path: &StdPath) {
+        let script = r#"#!/usr/bin/env bash
+set -euo pipefail
+source_dir="${@: -2:1}"
+destination="${@: -1}"
+source_dir="${source_dir%/}"
+remote_path="${destination#*:}"
+remote_path="${remote_path%/}"
+mkdir -p "$remote_path"
+find "$remote_path" -mindepth 1 -exec rm -rf {} +
+cp -R "$source_dir"/. "$remote_path"/
+transferred=$(find "$source_dir" -type f | wc -l | tr -d ' ')
+printf 'Number of files transferred: %s\n' "$transferred"
+printf 'Number of deleted files: 1\n'
+"#;
+        std::fs::write(path, script).expect("write fake rsync binary");
+        let mut permissions = std::fs::metadata(path)
+            .expect("fake rsync metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).expect("chmod fake rsync binary");
     }
 
     fn write_test_log_file(log_path: &StdPath, contents: &str) {
@@ -6710,7 +6886,7 @@ mod tests {
                     .header(header::COOKIE, cookie)
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                     .body(Body::from(format!(
-                        "csrf_token={encoded_csrf_token}&method=disabled&endpoint_url=&bucket=&prefix=&region=&access_key_id=&secret_access_key=&force_path_style="
+                        "csrf_token={encoded_csrf_token}&method=disabled&endpoint_url=&bucket=&prefix=&region=&access_key_id=&secret_access_key=&force_path_style=&ssh_host=&ssh_user=&ssh_port=&remote_path=&identity_file="
                     )))
                     .expect("failed to build disable request"),
             )
@@ -6730,6 +6906,171 @@ mod tests {
             .await
             .expect("load publish config");
         assert!(saved_config.is_none(), "publish config should be cleared");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn publish_settings_support_rsync_ssh_and_queue_publish() {
+        let db = Arc::new(test_db_start().await);
+        let admin = crate::entities::user::create_user(
+            db.as_ref(),
+            "admin-rsync",
+            Some("admin-rsync@example.com"),
+            Some("Admin Rsync"),
+            true,
+        )
+        .await
+        .expect("failed to create admin");
+        let site = crate::create_site(
+            db.as_ref(),
+            "publish-rsync".to_string(),
+            "Publish Rsync".to_string(),
+            DEFAULT_TEMPLATE_NAME.to_string(),
+        )
+        .await
+        .expect("failed to create site");
+
+        let script_root = tempfile::tempdir().expect("failed to create script root");
+        let remote_root = tempfile::tempdir().expect("failed to create remote root");
+        let fake_rsync = script_root.path().join("fake-rsync.sh");
+        write_fake_rsync_binary(&fake_rsync);
+        let _guard = EnvVarGuard::set(
+            "WEBSITES_RSYNC_BIN",
+            fake_rsync.to_str().expect("fake rsync path"),
+        );
+
+        let state = test_admin_state(db.clone());
+        let session_store = MemoryStore::default();
+        let router = test_app_router(state, session_store.clone()).router;
+        let cookie = seed_session_cookie(
+            test_admin_state(db.clone()),
+            session_store.clone(),
+            admin.id,
+        )
+        .await;
+        let encoded_remote_path = url::form_urlencoded::byte_serialize(
+            remote_root.path().to_str().expect("remote root").as_bytes(),
+        )
+        .collect::<String>();
+
+        let page_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/admin/site/{}/publish", site.id))
+                    .header(header::COOKIE, cookie.clone())
+                    .body(Body::empty())
+                    .expect("failed to build publish page request"),
+            )
+            .await
+            .expect("failed to load publish page");
+        assert_eq!(page_response.status(), StatusCode::OK);
+        let page_body = to_bytes(page_response.into_body(), usize::MAX)
+            .await
+            .expect("failed to read publish page body");
+        let page_body = String::from_utf8(page_body.to_vec()).expect("invalid publish page body");
+        let csrf_token = page_body
+            .split("name=\"csrf_token\" value=\"")
+            .nth(1)
+            .expect("missing publish csrf token")
+            .split('"')
+            .next()
+            .expect("missing publish csrf token value");
+        let encoded_csrf_token =
+            url::form_urlencoded::byte_serialize(csrf_token.as_bytes()).collect::<String>();
+
+        let save_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/admin/site/{}/publish", site.id))
+                    .header(header::COOKIE, cookie.clone())
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(format!(
+                        "csrf_token={encoded_csrf_token}&method=rsync_ssh&endpoint_url=&bucket=&prefix=&region=&access_key_id=&secret_access_key=&force_path_style=&ssh_host=publish.example.com&ssh_user=deploy&ssh_port=2222&remote_path={encoded_remote_path}&identity_file=/tmp/id_ed25519"
+                    )))
+                    .expect("failed to build rsync save request"),
+            )
+            .await
+            .expect("failed to submit rsync config");
+        assert_eq!(save_response.status(), StatusCode::SEE_OTHER);
+        let save_location = save_response
+            .headers()
+            .get(header::LOCATION)
+            .expect("missing save redirect")
+            .to_str()
+            .expect("invalid save redirect");
+        assert!(save_location.ends_with(&format!("/admin/site/{}/publish?saved=1", site.id)));
+
+        let publish_page_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/admin/site/{}/publish", site.id))
+                    .header(header::COOKIE, cookie.clone())
+                    .body(Body::empty())
+                    .expect("failed to build refreshed publish page request"),
+            )
+            .await
+            .expect("failed to reload publish page");
+        let publish_page_body = to_bytes(publish_page_response.into_body(), usize::MAX)
+            .await
+            .expect("failed to read refreshed publish page body");
+        let publish_page_body = String::from_utf8(publish_page_body.to_vec())
+            .expect("invalid refreshed publish page body");
+        let publish_csrf_token = publish_page_body
+            .split(&format!("action=\"/admin/site/{}/publish/run\"", site.id))
+            .nth(1)
+            .expect("missing publish run form")
+            .split("name=\"csrf_token\" value=\"")
+            .nth(1)
+            .expect("missing publish csrf token")
+            .split('"')
+            .next()
+            .expect("missing publish csrf token value");
+        let encoded_publish_csrf_token =
+            url::form_urlencoded::byte_serialize(publish_csrf_token.as_bytes()).collect::<String>();
+
+        let run_response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/admin/site/{}/publish/run", site.id))
+                    .header(header::COOKIE, cookie)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(format!(
+                        "csrf_token={encoded_publish_csrf_token}"
+                    )))
+                    .expect("failed to build publish run request"),
+            )
+            .await
+            .expect("failed to queue publish run");
+        assert_eq!(run_response.status(), StatusCode::SEE_OTHER);
+
+        let run = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if let Some(run) = list_site_publish_runs(db.as_ref(), site.id, 1)
+                    .await
+                    .expect("load run")
+                    .into_iter()
+                    .next()
+                    && run.status == entities::site_publish_run::PublishRunStatus::Succeeded
+                {
+                    break run;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("timed out waiting for publish run");
+
+        assert_eq!(run.method, PublishMethod::RsyncSsh);
+        assert_eq!(
+            run.status,
+            entities::site_publish_run::PublishRunStatus::Succeeded
+        );
+        assert_eq!(run.rendered_file_count, run.published_file_count);
     }
 
     #[tokio::test]
