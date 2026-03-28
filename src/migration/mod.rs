@@ -9,6 +9,7 @@ mod m0006_add_settings_and_api_tokens;
 mod m0007_add_theme_registry;
 mod m0008_add_site_publish_workflow;
 mod m0009_add_rsync_publish_method;
+mod m0010_add_publish_on_render;
 
 pub struct Migrator;
 
@@ -25,6 +26,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0007_add_theme_registry::Migration),
             Box::new(m0008_add_site_publish_workflow::Migration),
             Box::new(m0009_add_rsync_publish_method::Migration),
+            Box::new(m0010_add_publish_on_render::Migration),
         ]
     }
 }

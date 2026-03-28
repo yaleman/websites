@@ -882,6 +882,7 @@ pub async fn create_site<C: ConnectionTrait>(
         short_name: Set(short_name),
         full_title: Set(full_title),
         template_name: Set(template_name),
+        publish_on_render: Set(false),
         created_at: Set(now),
         updated_at: Set(None),
     };
@@ -898,6 +899,7 @@ pub async fn update_site_settings<C: ConnectionTrait>(
     site_id: Uuid,
     full_title: String,
     template_name: String,
+    publish_on_render: bool,
 ) -> Result<entities::site::Model, SiteError> {
     let existing = entities::site::Entity::find_by_id(site_id).one(db).await?;
     let Some(existing) = existing else {
@@ -906,6 +908,7 @@ pub async fn update_site_settings<C: ConnectionTrait>(
     let mut model = existing.into_active_model();
     model.full_title = Set(full_title);
     model.template_name = Set(template_name);
+    model.publish_on_render = Set(publish_on_render);
     model.updated_at = Set(Some(Utc::now()));
     model.update(db).await.map_err(SiteError::from)
 }
@@ -2586,12 +2589,14 @@ mod tests {
             site.id,
             "Updated Title".to_string(),
             "new-template".to_string(),
+            true,
         )
         .await
         .expect("failed to update site settings");
 
         assert_eq!(updated.full_title, "Updated Title");
         assert_eq!(updated.template_name, "new-template");
+        assert!(updated.publish_on_render);
         assert!(updated.updated_at.is_some());
     }
 

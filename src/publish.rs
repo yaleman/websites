@@ -353,8 +353,8 @@ impl PublishBackend for S3PublishBackend {
     }
 }
 
-pub async fn get_site_publish_config(
-    db: &DatabaseConnection,
+pub async fn get_site_publish_config<C: ConnectionTrait>(
+    db: &C,
     site_id: Uuid,
 ) -> Result<Option<entities::site_publish_config::Model>, SiteError> {
     entities::site_publish_config::Entity::find_by_id(site_id)
@@ -669,6 +669,77 @@ pub async fn queue_site_publish(
     Ok(run)
 }
 
+pub async fn publish_rendered_site<C: ConnectionTrait>(
+    db: &C,
+    site_id: Uuid,
+    actor_sub: String,
+    rendered_root: &Path,
+) -> Result<PublishOutcome, SiteError> {
+    let site = entities::site::Entity::find_by_id(site_id)
+        .one(db)
+        .await
+        .map_err(SiteError::from)?
+        .ok_or_else(|| SiteError::SiteNotFound(site_id.to_string()))?;
+    let Some(config) = get_site_publish_config(db, site_id).await? else {
+        return Err(SiteError::BadRequest(
+            "site publish configuration has not been saved yet".to_string(),
+        ));
+    };
+
+    if config.method == PublishMethod::Disabled {
+        return Err(SiteError::BadRequest(
+            "site publish configuration is disabled".to_string(),
+        ));
+    }
+
+    let rendered_root = rendered_root.join(&site.short_name);
+
+    let run = create_publish_run(db, site_id, config.method, &actor_sub).await?;
+    let run_id = run.id;
+    update_publish_run(db, run_id, PublishRunStatus::Running, 0, 0, 0, None).await?;
+
+    match publish_rendered_tree_with_config(&rendered_root, &site, &config, run_id).await {
+        Ok(outcome) => {
+            let rendered_count = i32::try_from(outcome.rendered_file_count).unwrap_or(i32::MAX);
+            let published_count = i32::try_from(outcome.published_file_count).unwrap_or(i32::MAX);
+            let deleted_count = i32::try_from(outcome.deleted_object_count).unwrap_or(i32::MAX);
+            update_publish_run(
+                db,
+                run_id,
+                PublishRunStatus::Succeeded,
+                rendered_count,
+                published_count,
+                deleted_count,
+                None,
+            )
+            .await?;
+            info!(
+                %run_id,
+                site_id = %site.id,
+                site_short_name = %site.short_name,
+                rendered_file_count = rendered_count,
+                published_file_count = published_count,
+                deleted_object_count = deleted_count,
+                "site publish completed"
+            );
+            Ok(outcome)
+        }
+        Err(error) => {
+            update_publish_run(
+                db,
+                run_id,
+                PublishRunStatus::Failed,
+                0,
+                0,
+                0,
+                Some(error.to_string()),
+            )
+            .await?;
+            Err(error)
+        }
+    }
+}
+
 async fn publish_site_job(
     db: Arc<DatabaseConnection>,
     run_id: Uuid,
@@ -700,40 +771,7 @@ async fn publish_site_job(
     )
     .await?;
 
-    let outcome = match config.method {
-        PublishMethod::S3Compatible => {
-            let config = deserialize_publish_config::<S3CompatiblePublishConfig>(&config)?;
-            let backend = S3PublishBackend::from_config(&config, run_id).await?;
-            info!(
-                %run_id,
-                site_id = %site.id,
-                site_short_name = %site.short_name,
-                bucket = %config.bucket,
-                prefix = %config.normalized_prefix(),
-                endpoint_url = config.endpoint_url.as_deref().unwrap_or("aws-default"),
-                "starting site publish"
-            );
-            mirror_rendered_tree_to_backend(tmp_dir.path(), &config.normalized_prefix(), &backend)
-                .await?
-        }
-        PublishMethod::RsyncSsh => {
-            let config = deserialize_publish_config::<RsyncPublishConfig>(&config)?;
-            info!(
-                %run_id,
-                site_id = %site.id,
-                site_short_name = %site.short_name,
-                ssh_target = %config.ssh_target(),
-                remote_path = %config.normalized_remote_path(),
-                "starting site publish"
-            );
-            publish_rendered_tree_via_rsync(tmp_dir.path(), &config, run_id).await?
-        }
-        PublishMethod::Disabled => {
-            return Err(SiteError::BadRequest(
-                "site publish configuration is disabled".to_string(),
-            ));
-        }
-    };
+    let outcome = publish_rendered_tree_with_config(tmp_dir.path(), &site, &config, run_id).await?;
 
     let rendered_count = i32::try_from(files_written).unwrap_or(i32::MAX);
     let published_count = i32::try_from(outcome.published_file_count).unwrap_or(i32::MAX);
@@ -761,6 +799,45 @@ async fn publish_site_job(
     );
 
     Ok(())
+}
+
+async fn publish_rendered_tree_with_config(
+    root: &Path,
+    site: &entities::site::Model,
+    config: &entities::site_publish_config::Model,
+    run_id: Uuid,
+) -> Result<PublishOutcome, SiteError> {
+    match config.method {
+        PublishMethod::S3Compatible => {
+            let config = deserialize_publish_config::<S3CompatiblePublishConfig>(config)?;
+            let backend = S3PublishBackend::from_config(&config, run_id).await?;
+            info!(
+                %run_id,
+                site_id = %site.id,
+                site_short_name = %site.short_name,
+                bucket = %config.bucket,
+                prefix = %config.normalized_prefix(),
+                endpoint_url = config.endpoint_url.as_deref().unwrap_or("aws-default"),
+                "starting site publish"
+            );
+            mirror_rendered_tree_to_backend(root, &config.normalized_prefix(), &backend).await
+        }
+        PublishMethod::RsyncSsh => {
+            let config = deserialize_publish_config::<RsyncPublishConfig>(config)?;
+            info!(
+                %run_id,
+                site_id = %site.id,
+                site_short_name = %site.short_name,
+                ssh_target = %config.ssh_target(),
+                remote_path = %config.normalized_remote_path(),
+                "starting site publish"
+            );
+            publish_rendered_tree_via_rsync(root, &config, run_id).await
+        }
+        PublishMethod::Disabled => Err(SiteError::BadRequest(
+            "site publish configuration is disabled".to_string(),
+        )),
+    }
 }
 
 pub async fn mirror_rendered_tree_to_backend<B: PublishBackend>(

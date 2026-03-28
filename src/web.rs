@@ -20,7 +20,7 @@ use crate::oidc::{admin_login_callback, build_http_client, build_oidc_client};
 use crate::publish::{
     RsyncPublishConfig, S3CompatiblePublishConfig, delete_site_publish_config,
     get_s3_publish_config, get_site_publish_config, get_site_publish_run, list_site_publish_runs,
-    queue_site_publish, save_rsync_publish_config, save_s3_publish_config,
+    publish_rendered_site, queue_site_publish, save_rsync_publish_config, save_s3_publish_config,
 };
 use crate::theme_registry::{
     ThemeAdminRow, ThemeInstallRequest, available_template_names, delete_theme, install_theme,
@@ -107,6 +107,8 @@ struct AdminTemplateData {
     site_id: Option<Uuid>,
     /// Full site title shown in shared admin chrome for site-scoped pages.
     site_full_title: Option<String>,
+    /// Whether render actions should automatically publish for this site.
+    site_publish_on_render: Option<bool>,
     /// Extra "actions" links in a secondary navbar, e.g. "New site", "Back to sites", etc.
     links: Vec<AdminLink>,
     nav_search_action: String,
@@ -124,6 +126,7 @@ impl AdminTemplateData {
             clear_query_param: None,
             site_id: None,
             site_full_title: None,
+            site_publish_on_render: None,
             links: vec![],
             nav_search_action: "/admin/search".to_string(),
             nav_search_value: String::new(),
@@ -151,13 +154,13 @@ impl AdminTemplateData {
         }
     }
 
-    pub fn with_site_context(self, site_id: Uuid, site_full_title: impl ToString) -> Self {
-        let site_full_title = site_full_title.to_string();
+    pub fn with_site_context(self, site: &crate::entities::site::Model) -> Self {
         Self {
-            document_title: format!("{} - {}", self.page_title, site_full_title),
-            site_id: Some(site_id),
-            site_full_title: Some(site_full_title),
-            nav_search_action: format!("/admin/site/{site_id}/search"),
+            document_title: format!("{} - {}", self.page_title, site.full_title),
+            site_id: Some(site.id),
+            site_full_title: Some(site.full_title.clone()),
+            site_publish_on_render: Some(site.publish_on_render),
+            nav_search_action: format!("/admin/site/{}/search", site.id),
             ..self
         }
     }
@@ -379,6 +382,7 @@ struct AdminSiteSettingsTemplate {
     site_short_name: String,
     full_title: String,
     template_name: String,
+    publish_on_render: bool,
     can_delete_site: bool,
     can_import_wordpress: bool,
     can_manage_publish: bool,
@@ -779,6 +783,7 @@ struct CreateSiteForm {
 struct UpdateSiteSettingsForm {
     full_title: String,
     template_name: String,
+    publish_on_render: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -862,6 +867,11 @@ struct AdminContentListQuery {
 #[derive(Debug, Deserialize)]
 struct AdminSiteSettingsQuery {
     imported: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminSiteRenderQuery {
+    publish: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1365,7 +1375,7 @@ fn build_content_scan_template(
     let results = build_content_scan_results(site_id, current_filter, reports);
     AdminContentScanTemplate {
         template_shared: AdminTemplateData::new("Content Remediation")
-            .with_site_context(site.id, &site.full_title)
+            .with_site_context(site)
             .with_links(vec![
                 AdminLink::new(&format!("/admin/site/{site_id}/content"), "Back to content"),
                 AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Assets"),
@@ -2940,7 +2950,7 @@ async fn admin_site_content_list(
 
             Ok(AdminContentListTemplate {
                 template_shared: AdminTemplateData::new("Content")
-                    .with_site_context(site.id, &site.full_title)
+                    .with_site_context(&site)
                     .with_links(vec![
                         AdminLink::new(
                             &format!("/admin/site/{site_id}/content/new"),
@@ -3055,7 +3065,7 @@ async fn admin_site_memberships(
 
     Ok(AdminMembershipsTemplate {
         template_shared: AdminTemplateData::new("Memberships")
-            .with_site_context(site.id, &site.full_title)
+            .with_site_context(&site)
             .with_links(vec![AdminLink::new(
                 &format!("/admin/site/{site_id}/settings"),
                 "Site settings",
@@ -3519,7 +3529,7 @@ async fn get_site_search(
 
     Ok(AdminSearchTemplate {
         template_shared: AdminTemplateData::new("Search Content")
-            .with_site_context(site.id, &site.full_title)
+            .with_site_context(&site)
             .with_message(message)
             .with_nav_search_value(&query_text)
             .with_links(vec![AdminLink::new(
@@ -3793,8 +3803,7 @@ async fn admin_site_content_new(
 
     let site = get_by_id(state.db.as_ref(), site_id).await?;
     Ok(AdminContentNewTemplate {
-        template_shared: AdminTemplateData::new("Create Content")
-            .with_site_context(site.id, &site.full_title),
+        template_shared: AdminTemplateData::new("Create Content").with_site_context(&site),
         page_content: String::new(), // empty page content for the editor
         tags,
         site_id: site.id,
@@ -3958,7 +3967,7 @@ async fn admin_site_content_detail(
     let route = content_primary_route(&content);
     Ok(AdminContentDetailTemplate {
         template_shared: AdminTemplateData::new(format!("Content: /{route}"))
-            .with_site_context(site.id, &site.full_title)
+            .with_site_context(&site)
             .with_links(vec![
                 AdminLink::new(
                     &format!(
@@ -4054,7 +4063,7 @@ async fn admin_site_content_source(
             AdminLink::new(&preview_href, "Preview").with_target_blank(),
             AdminLink::new(&back_href, "Back to site dashboard"),
         ])
-        .with_site_context(site.id, &site.full_title);
+        .with_site_context(&site);
     let template_shared = if query.saved.is_some() {
         template_shared.with_toast_message("Content saved.", "saved")
     } else {
@@ -4271,7 +4280,7 @@ async fn admin_site_content_revisions(
 
     Ok(AdminContentRevisionsTemplate {
         template_shared: AdminTemplateData::new(format!("Revisions for {content_id}"))
-            .with_site_context(site.id, &site.full_title)
+            .with_site_context(&site)
             .with_links(vec![AdminLink::new(
                 &format!("/admin/site/{site_id}/content/{content_id}"),
                 "Back to site dashboard",
@@ -4343,7 +4352,7 @@ async fn admin_site_revision_diff(
             "Diff for rev-{}",
             revision.revision_number
         ))
-        .with_site_context(site.id, &site.full_title)
+        .with_site_context(&site)
         .with_message(format!(
             "Comparing revision {} for content {}.",
             revision.revision_number, revision.content_id
@@ -4400,7 +4409,7 @@ async fn admin_site_tags(
 
             Ok(AdminTagsTemplate {
                 template_shared: AdminTemplateData::new("Tags")
-                    .with_site_context(site.id, &site.full_title)
+                    .with_site_context(&site)
                     .with_links(vec![AdminLink::new(
                         &format!("/admin/site/{site_id}/content"),
                         "Back to site dashboard",
@@ -4800,7 +4809,7 @@ async fn admin_site_assets(
 
     Ok(AdminAssetsTemplate {
         template_shared: AdminTemplateData::new("Assets")
-            .with_site_context(site.id, &site.full_title)
+            .with_site_context(&site)
             .with_links(vec![
                 AdminLink::new(&format!("/admin/site/{site_id}/assets/new"), "Upload"),
                 AdminLink::new(
@@ -4831,7 +4840,7 @@ async fn admin_site_assets_new(
 
             Ok(AdminAssetsNewTemplate {
                 template_shared: AdminTemplateData::new("Upload Asset")
-                    .with_site_context(site.id, &site.full_title)
+                    .with_site_context(&site)
                     .with_links(vec![
                         AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Back to assets"),
                         AdminLink::new(
@@ -5132,7 +5141,7 @@ async fn admin_site_asset_replace(
 
     Ok(AdminAssetReplaceTemplate {
         template_shared: AdminTemplateData::new("Replace Asset")
-            .with_site_context(site.id, &site.full_title)
+            .with_site_context(&site)
             .with_links(vec![
                 AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Back to assets"),
                 AdminLink::new(
@@ -5380,7 +5389,7 @@ async fn admin_site_settings(
     }
 
     let template_shared = AdminTemplateData::new("Site Settings")
-        .with_site_context(site.id, &site.full_title)
+        .with_site_context(&site)
         .with_links(links);
     let template_shared = if let Some(imported) = query.imported {
         template_shared.with_toast_message(wordpress_import_message(imported), "imported")
@@ -5394,6 +5403,7 @@ async fn admin_site_settings(
         site_short_name: site.short_name,
         full_title: site.full_title,
         template_name: site.template_name,
+        publish_on_render: site.publish_on_render,
         can_delete_site: viewer.admin,
         can_import_wordpress,
         can_manage_publish,
@@ -5416,7 +5426,7 @@ async fn admin_site_publish(
     let publish_config = get_site_publish_config(state.db.as_ref(), site_id).await?;
     let runs = list_site_publish_runs(state.db.as_ref(), site_id, 20).await?;
     let template_shared = AdminTemplateData::new("Publish Settings")
-        .with_site_context(site.id, &site.full_title)
+        .with_site_context(&site)
         .with_links(vec![
             AdminLink::new(
                 &format!("/admin/site/{site_id}/settings"),
@@ -5652,7 +5662,7 @@ async fn admin_site_publish_run_detail(
     .await?;
 
     let template_shared = AdminTemplateData::new("Publish Run")
-        .with_site_context(site.id, &site.full_title)
+        .with_site_context(&site)
         .with_links(vec![
             AdminLink::new(
                 &format!("/admin/site/{site_id}/publish"),
@@ -5958,6 +5968,7 @@ async fn admin_site_settings_update(
     let actor = current_user(&session).await?.subject;
     let full_title = form.full_title.trim().to_string();
     let template_name = form.template_name.trim().to_string();
+    let publish_on_render = form.publish_on_render.is_some();
     if full_title.is_empty() {
         return Err(SiteError::internal("missing full title".to_string()));
     }
@@ -5983,7 +5994,7 @@ async fn admin_site_settings_update(
         )));
     }
     let txn = state.db.begin().await?;
-    let site = update_site_settings(&txn, site_id, full_title, template_name)
+    let site = update_site_settings(&txn, site_id, full_title, template_name, publish_on_render)
         .await
         .map_err(|error| SiteError::internal(format!("failed to update site: {error}")))?;
     log_audit_event(
@@ -5996,7 +6007,8 @@ async fn admin_site_settings_update(
         Some(json!({
             "short_name": site.short_name,
             "full_title": site.full_title,
-            "template_name": site.template_name
+            "template_name": site.template_name,
+            "publish_on_render": site.publish_on_render,
         })),
     )
     .await
@@ -6089,7 +6101,7 @@ async fn admin_site_delete_confirm(
 
     Ok(AdminSiteDeleteConfirmTemplate {
         template_shared: AdminTemplateData::new("Confirm Site Deletion")
-            .with_site_context(site.id, &site.full_title)
+            .with_site_context(&site)
             .with_links(vec![AdminLink::new(
                 &format!("/admin/site/{site_id}/settings"),
                 "Back to settings",
@@ -6162,7 +6174,7 @@ async fn admin_site_template_editor(
     .await?;
 
     let template_shared = AdminTemplateData::new(format!("Template Override: {file_name}"))
-        .with_site_context(site.id, &site.full_title)
+        .with_site_context(&site)
         .with_links(vec![
             AdminLink::new(
                 &format!("/admin/site/{site_id}/settings"),
@@ -6279,6 +6291,7 @@ async fn admin_site_render(
     State(state): State<AdminState>,
     session: Session,
     Path(site_id): Path<Uuid>,
+    Query(query): Query<AdminSiteRenderQuery>,
 ) -> Result<AdminRenderTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Editor).await?;
     let site = entities::site::Entity::find_by_id(site_id)
@@ -6286,7 +6299,7 @@ async fn admin_site_render(
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?
         .ok_or(SiteError::NotFound)?;
-    render_site(
+    let files_written = render_site(
         state.db.as_ref(),
         site_id,
         state.site_templates_root.as_path(),
@@ -6294,14 +6307,40 @@ async fn admin_site_render(
         &resolve_upload_root(),
     )
     .await
-    .map_err(|error| SiteError::internal(format!("failed to render site {site_id}: {error}")))
-    .map(|files_written| AdminRenderTemplate {
+    .map_err(|error| SiteError::internal(format!("failed to render site {site_id}: {error}")))?;
+
+    let mut message = format!("Site rendered with {} file(s) written.", files_written);
+    if site.publish_on_render || query.publish.is_some() {
+        let actor_sub = current_user(&session).await?.subject;
+        match publish_rendered_site(
+            state.db.as_ref(),
+            site_id,
+            actor_sub,
+            state.rendered_root.as_path(),
+        )
+        .await
+        {
+            Ok(outcome) => {
+                message.push_str(&format!(
+                    " Published {} file(s).",
+                    outcome.published_file_count
+                ));
+            }
+            Err(error) => {
+                error!(
+                    site_id = %site_id,
+                    error = %error,
+                    "failed to auto-publish rendered site"
+                );
+                message.push_str(&format!(" Publish failed: {error}"));
+            }
+        }
+    }
+
+    Ok(AdminRenderTemplate {
         template_shared: AdminTemplateData::new("Render Site")
-            .with_site_context(site.id, &site.full_title)
-            .with_message(format!(
-                "Site rendered with {} file(s) written.",
-                files_written
-            ))
+            .with_site_context(&site)
+            .with_message(message)
             .with_links(vec![
                 AdminLink::new(
                     &format!("/admin/site/{site_id}/content"),
@@ -7073,6 +7112,107 @@ printf 'Number of deleted files: 1\n'
         assert_eq!(run.rendered_file_count, run.published_file_count);
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn render_site_auto_publishes_when_enabled() {
+        let db = Arc::new(test_db_start().await);
+        let admin = crate::entities::user::create_user(
+            db.as_ref(),
+            "admin-auto-publish",
+            Some("admin-auto-publish@example.com"),
+            Some("Admin Auto Publish"),
+            true,
+        )
+        .await
+        .expect("failed to create admin");
+        let site = crate::create_site(
+            db.as_ref(),
+            "render-auto-publish".to_string(),
+            "Render Auto Publish".to_string(),
+            DEFAULT_TEMPLATE_NAME.to_string(),
+        )
+        .await
+        .expect("failed to create site");
+        let script_root = tempfile::tempdir().expect("failed to create script root");
+        let remote_root = tempfile::tempdir().expect("failed to create remote root");
+        let fake_rsync = script_root.path().join("fake-rsync.sh");
+        write_fake_rsync_binary(&fake_rsync);
+        let _guard = EnvVarGuard::set(
+            "WEBSITES_RSYNC_BIN",
+            fake_rsync.to_str().expect("fake rsync path"),
+        );
+
+        crate::publish::save_rsync_publish_config(
+            db.as_ref(),
+            site.id,
+            RsyncPublishConfig {
+                ssh_host: "publish.example.com".to_string(),
+                ssh_user: Some("deploy".to_string()),
+                ssh_port: Some(2222),
+                remote_path: remote_root
+                    .path()
+                    .to_str()
+                    .expect("remote root path")
+                    .to_string(),
+                identity_file: Some("/tmp/id_ed25519".to_string()),
+            },
+        )
+        .await
+        .expect("failed to save rsync publish config");
+
+        crate::update_site_settings(
+            db.as_ref(),
+            site.id,
+            site.full_title.clone(),
+            site.template_name.clone(),
+            true,
+        )
+        .await
+        .expect("failed to enable publish on render");
+
+        let state = test_admin_state(db.clone());
+        let session_store = MemoryStore::default();
+        let router = test_app_router(state, session_store.clone()).router;
+        let cookie = seed_session_cookie(
+            test_admin_state(db.clone()),
+            session_store.clone(),
+            admin.id,
+        )
+        .await;
+
+        let render_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/admin/site/{}/render", site.id))
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .expect("failed to build render request"),
+            )
+            .await
+            .expect("failed to render site");
+        assert_eq!(render_response.status(), StatusCode::OK);
+        let render_body = to_bytes(render_response.into_body(), usize::MAX)
+            .await
+            .expect("failed to read render body");
+        let render_body = String::from_utf8(render_body.to_vec()).expect("invalid render body");
+        assert!(render_body.contains("Site rendered with"));
+        assert!(render_body.contains("Published "));
+
+        let run = list_site_publish_runs(db.as_ref(), site.id, 1)
+            .await
+            .expect("load publish run")
+            .into_iter()
+            .next()
+            .expect("missing publish run");
+        assert_eq!(run.method, PublishMethod::RsyncSsh);
+        assert_eq!(
+            run.status,
+            entities::site_publish_run::PublishRunStatus::Succeeded
+        );
+        assert_eq!(run.rendered_file_count, run.published_file_count);
+    }
+
     #[tokio::test]
     async fn admin_logs_view_blocks_non_admins() {
         let db = Arc::new(test_db_start().await);
@@ -7802,6 +7942,7 @@ printf 'Number of deleted files: 1\n'
                 short_name: "imported-site".to_string(),
                 full_title: "Imported Site".to_string(),
                 template_name: DEFAULT_TEMPLATE_NAME.to_string(),
+                publish_on_render: false,
                 created_at: Utc::now(),
                 updated_at: None,
                 publish_config: None,
@@ -7947,6 +8088,7 @@ printf 'Number of deleted files: 1\n'
                 short_name: "duplicate-site".to_string(),
                 full_title: "Replaced Site".to_string(),
                 template_name: DEFAULT_TEMPLATE_NAME.to_string(),
+                publish_on_render: false,
                 created_at: Utc::now(),
                 updated_at: None,
                 publish_config: None,
@@ -8029,6 +8171,7 @@ printf 'Number of deleted files: 1\n'
                 short_name: "blocked-import".to_string(),
                 full_title: "Blocked Import".to_string(),
                 template_name: DEFAULT_TEMPLATE_NAME.to_string(),
+                publish_on_render: false,
                 created_at: Utc::now(),
                 updated_at: None,
                 publish_config: None,

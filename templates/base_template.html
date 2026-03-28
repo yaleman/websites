@@ -24,6 +24,9 @@
         {% if let Some(site_id) = template_shared.site_id %}
         <a href="/admin/site/{{ site_id }}/content">Site Content</a>
         <a href="/admin/site/{{ site_id }}/render">Render Site</a>
+        {% if let Some(false) = template_shared.site_publish_on_render %}
+        <a class="page-navbar-button" href="/admin/site/{{ site_id }}/render?publish=1">Publish Site</a>
+        {% endif %}
         {% endif %}
         <a href="/admin/users/me">My Profile</a>
         <a href="/admin/logout">Logout</a>

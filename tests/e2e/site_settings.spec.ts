@@ -270,6 +270,64 @@ test.describe("site settings", () => {
 			} finally {
 				await context.close();
 			}
+			} finally {
+				await cleanupHarness(harness);
+			}
+		});
+
+	test("publish on render hides the navbar publish button when enabled", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const subject = "publish-on-render-owner";
+			const userId = await createUser(harness, subject);
+			await addMembership(harness, userId, "owner");
+
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				subject,
+			);
+
+			try {
+				await page.goto(
+					`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/settings`,
+					{ waitUntil: "domcontentloaded" },
+				);
+
+				const publishButton = page.getByRole("link", { name: "Publish Site" });
+				await expect(publishButton).toBeVisible();
+				await expect(page.getByLabel("Publish on render")).not.toBeChecked();
+
+				await page.getByLabel("Publish on render").check();
+				await page.getByRole("button", { name: "Save settings" }).click();
+
+				await page.goto(
+					`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content`,
+					{ waitUntil: "domcontentloaded" },
+				);
+				await expect(
+					page.getByRole("link", { name: "Publish Site" }),
+				).toHaveCount(0);
+
+				await page.goto(
+					`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/settings`,
+					{ waitUntil: "domcontentloaded" },
+				);
+				await expect(page.getByLabel("Publish on render")).toBeChecked();
+				await page.getByLabel("Publish on render").uncheck();
+				await page.getByRole("button", { name: "Save settings" }).click();
+
+				await page.goto(
+					`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content`,
+					{ waitUntil: "domcontentloaded" },
+				);
+				await expect(publishButton).toBeVisible();
+			} finally {
+				await context.close();
+			}
 		} finally {
 			await cleanupHarness(harness);
 		}

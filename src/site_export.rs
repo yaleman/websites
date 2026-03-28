@@ -35,6 +35,8 @@ pub struct ExportSite {
     pub short_name: String,
     pub full_title: String,
     pub template_name: String,
+    #[serde(default)]
+    pub publish_on_render: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -571,6 +573,7 @@ pub async fn export_site_with_roots(
             short_name: site.short_name,
             full_title: site.full_title,
             template_name: site.template_name,
+            publish_on_render: site.publish_on_render,
             created_at: site.created_at,
             updated_at: site.updated_at,
             publish_config,
@@ -636,6 +639,7 @@ pub async fn import_site_export<C: ConnectionTrait>(
         short_name: Set(export.site.short_name.clone()),
         full_title: Set(export.site.full_title.clone()),
         template_name: Set(export.site.template_name.clone()),
+        publish_on_render: Set(export.site.publish_on_render),
         created_at: Set(export.site.created_at),
         updated_at: Set(export.site.updated_at),
     }
@@ -1240,6 +1244,15 @@ mod tests {
         )
         .await
         .expect("failed to create source site");
+        crate::update_site_settings(
+            &source_db,
+            site.id,
+            site.full_title.clone(),
+            site.template_name.clone(),
+            true,
+        )
+        .await
+        .expect("failed to enable publish on render");
 
         let config = RsyncPublishConfig {
             ssh_host: "example.com".to_string(),
@@ -1264,6 +1277,7 @@ mod tests {
             publish_config.method,
             entities::site_publish_config::PublishMethod::RsyncSsh
         );
+        assert!(export.site.publish_on_render);
         assert_eq!(publish_config.rsync, Some(config.clone()));
         assert!(publish_config.s3.is_none());
 
@@ -1280,6 +1294,12 @@ mod tests {
             imported_config.method,
             entities::site_publish_config::PublishMethod::RsyncSsh
         );
+        let imported_site = entities::site::Entity::find_by_id(import.site_id)
+            .one(&target_db)
+            .await
+            .expect("failed to load imported site")
+            .expect("missing imported site");
+        assert!(imported_site.publish_on_render);
         let restored: RsyncPublishConfig =
             serde_json::from_value(imported_config.config_json).expect("deserialize rsync config");
         assert_eq!(restored, config);
@@ -1553,6 +1573,7 @@ mod tests {
                 short_name: "duplicate".to_string(),
                 full_title: "Duplicate".to_string(),
                 template_name: "default".to_string(),
+                publish_on_render: false,
                 created_at: Utc::now(),
                 updated_at: None,
                 publish_config: None,
@@ -1626,6 +1647,7 @@ mod tests {
                 short_name: "test".to_string(),
                 full_title: "Test".to_string(),
                 template_name: "default".to_string(),
+                publish_on_render: false,
                 created_at: Utc::now(),
                 updated_at: None,
                 publish_config: None,

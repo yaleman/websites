@@ -15,6 +15,15 @@
         {% endfor %}
       </select>
     </div>
+    <div class="form-field">
+      <label class="inline-checkbox" for="publish_on_render">
+        <input id="publish_on_render" name="publish_on_render" type="checkbox" {% if publish_on_render %}checked{% endif %} />
+        Publish on render
+      </label>
+      <p class="inline-body">
+        When enabled, the Render Site action automatically publishes the rendered output for this site.
+      </p>
+    </div>
 
     <div class="form-actions">
       <button type="submit" class="btn">Save settings</button>
@@ -22,8 +31,7 @@
   </form>
   {% if can_manage_publish %}
   <p class="inline-body">
-    Publishing is configured on the
-    <a href="/admin/site/{{ site_id }}/publish">publish settings page</a>.
+    Publishing is configured on the <a href="/admin/site/{{ site_id }}/publish">publish settings page</a>.
   </p>
   {% endif %}
 </section>

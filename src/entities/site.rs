@@ -12,6 +12,7 @@ pub struct Model {
     pub short_name: String,
     pub full_title: String,
     pub template_name: String,
+    pub publish_on_render: bool,
     pub created_at: ChronoDateTime<Utc>,
     pub updated_at: Option<ChronoDateTime<Utc>>,
 }
