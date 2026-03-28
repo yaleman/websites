@@ -1608,3 +1608,107 @@ pub(crate) fn format_optional_datetime(value: Option<DateTime<Utc>>) -> String {
         .map(|timestamp| timestamp.to_rfc3339())
         .unwrap_or_else(|| "n/a".to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_asset_prefix_formats_site_scoped_path() {
+        let site_id = Uuid::nil();
+
+        assert_eq!(
+            preview_asset_prefix(site_id),
+            "/admin/site/00000000-0000-0000-0000-000000000000/preview-assets"
+        );
+    }
+
+    #[test]
+    fn rewrite_preview_asset_urls_rewrites_root_relative_assets() {
+        let site_id = Uuid::nil();
+        let rendered = rewrite_preview_asset_urls(
+            r#"<link href="/assets/style.css"><style>body{background:url('/assets/bg.png')}</style>"#,
+            site_id,
+        );
+
+        assert!(
+            rendered.contains(
+                "/admin/site/00000000-0000-0000-0000-000000000000/preview-assets/style.css"
+            )
+        );
+        assert!(
+            rendered
+                .contains("/admin/site/00000000-0000-0000-0000-000000000000/preview-assets/bg.png")
+        );
+    }
+
+    #[test]
+    fn should_rewrite_preview_asset_body_matches_text_and_xml_types() {
+        assert!(should_rewrite_preview_asset_body("text/html"));
+        assert!(should_rewrite_preview_asset_body("application/json"));
+        assert!(should_rewrite_preview_asset_body("image/svg+xml"));
+        assert!(should_rewrite_preview_asset_body("application/atom+xml"));
+        assert!(should_rewrite_preview_asset_body("application/javascript"));
+
+        assert!(!should_rewrite_preview_asset_body("image/png"));
+        assert!(!should_rewrite_preview_asset_body(
+            "application/octet-stream"
+        ));
+    }
+
+    #[test]
+    fn sanitize_preview_asset_path_rejects_traversal_and_absolute_paths() {
+        assert!(sanitize_preview_asset_path("../secret.txt").is_err());
+        assert!(sanitize_preview_asset_path("/etc/passwd").is_err());
+        assert!(sanitize_preview_asset_path("").is_err());
+    }
+
+    #[test]
+    fn sanitize_preview_asset_path_allows_nested_relative_paths() {
+        let path = sanitize_preview_asset_path("css/site/style.css")
+            .expect("expected nested preview asset path to be accepted");
+
+        assert_eq!(path, PathBuf::from("css/site/style.css"));
+    }
+
+    #[test]
+    fn parse_content_scan_apply_form_parses_repeated_and_optional_fields() {
+        let raw = b"domains=example.com&scan_limit=12&filter=review&selected_issue_ids_json=%5B%22issue-1%22%5D&remote_import_issue_ids_json=%5B%22remote-1%22%5D&remote_import_issue_id=remote-a&remote_import_issue_id=remote-b&asset_selections_json=%7B%22issue-1%22%3A%7B%22asset_id%22%3A%22019d%22%7D%7D";
+
+        let form =
+            parse_content_scan_apply_form(raw).expect("expected content scan apply form to parse");
+
+        assert_eq!(form.domains, "example.com");
+        assert_eq!(form.scan_limit, Some(12));
+        assert_eq!(form.filter.as_deref(), Some("review"));
+        assert_eq!(
+            form.selected_issue_ids_json.as_deref(),
+            Some(r#"["issue-1"]"#)
+        );
+        assert_eq!(
+            form.remote_import_issue_ids_json.as_deref(),
+            Some(r#"["remote-1"]"#)
+        );
+        assert_eq!(
+            form.remote_import_issue_id,
+            vec!["remote-a".to_string(), "remote-b".to_string()]
+        );
+        assert_eq!(
+            form.asset_selections_json.as_deref(),
+            Some(r#"{"issue-1":{"asset_id":"019d"}}"#)
+        );
+    }
+
+    #[test]
+    fn parse_content_scan_apply_form_rejects_missing_domains() {
+        let error = parse_content_scan_apply_form(b"scan_limit=12")
+            .expect_err("missing domains should fail");
+
+        match error {
+            SiteError::BadRequest(message) => {
+                assert!(message.contains("missing domains field"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}
