@@ -16,3 +16,4 @@ site_templates/
 !site_templates/default/
 # rendered documentation
 docs/book/
+logs/websites.log
