@@ -299,6 +299,15 @@ printf 'Number of deleted files: 1\n'
     std::fs::set_permissions(path, permissions).expect("chmod fake rsync binary");
 }
 
+#[cfg(unix)]
+async fn write_fake_rsync_identity_file(root: &StdPath) -> PathBuf {
+    let path = root.join("id_ed25519");
+    tokio::fs::write(&path, b"fake-identity")
+        .await
+        .expect("write fake identity file");
+    path
+}
+
 fn write_test_log_file(log_path: &StdPath, contents: &str) {
     std::fs::create_dir_all(log_path.parent().expect("test log path missing parent"))
         .expect("failed to create test log root");
@@ -571,6 +580,7 @@ async fn publish_settings_can_be_disabled_from_the_method_selector() {
 #[cfg(unix)]
 #[tokio::test]
 async fn publish_settings_support_rsync_ssh_and_queue_publish() {
+    let _env_lock = crate::test_support::env_lock().lock_owned().await;
     let db = Arc::new(test_db_start().await);
     let admin = crate::entities::user::create_user(
         db.as_ref(),
@@ -594,6 +604,7 @@ async fn publish_settings_support_rsync_ssh_and_queue_publish() {
     let remote_root = tempfile::tempdir().expect("failed to create remote root");
     let fake_rsync = script_root.path().join("fake-rsync.sh");
     write_fake_rsync_binary(&fake_rsync);
+    let identity_file = write_fake_rsync_identity_file(script_root.path()).await;
     let _guard = EnvVarGuard::set(
         "WEBSITES_RSYNC_BIN",
         fake_rsync.to_str().expect("fake rsync path"),
@@ -648,7 +659,11 @@ async fn publish_settings_support_rsync_ssh_and_queue_publish() {
                     .header(header::COOKIE, cookie.clone())
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                     .body(Body::from(format!(
-                        "csrf_token={encoded_csrf_token}&method=rsync_ssh&endpoint_url=&bucket=&prefix=&region=&access_key_id=&secret_access_key=&force_path_style=&ssh_host=publish.example.com&ssh_user=deploy&ssh_port=2222&remote_path={encoded_remote_path}&identity_file=/tmp/id_ed25519"
+                        "csrf_token={encoded_csrf_token}&method=rsync_ssh&endpoint_url=&bucket=&prefix=&region=&access_key_id=&secret_access_key=&force_path_style=&ssh_host=publish.example.com&ssh_user=deploy&ssh_port=2222&remote_path={encoded_remote_path}&identity_file={}",
+                        url::form_urlencoded::byte_serialize(
+                            identity_file.to_string_lossy().as_bytes()
+                        )
+                        .collect::<String>()
                     )))
                     .expect("failed to build rsync save request"),
             )
@@ -715,9 +730,18 @@ async fn publish_settings_support_rsync_ssh_and_queue_publish() {
                 .expect("load run")
                 .into_iter()
                 .next()
-                && run.status == entities::site_publish_run::PublishRunStatus::Succeeded
             {
-                break run;
+                match run.status {
+                    entities::site_publish_run::PublishRunStatus::Succeeded => break run,
+                    entities::site_publish_run::PublishRunStatus::Failed => {
+                        panic!(
+                            "publish run failed early: {}",
+                            run.error_message
+                                .unwrap_or_else(|| "missing error message".to_string())
+                        );
+                    }
+                    _ => {}
+                }
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
@@ -736,6 +760,7 @@ async fn publish_settings_support_rsync_ssh_and_queue_publish() {
 #[cfg(unix)]
 #[tokio::test]
 async fn render_site_auto_publishes_when_enabled() {
+    let _env_lock = crate::test_support::env_lock().lock_owned().await;
     let db = Arc::new(test_db_start().await);
     let admin = crate::entities::user::create_user(
         db.as_ref(),
@@ -758,6 +783,7 @@ async fn render_site_auto_publishes_when_enabled() {
     let remote_root = tempfile::tempdir().expect("failed to create remote root");
     let fake_rsync = script_root.path().join("fake-rsync.sh");
     write_fake_rsync_binary(&fake_rsync);
+    let identity_file = write_fake_rsync_identity_file(script_root.path()).await;
     let _guard = EnvVarGuard::set(
         "WEBSITES_RSYNC_BIN",
         fake_rsync.to_str().expect("fake rsync path"),
@@ -775,7 +801,7 @@ async fn render_site_auto_publishes_when_enabled() {
                 .to_str()
                 .expect("remote root path")
                 .to_string(),
-            identity_file: Some("/tmp/id_ed25519".to_string()),
+            identity_file: Some(identity_file.to_string_lossy().to_string()),
         },
     )
     .await

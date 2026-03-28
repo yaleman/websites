@@ -1126,6 +1126,13 @@ mod tests {
         }
     }
 
+    fn create_fake_identity_file() -> (TempDir, PathBuf) {
+        let dir = TempDir::new().expect("create identity dir");
+        let path = dir.path().join("id_ed25519");
+        std::fs::write(&path, b"fake-identity").expect("write fake identity file");
+        (dir, path)
+    }
+
     #[cfg(unix)]
     fn write_fake_rsync_binary(path: &std::path::Path) {
         let script = r#"#!/usr/bin/env bash
@@ -1242,12 +1249,13 @@ printf 'Number of deleted files: %s\n' "$deleted"
 
     #[tokio::test]
     async fn rsync_config_round_trips_through_json() {
+        let (_identity_dir, identity_file) = create_fake_identity_file();
         let config = RsyncPublishConfig {
             ssh_host: "example.com".to_string(),
             ssh_user: Some("deploy".to_string()),
             ssh_port: Some(2222),
             remote_path: "/var/www/example".to_string(),
-            identity_file: Some("/tmp/id_ed25519".to_string()),
+            identity_file: Some(identity_file.display().to_string()),
         };
         let json = serde_json::to_value(&config).expect("serialize");
         let decoded: RsyncPublishConfig = serde_json::from_value(json).expect("deserialize");
@@ -1292,6 +1300,7 @@ printf 'Number of deleted files: %s\n' "$deleted"
     #[cfg(unix)]
     #[tokio::test]
     async fn publish_rendered_tree_via_rsync_mirrors_tree() {
+        let _env_lock = crate::test_support::env_lock().lock_owned().await;
         let source = TempDir::new().expect("create source dir");
         let remote_root = TempDir::new().expect("create remote dir");
         let script_root = TempDir::new().expect("create script dir");
@@ -1385,13 +1394,14 @@ printf 'Number of deleted files: %s\n' "$deleted"
         )
         .await
         .expect("create site");
+        let (_identity_dir, identity_file) = create_fake_identity_file();
 
         let config = RsyncPublishConfig {
             ssh_host: "example.com".to_string(),
             ssh_user: Some("deploy".to_string()),
             ssh_port: Some(2222),
             remote_path: "/var/www/example".to_string(),
-            identity_file: Some("/tmp/id_ed25519".to_string()),
+            identity_file: Some(identity_file.display().to_string()),
         };
 
         save_rsync_publish_config(&db, site.id, config.clone())

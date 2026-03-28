@@ -47,6 +47,17 @@ pub mod tls;
 pub mod token_auth;
 pub mod web;
 
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::sync::{Arc, OnceLock};
+    use tokio::sync::Mutex;
+
+    pub fn env_lock() -> Arc<Mutex<()>> {
+        static LOCK: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
+        LOCK.get_or_init(|| Arc::new(Mutex::new(()))).clone()
+    }
+}
+
 pub use publish::{
     PublishOutcome, RsyncPublishConfig, S3CompatiblePublishConfig, delete_site_publish_config,
     get_rsync_publish_config, get_s3_publish_config, list_site_publish_runs, queue_site_publish,
