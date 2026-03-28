@@ -125,3 +125,212 @@ fn test_pagetype() {
     assert!(!page.is_post());
     assert!(page.is_page());
 }
+
+#[cfg(test)]
+mod revision_entity_tests {
+    use super::*;
+    use crate::db::test_db_start;
+    use crate::{
+        NewAlias, NewContent, NewContentTag, PageType, UpdateContent, add_content_tag,
+        create_alias, create_content, create_site, update_content,
+    };
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+    async fn create_revision_fixture(
+        db: &sea_orm::DatabaseConnection,
+        slug: &str,
+    ) -> crate::entities::content_item::Model {
+        let site = create_site(
+            db,
+            "revision-site".to_string(),
+            "Revision Site".to_string(),
+            "default".to_string(),
+        )
+        .await
+        .expect("failed to create site");
+
+        let content = create_content(
+            db,
+            NewContent {
+                site_id: site.id,
+                page_type: PageType::Post,
+                title: "Revision Post".to_string(),
+                slug: slug.to_string(),
+                page_content: "Initial body".to_string(),
+                draft: true,
+                creator_sub: "creator".to_string(),
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create content");
+
+        content
+    }
+
+    #[tokio::test]
+    async fn content_revision_loads_parent_content_item() {
+        let db = test_db_start().await;
+        let content = create_revision_fixture(&db, "revision-post").await;
+
+        let (revision, parent_content) = content_revision::Entity::find()
+            .filter(content_revision::Column::ContentId.eq(content.id))
+            .find_also_related(content_item::Entity)
+            .one(&db)
+            .await
+            .expect("failed to load revision with parent content")
+            .expect("missing revision row");
+
+        assert_eq!(revision.content_id, content.id);
+        assert_eq!(
+            parent_content.expect("missing related content").id,
+            content.id
+        );
+    }
+
+    #[tokio::test]
+    async fn content_revision_alias_loads_parent_revision_and_content_item() {
+        let db = test_db_start().await;
+        let content = create_revision_fixture(&db, "alias-post").await;
+
+        let alias = create_alias(
+            &db,
+            NewAlias {
+                content_id: content.id,
+                site_id: content.site_id,
+                alias_path: "/legacy/alias-post".to_string(),
+                kind: "alias".to_string(),
+            },
+        )
+        .await
+        .expect("failed to create content alias");
+
+        update_content(
+            &db,
+            UpdateContent {
+                content_id: content.id,
+                page_type: None,
+                title: Some("Alias Post Updated".to_string()),
+                slug: Some("alias-post-updated".to_string()),
+                page_content: Some("Updated body".to_string()),
+                draft: Some(false),
+                published_at: None,
+                editor_sub: "editor".to_string(),
+            },
+        )
+        .await
+        .expect("failed to update content");
+
+        let (revision_alias, parent_revision) = content_revision_alias::Entity::find()
+            .filter(content_revision_alias::Column::AliasPath.eq(alias.alias_path.clone()))
+            .find_also_related(content_revision::Entity)
+            .one(&db)
+            .await
+            .expect("failed to load revision alias with parent revision")
+            .expect("missing revision alias row");
+
+        assert_eq!(revision_alias.content_id, content.id);
+        assert_eq!(revision_alias.alias_path, alias.alias_path);
+        assert_eq!(
+            parent_revision
+                .expect("missing related revision")
+                .content_id,
+            content.id
+        );
+
+        let (_, parent_content) = content_revision_alias::Entity::find()
+            .filter(content_revision_alias::Column::AliasPath.eq("/legacy/alias-post"))
+            .find_also_related(content_item::Entity)
+            .one(&db)
+            .await
+            .expect("failed to load revision alias with content item")
+            .expect("missing revision alias row for content join");
+
+        assert_eq!(
+            parent_content.expect("missing related content").id,
+            content.id
+        );
+    }
+
+    #[tokio::test]
+    async fn content_revision_tag_loads_parent_revision_content_and_tag() {
+        let db = test_db_start().await;
+        let content = create_revision_fixture(&db, "tag-post").await;
+
+        let tag_link = add_content_tag(
+            &db,
+            NewContentTag {
+                content_id: content.id,
+                site_id: content.site_id,
+                tag_name: "Docs".to_string(),
+            },
+        )
+        .await
+        .expect("failed to create content tag");
+
+        update_content(
+            &db,
+            UpdateContent {
+                content_id: content.id,
+                page_type: None,
+                title: Some("Tag Post Updated".to_string()),
+                slug: Some("tag-post-updated".to_string()),
+                page_content: Some("Updated body".to_string()),
+                draft: Some(false),
+                published_at: None,
+                editor_sub: "editor".to_string(),
+            },
+        )
+        .await
+        .expect("failed to update content");
+
+        let revision = content_revision::Entity::find()
+            .filter(content_revision::Column::ContentId.eq(content.id))
+            .filter(content_revision::Column::RevisionNumber.eq(2))
+            .one(&db)
+            .await
+            .expect("failed to load revision 2")
+            .expect("missing revision 2");
+
+        let (revision_tag, parent_revision) = content_revision_tag::Entity::find()
+            .filter(content_revision_tag::Column::RevisionId.eq(revision.id))
+            .find_also_related(content_revision::Entity)
+            .one(&db)
+            .await
+            .expect("failed to load revision tag with parent revision")
+            .expect("missing revision tag row");
+
+        assert_eq!(revision_tag.content_id, content.id);
+        assert_eq!(revision_tag.tag_id, tag_link.tag_id);
+        assert_eq!(
+            parent_revision.expect("missing related revision").id,
+            revision.id
+        );
+
+        let (_, parent_content) = content_revision_tag::Entity::find()
+            .filter(content_revision_tag::Column::RevisionId.eq(revision.id))
+            .find_also_related(content_item::Entity)
+            .one(&db)
+            .await
+            .expect("failed to load revision tag with content item")
+            .expect("missing revision tag row for content join");
+
+        assert_eq!(
+            parent_content.expect("missing related content").id,
+            content.id
+        );
+
+        let (_, related_tag) = content_revision_tag::Entity::find()
+            .filter(content_revision_tag::Column::RevisionId.eq(revision.id))
+            .find_also_related(tag::Entity)
+            .one(&db)
+            .await
+            .expect("failed to load revision tag with tag")
+            .expect("missing revision tag row for tag join");
+
+        assert_eq!(
+            related_tag.expect("missing related tag").name,
+            "Docs".to_string()
+        );
+    }
+}
