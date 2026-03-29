@@ -45,6 +45,16 @@ pub(crate) async fn admin_site_content_list(
     let site = get_by_id(state.db.as_ref(), site_id)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
+    let site_publish_config = crate::publish::get_site_publish_config(state.db.as_ref(), site_id)
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!(
+                "failed to load publish config for site {site_id}: {error}"
+            ))
+        })?;
+    let site_publish_configured = site_publish_config.as_ref().is_some_and(|config| {
+        config.method != crate::entities::site_publish_config::PublishMethod::Disabled
+    });
 
     let page_type_filter = ContentListPageTypeFilter::from_query(query.page_type.as_deref());
     let sort_by = ContentListSortBy::from_query(query.sort_by.as_deref());
@@ -56,6 +66,7 @@ pub(crate) async fn admin_site_content_list(
             Ok(AdminContentListTemplate {
                 template_shared: AdminTemplateData::new("Content")
                     .with_site_context(&site)
+                    .with_site_publish_configured(site_publish_configured)
                     .with_links(vec![
                         AdminLink::new(
                             &format!("/admin/site/{site_id}/content/new"),
@@ -110,6 +121,7 @@ pub(crate) async fn admin_site_memberships(
     let site = get_by_id(state.db.as_ref(), site_id)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site_id).await?;
     let memberships = list_memberships(state.db.as_ref(), site_id)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load memberships: {error}")))?;
@@ -171,6 +183,7 @@ pub(crate) async fn admin_site_memberships(
     Ok(AdminMembershipsTemplate {
         template_shared: AdminTemplateData::new("Memberships")
             .with_site_context(&site)
+            .with_site_publish_configured(site_publish_configured)
             .with_links(vec![AdminLink::new(
                 &format!("/admin/site/{site_id}/settings"),
                 "Site settings",
@@ -620,6 +633,7 @@ pub(crate) async fn get_site_search(
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?
         .ok_or_else(|| SiteError::NotFound)?;
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site_id).await?;
     let query_text = query.q.unwrap_or_default();
     let query_text = query_text.trim().to_string();
     let mut rows = Vec::new();
@@ -635,6 +649,7 @@ pub(crate) async fn get_site_search(
     Ok(AdminSearchTemplate {
         template_shared: AdminTemplateData::new("Search Content")
             .with_site_context(&site)
+            .with_site_publish_configured(site_publish_configured)
             .with_message(message)
             .with_nav_search_value(&query_text)
             .with_links(vec![AdminLink::new(
@@ -653,9 +668,10 @@ pub(crate) async fn admin_site_content_scan(
 ) -> Result<AdminContentScanTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Author).await?;
     let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site_id).await?;
     Ok(build_content_scan_template(
         &site,
-        site_id,
+        site_publish_configured,
         String::new(),
         5,
         "all",
@@ -672,6 +688,7 @@ pub(crate) async fn admin_site_content_scan_run(
 ) -> Result<AdminContentScanTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Author).await?;
     let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site_id).await?;
     let scan_limit = normalize_content_scan_limit(form.scan_limit);
     let scan_reports = load_content_scan_reports(
         state.db.as_ref(),
@@ -684,7 +701,7 @@ pub(crate) async fn admin_site_content_scan_run(
     let summary = Some(build_scan_summary(&scan_reports, 0, Vec::new(), Vec::new()));
     Ok(build_content_scan_template(
         &site,
-        site_id,
+        site_publish_configured,
         form.domains,
         scan_limit,
         scan_filter_value(form.filter.as_deref()),
@@ -702,6 +719,7 @@ pub(crate) async fn admin_site_content_scan_apply(
     require_site_role(&state, &session, site_id, SiteRole::Author).await?;
     let actor = current_user(&session).await?;
     let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site_id).await?;
     let form = parse_content_scan_apply_form(&raw_form)?;
     let scan_limit = normalize_content_scan_limit(form.scan_limit);
     let mut selected_issue_ids = deserialize_string_set(form.selected_issue_ids_json.as_deref())?;
@@ -880,7 +898,7 @@ pub(crate) async fn admin_site_content_scan_apply(
     ));
     Ok(build_content_scan_template(
         &site,
-        site_id,
+        site_publish_configured,
         form.domains,
         scan_limit,
         scan_filter_value(form.filter.as_deref()),
@@ -907,8 +925,11 @@ pub(crate) async fn admin_site_content_new(
         .collect();
 
     let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site_id).await?;
     Ok(AdminContentNewTemplate {
-        template_shared: AdminTemplateData::new("Create Content").with_site_context(&site),
+        template_shared: AdminTemplateData::new("Create Content")
+            .with_site_context(&site)
+            .with_site_publish_configured(site_publish_configured),
         page_content: String::new(), // empty page content for the editor
         tags,
         site_id: site.id,
@@ -1070,9 +1091,11 @@ pub(crate) async fn admin_site_content_detail(
         .unwrap_or_else(|| content.creator_sub.clone());
 
     let route = content_primary_route(&content);
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site.id).await?;
     Ok(AdminContentDetailTemplate {
         template_shared: AdminTemplateData::new(format!("Content: /{route}"))
             .with_site_context(&site)
+            .with_site_publish_configured(site_publish_configured)
             .with_links(vec![
                 AdminLink::new(
                     &format!(
@@ -1162,13 +1185,15 @@ pub(crate) async fn admin_site_content_source(
                 content.site_id
             ))
         })?;
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site.id).await?;
 
     let template_shared = AdminTemplateData::new(format!("Editing: {}", title))
         .with_links(vec![
             AdminLink::new(&preview_href, "Preview").with_target_blank(),
             AdminLink::new(&back_href, "Back to site dashboard"),
         ])
-        .with_site_context(&site);
+        .with_site_context(&site)
+        .with_site_publish_configured(site_publish_configured);
     let template_shared = if query.saved.is_some() {
         template_shared.with_toast_message("Content saved.", "saved")
     } else {
@@ -1352,6 +1377,7 @@ pub(crate) async fn admin_site_content_revisions(
     let site = get_by_id(state.db.as_ref(), site_id)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site_id).await?;
 
     let revisions = list_revisions(state.db.as_ref(), content_id)
         .await
@@ -1386,6 +1412,7 @@ pub(crate) async fn admin_site_content_revisions(
     Ok(AdminContentRevisionsTemplate {
         template_shared: AdminTemplateData::new(format!("Revisions for {content_id}"))
             .with_site_context(&site)
+            .with_site_publish_configured(site_publish_configured)
             .with_links(vec![AdminLink::new(
                 &format!("/admin/site/{site_id}/content/{content_id}"),
                 "Back to site dashboard",
@@ -1411,6 +1438,7 @@ pub(crate) async fn admin_site_revision_diff(
     let site = get_by_id(state.db.as_ref(), site_id)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site_id).await?;
     let revision = get_revision(state.db.as_ref(), revision_id)
         .await
         .map_err(|error| {
@@ -1458,6 +1486,7 @@ pub(crate) async fn admin_site_revision_diff(
             revision.revision_number
         ))
         .with_site_context(&site)
+        .with_site_publish_configured(site_publish_configured)
         .with_message(format!(
             "Comparing revision {} for content {}.",
             revision.revision_number, revision.content_id
@@ -1501,6 +1530,7 @@ pub(crate) async fn admin_site_tags(
     let site = get_by_id(state.db.as_ref(), site_id)
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site_id).await?;
     match list_tags(state.db.as_ref(), site_id).await {
         Ok(tags) => {
             let tags = tags
@@ -1515,6 +1545,7 @@ pub(crate) async fn admin_site_tags(
             Ok(AdminTagsTemplate {
                 template_shared: AdminTemplateData::new("Tags")
                     .with_site_context(&site)
+                    .with_site_publish_configured(site_publish_configured)
                     .with_links(vec![AdminLink::new(
                         &format!("/admin/site/{site_id}/content"),
                         "Back to site dashboard",

@@ -5,8 +5,8 @@ import path from "node:path";
 import {
 	addMembership,
 	cleanupHarness,
-	createAuthenticatedApiContext,
 	createAuthenticatedPage,
+	createAuthenticatedApiContext,
 	createUser,
 	setupHarness,
 } from "./support";
@@ -275,7 +275,7 @@ test.describe("site settings", () => {
 			}
 		});
 
-	test("publish on render shows the navbar publish button when enabled", async ({
+	test("publish configuration shows the navbar publish button when enabled", async ({
 		browser,
 	}) => {
 		const harness = await setupHarness();
@@ -293,34 +293,43 @@ test.describe("site settings", () => {
 
 			try {
 				await page.goto(
-					`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/settings`,
+					`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/publish`,
 					{ waitUntil: "domcontentloaded" },
 				);
 
-				const publishButton = page.getByRole("link", { name: "Publish Site" });
-				await expect(publishButton).toHaveCount(0);
-				await expect(page.getByLabel("Publish on render")).not.toBeChecked();
+				await expect(page.getByRole("link", { name: "Publish Site" })).toHaveCount(
+					0,
+				);
 
-				await page.getByLabel("Publish on render").check();
-				await page.getByRole("button", { name: "Save settings" }).click();
-
-				await page.goto(
-					`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content`,
-					{ waitUntil: "domcontentloaded" },
+				const publishSettingsForm = page.locator(
+					'form.stack-form[action$="/publish"]',
+				);
+				await page.selectOption("#method", "s3_compatible");
+				await page.getByLabel("Bucket").fill("example-bucket");
+				await page.getByLabel("Prefix").fill("site");
+				await page.getByLabel("Region").fill("us-east-1");
+				await page.getByLabel("Access Key ID").fill("access-key");
+				await page.getByLabel("Secret Access Key").fill("secret-key");
+				await Promise.all([
+					page.waitForNavigation({ waitUntil: "domcontentloaded" }),
+					publishSettingsForm.evaluate((form) => {
+						(form as HTMLFormElement).requestSubmit();
+					}),
+				]);
+				await expect(page.locator("body")).toContainText(
+					"S3-compatible store",
 				);
 				await expect(page.getByRole("link", { name: "Publish Site" })).toBeVisible();
 
-				await page.goto(
-					`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/settings`,
-					{ waitUntil: "domcontentloaded" },
-				);
-				await expect(page.getByLabel("Publish on render")).toBeChecked();
-				await page.getByLabel("Publish on render").uncheck();
-				await page.getByRole("button", { name: "Save settings" }).click();
-
-				await page.goto(
-					`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content`,
-					{ waitUntil: "domcontentloaded" },
+				await page.selectOption("#method", "disabled");
+				await Promise.all([
+					page.waitForNavigation({ waitUntil: "domcontentloaded" }),
+					publishSettingsForm.evaluate((form) => {
+						(form as HTMLFormElement).requestSubmit();
+					}),
+				]);
+				await expect(page.locator("body")).toContainText(
+					"Publishing is disabled for this site.",
 				);
 				await expect(page.getByRole("link", { name: "Publish Site" })).toHaveCount(
 					0,

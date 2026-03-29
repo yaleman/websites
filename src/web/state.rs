@@ -15,8 +15,8 @@ pub(crate) struct AdminTemplateData {
     pub(crate) site_id: Option<Uuid>,
     /// Full site title shown in shared admin chrome for site-scoped pages.
     pub(crate) site_full_title: Option<String>,
-    /// Whether render actions should automatically publish for this site.
-    pub(crate) site_publish_on_render: Option<bool>,
+    /// Whether publishing is configured for this site.
+    pub(crate) site_publish_configured: bool,
     /// Extra "actions" links in a secondary navbar, e.g. "New site", "Back to sites", etc.
     pub(crate) links: Vec<AdminLink>,
     pub(crate) nav_search_action: String,
@@ -34,7 +34,7 @@ impl AdminTemplateData {
             clear_query_param: None,
             site_id: None,
             site_full_title: None,
-            site_publish_on_render: None,
+            site_publish_configured: false,
             links: vec![],
             nav_search_action: "/admin/search".to_string(),
             nav_search_value: String::new(),
@@ -67,8 +67,14 @@ impl AdminTemplateData {
             document_title: format!("{} - {}", self.page_title, site.full_title),
             site_id: Some(site.id),
             site_full_title: Some(site.full_title.clone()),
-            site_publish_on_render: Some(site.publish_on_render),
             nav_search_action: format!("/admin/site/{}/search", site.id),
+            ..self
+        }
+    }
+
+    pub fn with_site_publish_configured(self, configured: bool) -> Self {
+        Self {
+            site_publish_configured: configured,
             ..self
         }
     }
@@ -99,6 +105,17 @@ pub(crate) struct AdminState {
     pub(crate) log_path: PathBuf,
     pub(crate) site_templates_root: PathBuf,
     pub(crate) rendered_root: PathBuf,
+}
+
+pub(crate) async fn site_has_publish_config<C: ConnectionTrait>(
+    db: &C,
+    site_id: Uuid,
+) -> Result<bool, SiteError> {
+    Ok(crate::publish::get_site_publish_config(db, site_id)
+        .await?
+        .is_some_and(|config| {
+            config.method != crate::entities::site_publish_config::PublishMethod::Disabled
+        }))
 }
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
@@ -1273,22 +1290,26 @@ pub(crate) async fn load_content_scan_reports(
 
 pub(crate) fn build_content_scan_template(
     site: &entities::site::Model,
-    site_id: Uuid,
+    site_publish_configured: bool,
     domains: String,
     scan_limit: usize,
     current_filter: &str,
     reports: Vec<ContentScanReport>,
     summary: Option<AdminContentScanSummary>,
 ) -> AdminContentScanTemplate {
-    let results = build_content_scan_results(site_id, current_filter, reports);
+    let results = build_content_scan_results(site.id, current_filter, reports);
     AdminContentScanTemplate {
         template_shared: AdminTemplateData::new("Content Remediation")
             .with_site_context(site)
+            .with_site_publish_configured(site_publish_configured)
             .with_links(vec![
-                AdminLink::new(&format!("/admin/site/{site_id}/content"), "Back to content"),
-                AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Assets"),
+                AdminLink::new(
+                    &format!("/admin/site/{}/content", site.id),
+                    "Back to content",
+                ),
+                AdminLink::new(&format!("/admin/site/{}/assets", site.id), "Assets"),
             ]),
-        site_id,
+        site_id: site.id,
         domains,
         scan_limit,
         filter_options: content_scan_filter_options(current_filter),

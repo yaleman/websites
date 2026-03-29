@@ -1221,7 +1221,7 @@ async fn admin_themes_page_uses_shared_admin_styles() {
 }
 
 #[tokio::test]
-async fn publish_site_nav_link_only_shows_when_publish_on_render_is_enabled() {
+async fn publish_site_nav_link_only_shows_when_publish_is_configured() {
     let db = std::sync::Arc::new(test_db_start().await);
     let admin = crate::entities::user::create_user(
         db.as_ref(),
@@ -1255,53 +1255,86 @@ async fn publish_site_nav_link_only_shows_when_publish_on_render_is_enabled() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/admin/site/{}/settings", site.id))
+                .uri(format!("/admin/site/{}/content", site.id))
                 .header(header::COOKIE, &cookie)
                 .body(Body::empty())
-                .expect("failed to build settings request"),
+                .expect("failed to build content request"),
         )
         .await
-        .expect("failed to load settings page with publishing disabled");
+        .expect("failed to load content page with publishing disabled");
     assert_eq!(disabled_response.status(), StatusCode::OK);
     let disabled_body = to_bytes(disabled_response.into_body(), usize::MAX)
         .await
-        .expect("failed to read disabled settings body");
+        .expect("failed to read disabled content body");
     let disabled_html = String::from_utf8(disabled_body.to_vec()).expect("invalid disabled body");
     assert!(
         !disabled_html.contains(&format!("/admin/site/{}/render?publish=1", site.id)),
-        "expected publish link to be hidden when publish on render is disabled"
+        "expected publish link to be hidden when no publish config exists"
     );
 
-    crate::update_site_settings(
+    crate::save_s3_publish_config(
         db.as_ref(),
         site.id,
-        site.full_title.clone(),
-        site.template_name.clone(),
-        true,
+        crate::S3CompatiblePublishConfig {
+            endpoint_url: None,
+            bucket: "example-bucket".to_string(),
+            prefix: "site".to_string(),
+            region: "us-east-1".to_string(),
+            access_key_id: "access-key".to_string(),
+            secret_access_key: "secret-key".to_string(),
+            force_path_style: false,
+        },
     )
     .await
-    .expect("failed to enable publish on render");
+    .expect("failed to save publish config");
 
     let enabled_response = router
         .router
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/admin/site/{}/settings", site.id))
-                .header(header::COOKIE, cookie)
+                .uri(format!("/admin/site/{}/content", site.id))
+                .header(header::COOKIE, &cookie)
                 .body(Body::empty())
-                .expect("failed to build enabled settings request"),
+                .expect("failed to build enabled content request"),
         )
         .await
-        .expect("failed to load settings page with publishing enabled");
+        .expect("failed to load content page with publishing enabled");
     assert_eq!(enabled_response.status(), StatusCode::OK);
     let enabled_body = to_bytes(enabled_response.into_body(), usize::MAX)
         .await
-        .expect("failed to read enabled settings body");
+        .expect("failed to read enabled content body");
     let enabled_html = String::from_utf8(enabled_body.to_vec()).expect("invalid enabled body");
     assert!(
         enabled_html.contains(&format!("/admin/site/{}/render?publish=1", site.id)),
-        "expected publish link to be visible when publish on render is enabled"
+        "expected publish link to be visible when publish config exists"
+    );
+
+    crate::delete_site_publish_config(db.as_ref(), site.id)
+        .await
+        .expect("failed to delete publish config");
+
+    let disabled_again_response = router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/admin/site/{}/content", site.id))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("failed to build disabled-again content request"),
+        )
+        .await
+        .expect("failed to load content page after deleting publish config");
+    assert_eq!(disabled_again_response.status(), StatusCode::OK);
+    let disabled_again_body = to_bytes(disabled_again_response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read disabled-again content body");
+    let disabled_again_html =
+        String::from_utf8(disabled_again_body.to_vec()).expect("invalid disabled-again body");
+    assert!(
+        !disabled_again_html.contains(&format!("/admin/site/{}/render?publish=1", site.id)),
+        "expected publish link to hide again once publish config is removed"
     );
 }
 

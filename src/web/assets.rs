@@ -302,11 +302,13 @@ pub(crate) async fn admin_site_assets(
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?
         .ok_or(SiteError::SiteNotFound(site_id.to_string()))?;
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site_id).await?;
     let asset_rows = build_admin_asset_rows(state.db.as_ref(), &state.upload_root, assets).await?;
 
     Ok(AdminAssetsTemplate {
         template_shared: AdminTemplateData::new("Assets")
             .with_site_context(&site)
+            .with_site_publish_configured(site_publish_configured)
             .with_links(vec![
                 AdminLink::new(&format!("/admin/site/{site_id}/assets/new"), "Upload"),
                 AdminLink::new(
@@ -334,10 +336,13 @@ pub(crate) async fn admin_site_assets_new(
             let recent_assets =
                 build_admin_asset_rows(state.db.as_ref(), &state.upload_root, recent_assets)
                     .await?;
+            let site_publish_configured =
+                site_has_publish_config(state.db.as_ref(), site_id).await?;
 
             Ok(AdminAssetsNewTemplate {
                 template_shared: AdminTemplateData::new("Upload Asset")
                     .with_site_context(&site)
+                    .with_site_publish_configured(site_publish_configured)
                     .with_links(vec![
                         AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Back to assets"),
                         AdminLink::new(
@@ -626,6 +631,7 @@ pub(crate) async fn admin_site_asset_replace(
 ) -> Result<AdminAssetReplaceTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Author).await?;
     let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site_id).await?;
     let asset = get_asset_for_site(state.db.as_ref(), site_id, asset_id)
         .await?
         .ok_or(SiteError::NotFound)?;
@@ -639,6 +645,7 @@ pub(crate) async fn admin_site_asset_replace(
     Ok(AdminAssetReplaceTemplate {
         template_shared: AdminTemplateData::new("Replace Asset")
             .with_site_context(&site)
+            .with_site_publish_configured(site_publish_configured)
             .with_links(vec![
                 AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Back to assets"),
                 AdminLink::new(

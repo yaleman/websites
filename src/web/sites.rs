@@ -382,6 +382,7 @@ pub(crate) async fn admin_site_settings(
         || membership
             .as_ref()
             .is_some_and(|membership| role_satisfies(membership.role, SiteRole::Owner));
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site_id).await?;
     let mut links = vec![
         AdminLink::new(&format!("/admin/site/{site_id}/memberships"), "Memberships"),
         AdminLink::new(
@@ -408,6 +409,7 @@ pub(crate) async fn admin_site_settings(
 
     let template_shared = AdminTemplateData::new("Site Settings")
         .with_site_context(&site)
+        .with_site_publish_configured(site_publish_configured)
         .with_links(links);
     let template_shared = if let Some(imported) = query.imported {
         template_shared.with_toast_message(wordpress_import_message(imported), "imported")
@@ -442,9 +444,13 @@ pub(crate) async fn admin_site_publish(
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
 
     let publish_config = get_site_publish_config(state.db.as_ref(), site_id).await?;
+    let site_publish_configured = publish_config
+        .as_ref()
+        .is_some_and(|config| config.method != PublishMethod::Disabled);
     let runs = list_site_publish_runs(state.db.as_ref(), site_id, 20).await?;
     let template_shared = AdminTemplateData::new("Publish Settings")
         .with_site_context(&site)
+        .with_site_publish_configured(site_publish_configured)
         .with_links(vec![
             AdminLink::new(
                 &format!("/admin/site/{site_id}/settings"),
@@ -681,6 +687,7 @@ pub(crate) async fn admin_site_publish_run_detail(
 
     let template_shared = AdminTemplateData::new("Publish Run")
         .with_site_context(&site)
+        .with_site_publish_configured(site_has_publish_config(state.db.as_ref(), site_id).await?)
         .with_links(vec![
             AdminLink::new(
                 &format!("/admin/site/{site_id}/publish"),
@@ -761,6 +768,12 @@ pub(crate) async fn admin_site_publish_update(
         )));
     }
 
+    let existing_s3_publish_config = if method == "s3_compatible" {
+        Some(get_s3_publish_config(state.db.as_ref(), site_id).await?)
+    } else {
+        None
+    };
+
     let txn = state.db.begin().await?;
     let saved = if method == "s3_compatible" {
         let endpoint_url = normalize_optional(Some(form.endpoint_url));
@@ -787,8 +800,7 @@ pub(crate) async fn admin_site_publish_update(
             ));
         }
 
-        let existing = get_s3_publish_config(state.db.as_ref(), site_id).await?;
-        let secret_access_key = match (secret_access_key, existing) {
+        let secret_access_key = match (secret_access_key, existing_s3_publish_config.flatten()) {
             (Some(secret_access_key), _) => secret_access_key,
             (None, Some(existing)) => existing.secret_access_key,
             (None, None) => {
@@ -1120,6 +1132,9 @@ pub(crate) async fn admin_site_delete_confirm(
     Ok(AdminSiteDeleteConfirmTemplate {
         template_shared: AdminTemplateData::new("Confirm Site Deletion")
             .with_site_context(&site)
+            .with_site_publish_configured(
+                site_has_publish_config(state.db.as_ref(), site_id).await?,
+            )
             .with_links(vec![AdminLink::new(
                 &format!("/admin/site/{site_id}/settings"),
                 "Back to settings",
@@ -1193,6 +1208,7 @@ pub(crate) async fn admin_site_template_editor(
 
     let template_shared = AdminTemplateData::new(format!("Template Override: {file_name}"))
         .with_site_context(&site)
+        .with_site_publish_configured(site_has_publish_config(state.db.as_ref(), site_id).await?)
         .with_links(vec![
             AdminLink::new(
                 &format!("/admin/site/{site_id}/settings"),
@@ -1358,6 +1374,9 @@ pub(crate) async fn admin_site_render(
     Ok(AdminRenderTemplate {
         template_shared: AdminTemplateData::new("Render Site")
             .with_site_context(&site)
+            .with_site_publish_configured(
+                site_has_publish_config(state.db.as_ref(), site_id).await?,
+            )
             .with_message(message)
             .with_links(vec![
                 AdminLink::new(
