@@ -16,9 +16,12 @@
       <header class="page-header">
         <h1 class="page-title m-0 text-2xl font-semibold tracking-tight text-slate-950 md:text-3xl">{{ template_shared.page_title }}</h1>
         {% if let Some(site_full_title) = template_shared.site_full_title %}
-        <p class="page-site-indicator hidden m-0 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-right text-sm font-medium text-slate-600 shadow-sm md:block" aria-label="Active site">{{ site_full_title }}</p>
+        <p
+          class="page-site-indicator hidden m-0 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-right text-sm font-medium text-slate-600 shadow-sm md:block"
+          aria-label="Active site">{{ site_full_title }}</p>
         {% endif %}
       </header>
+      {% if !template_shared.hide_nav %}
       <nav class="flex w-full flex-wrap items-center gap-2 rounded-2xl border border-violet-900 bg-violet-950 px-3 py-2 text-sm shadow-sm shadow-slate-200/60">
         <a href="/admin">Dashboard</a>
         {% if let Some(site_id) = template_shared.site_id %}
@@ -42,10 +45,12 @@
             aria-label="Search" />
         </form>
       </nav>
+      {% endif %}
 
       {% if let Some(message) = template_shared.page_message %}
       <p
-        id="message" class="message rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm{% if template_shared.page_message_is_toast %} message--toast{% endif %}"
+        id="message"
+        class="message rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm{% if template_shared.page_message_is_toast %} message--toast{% endif %}"
         {% if template_shared.page_message_is_toast %}data-auto-dismiss-ms="2000" {% endif %}
         {% if let Some(clear_query_param)=template_shared.clear_query_param %}data-clear-query-param="{{ clear_query_param }}" {% endif %}>{{ message }}</p>
       {% endif %}
@@ -54,7 +59,8 @@
       <!-- <h2>Actions</h2> -->
       <ul class="shared-actions m-0 flex list-none flex-wrap gap-2 p-0">
         {% for link in template_shared.links %}
-        <li><a class="page-navbar-button" href="{{ link.href }}" {% if let Some(target)=link.target %} target="{{ target }}" {% endif %}>{{ link.label }}</a></li>
+        <li><a class="page-navbar-button" href="{{ link.href }}" {% if let Some(target)=link.target %} target="{{ target }}" {% endif %}>{{ link.label
+            }}</a></li>
         {% endfor %}
       </ul>
       {% endif %}

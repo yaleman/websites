@@ -21,6 +21,7 @@ pub(crate) struct AdminTemplateData {
     pub(crate) links: Vec<AdminLink>,
     pub(crate) nav_search_action: String,
     pub(crate) nav_search_value: String,
+    pub(crate) hide_nav: bool,
 }
 
 impl AdminTemplateData {
@@ -38,6 +39,7 @@ impl AdminTemplateData {
             links: vec![],
             nav_search_action: "/admin/search".to_string(),
             nav_search_value: String::new(),
+            hide_nav: false,
         }
     }
 
@@ -47,6 +49,9 @@ impl AdminTemplateData {
             page_message_is_toast: false,
             ..self
         }
+    }
+    pub fn with_hide_nav(self, hide_nav: bool) -> Self {
+        Self { hide_nav, ..self }
     }
 
     pub fn with_toast_message(

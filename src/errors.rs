@@ -1,7 +1,44 @@
-use axum::{Json, response::IntoResponse};
+use crate::web::state::AdminTemplateData;
+use askama::Template;
+use axum::http::StatusCode;
+use axum::{
+    Json,
+    response::{Html, IntoResponse},
+};
 use sea_orm::DbErr;
 use serde_json::json;
 use uuid::Uuid;
+
+#[derive(Template)]
+#[template(path = "error.html")]
+struct SiteErrorPage {
+    status_code: axum::http::StatusCode,
+    template_shared: AdminTemplateData,
+    pub(crate) message: String,
+}
+
+impl SiteErrorPage {
+    pub fn new(status_code: StatusCode, title: impl ToString, message: impl ToString) -> Self {
+        SiteErrorPage {
+            status_code,
+            template_shared: AdminTemplateData::new(title.to_string()).with_hide_nav(true),
+            message: message.to_string(),
+        }
+    }
+}
+
+impl IntoResponse for SiteErrorPage {
+    fn into_response(self) -> axum::response::Response {
+        (
+            self.status_code,
+            Html(
+                self.render()
+                    .unwrap_or_else(|_| "Error rendering error page".to_string()),
+            ),
+        )
+            .into_response()
+    }
+}
 
 #[derive(Debug)]
 pub enum SiteError {
@@ -28,15 +65,13 @@ impl SiteError {
 
 impl IntoResponse for SiteError {
     fn into_response(self) -> axum::response::Response {
+        // TODO: use the error page template for all errors, not just unauthorized. For API routes, we can return JSON, but for regular web routes, we should return the error page.
         match self {
             SiteError::NotFound => (axum::http::StatusCode::NOT_FOUND, "Not Found").into_response(),
             SiteError::Internal(msg) => {
                 (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(msg)).into_response()
             }
-            SiteError::UnAuthorized(msg) => (
-                axum::http::StatusCode::UNAUTHORIZED,
-                format!("{}<br /><a href=\"/\">Login</a>", msg),
-            )
+            SiteError::UnAuthorized(ref msg) => SiteErrorPage::new(StatusCode::UNAUTHORIZED, self.to_string(), format!("Please log in to access this page. {}", msg))
                 .into_response(),
             SiteError::Database(error) => {
                 (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(error)).into_response()
@@ -46,7 +81,7 @@ impl IntoResponse for SiteError {
             }
             SiteError::TeraTemplate(err) => (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Template rendering error: {:?}", err),
+                Html(format!("Template rendering error: {:?}", err)),
             )
                 .into_response(),
             SiteError::SiteNotFound(identifier) => (
@@ -81,19 +116,19 @@ impl IntoResponse for SiteError {
 impl std::fmt::Display for SiteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SiteError::NotFound => write!(f, "not found"),
-            SiteError::Internal(msg) => write!(f, "internal error: {msg}"),
-            SiteError::UnAuthorized(msg) => write!(f, "unauthorized: {msg}"),
+            SiteError::NotFound => write!(f, "Not Found"),
+            SiteError::Internal(msg) => write!(f, "Internal Error: {msg}"),
+            SiteError::UnAuthorized(msg) => write!(f, "Unauthorized: {msg}"),
 
-            SiteError::Database(msg) => write!(f, "database error: {msg}"),
-            SiteError::Io(msg) => write!(f, "I/O error: {msg}"),
-            SiteError::TeraTemplate(err) => write!(f, "template rendering error: {err}"),
-            SiteError::SiteNotFound(identifier) => write!(f, "site not found: {identifier}"),
-            SiteError::ContentNotFound(identifier) => write!(f, "content not found: {identifier}"),
-            SiteError::XmlParsing(msg) => write!(f, "XML parsing error: {msg}"),
-            SiteError::BadRequest(msg) => write!(f, "invalid input: {msg}"),
+            SiteError::Database(msg) => write!(f, "Database Error: {msg}"),
+            SiteError::Io(msg) => write!(f, "I/O Error: {msg}"),
+            SiteError::TeraTemplate(err) => write!(f, "Template Rendering Error: {err}"),
+            SiteError::SiteNotFound(identifier) => write!(f, "Site Not Found: {identifier}"),
+            SiteError::ContentNotFound(identifier) => write!(f, "Content Not Found: {identifier}"),
+            SiteError::XmlParsing(msg) => write!(f, "XML Parsing Error: {msg}"),
+            SiteError::BadRequest(msg) => write!(f, "Invalid Input: {msg}"),
             SiteError::MembershipNotFound(identifier) => {
-                write!(f, "membership not found: {identifier}")
+                write!(f, "Membership Not Found: {identifier}")
             }
         }
     }

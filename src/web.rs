@@ -98,7 +98,7 @@ mod content;
 mod dashboard;
 mod router;
 mod sites;
-mod state;
+pub(crate) mod state;
 mod themes;
 
 #[cfg(test)]

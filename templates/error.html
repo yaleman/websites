@@ -1,0 +1,12 @@
+{% extends "base_template.html" %}
+
+{% block title %}Error{% endblock %}
+
+{% block body %}
+<section class="surface grid gap-4 p-4 md:p-6">
+
+    <p>{{ message }}</p>
+
+    <p><a href="/">Go back to the homepage</a></p>
+</section>
+{% endblock %}
