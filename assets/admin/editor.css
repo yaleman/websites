@@ -22,12 +22,26 @@
 		@apply min-h-[18rem];
 	}
 
+	.editor-shell .ProseMirror > :first-child {
+		@apply mt-0;
+	}
+
 	.editor-shell .ProseMirror:focus {
 		outline: none;
 	}
 
 	.editor-shell .ProseMirror img {
 		@apply block max-w-full h-auto;
+	}
+
+	.editor-shell .ProseMirror h2,
+	.editor-preview__body h2 {
+		@apply mt-8 mb-3 border-b border-slate-200 pb-2 text-2xl font-semibold tracking-tight text-slate-950;
+	}
+
+	.editor-shell .ProseMirror h3,
+	.editor-preview__body h3 {
+		@apply mt-6 mb-2 text-xl font-semibold text-slate-800;
 	}
 }
 

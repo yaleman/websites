@@ -552,6 +552,48 @@ const bindToolbar = (
 	const sourceButton = toolbar?.querySelector<HTMLButtonElement>(
 		'button[data-command="source"]',
 	);
+	const formattingButtons = {
+		bold: toolbar?.querySelector<HTMLButtonElement>('button[data-command="bold"]'),
+		italic: toolbar?.querySelector<HTMLButtonElement>(
+			'button[data-command="italic"]',
+		),
+		code: toolbar?.querySelector<HTMLButtonElement>('button[data-command="code"]'),
+		link: toolbar?.querySelector<HTMLButtonElement>('button[data-command="link"]'),
+		h2: toolbar?.querySelector<HTMLButtonElement>('button[data-command="h2"]'),
+		h3: toolbar?.querySelector<HTMLButtonElement>('button[data-command="h3"]'),
+		ul: toolbar?.querySelector<HTMLButtonElement>('button[data-command="ul"]'),
+		ol: toolbar?.querySelector<HTMLButtonElement>('button[data-command="ol"]'),
+		quote: toolbar?.querySelector<HTMLButtonElement>('button[data-command="quote"]'),
+	};
+
+	const setButtonState = (
+		button: HTMLButtonElement | null | undefined,
+		active: boolean,
+	) => {
+		if (!button) {
+			return;
+		}
+		button.classList.toggle("is-active", active);
+		button.setAttribute("aria-pressed", active ? "true" : "false");
+	};
+
+	const syncToolbarState = () => {
+		setButtonState(formattingButtons.bold, editor.isActive("bold"));
+		setButtonState(formattingButtons.italic, editor.isActive("italic"));
+		setButtonState(formattingButtons.code, editor.isActive("code"));
+		setButtonState(formattingButtons.link, editor.isActive("link"));
+		setButtonState(
+			formattingButtons.h2,
+			editor.isActive("heading", { level: 2 }),
+		);
+		setButtonState(
+			formattingButtons.h3,
+			editor.isActive("heading", { level: 3 }),
+		);
+		setButtonState(formattingButtons.ul, editor.isActive("bulletList"));
+		setButtonState(formattingButtons.ol, editor.isActive("orderedList"));
+		setButtonState(formattingButtons.quote, editor.isActive("blockquote"));
+	};
 
 	const updatePreview = () => {
 		if (!previewBody) {
@@ -634,7 +676,7 @@ const bindToolbar = (
 	};
 
 	if (!toolbar) {
-		return { updatePreview, setSourceVisible };
+		return { updatePreview, setSourceVisible, syncToolbarState };
 	}
 
 	const handleCommand = (commandName: string) => {
@@ -705,9 +747,15 @@ const bindToolbar = (
 
 		event.preventDefault();
 		handleCommand(commandName);
+		syncToolbarState();
 	});
 
-	return { updatePreview, setSourceVisible };
+	editor.on("transaction", syncToolbarState);
+	editor.on("selectionUpdate", syncToolbarState);
+	editor.on("update", syncToolbarState);
+	syncToolbarState();
+
+	return { updatePreview, setSourceVisible, syncToolbarState };
 };
 
 const initTransientMessages = () => {
@@ -1055,6 +1103,7 @@ const initEditor = () => {
 	let previewControls = {
 		updatePreview: () => {},
 		setSourceVisible: (_visible: boolean) => {},
+		syncToolbarState: () => {},
 	};
 
 	try {
@@ -1089,6 +1138,7 @@ const initEditor = () => {
 					emitUpdate: false,
 				});
 				previewControls.updatePreview();
+				previewControls.syncToolbarState();
 			} finally {
 				syncingFromSource = false;
 			}
