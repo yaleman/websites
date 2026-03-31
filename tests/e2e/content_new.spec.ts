@@ -84,6 +84,7 @@ test.describe("content new editor", () => {
 				),
 			).toBeVisible();
 			const boldButton = page.getByRole("button", { name: "Bold" });
+			const italicButton = page.getByRole("button", { name: "Italic" });
 			const h2Button = page.getByRole("button", { name: "H2" });
 			const h3Button = page.getByRole("button", { name: "H3" });
 			const bulletButton = page.getByRole("button", { name: "Bullets" });
@@ -96,10 +97,6 @@ test.describe("content new editor", () => {
 			await page.keyboard.type("Preview check");
 			await expect(boldButton).toHaveAttribute("aria-pressed", "false");
 			await expect(page.locator("[data-editor-preview]")).toBeHidden();
-
-			await boldButton.click();
-			await page.keyboard.type(" Bold text");
-			await expect(boldButton).toHaveAttribute("aria-pressed", "true");
 
 			// TODO not currently tested as it's being removed/reworked
 			// await page.getByRole("button", { name: "Preview" }).click();
@@ -172,7 +169,33 @@ test.describe("content new editor", () => {
 				previewHeadingSizes.h3FontSize,
 			);
 
-			await page.locator(".ProseMirror strong").click();
+			await page.locator(".ProseMirror p").first().click();
+			await page.keyboard.press("End");
+			await boldButton.click();
+			await expect(boldButton).toHaveAttribute("aria-pressed", "true");
+			await page.keyboard.type(" tail");
+			await expect(page.locator(".ProseMirror p").first()).toContainText(
+				"Plain intro tail",
+			);
+			await expect(page.locator(".ProseMirror p").first().locator("strong")).toContainText(
+				"tail",
+			);
+
+			await page.locator(".ProseMirror p").first().click();
+			await page.keyboard.press("End");
+			await page.keyboard.press("Shift+ArrowLeft");
+			await page.keyboard.press("Shift+ArrowLeft");
+			await page.keyboard.press("Shift+ArrowLeft");
+			await page.keyboard.press("Shift+ArrowLeft");
+			await italicButton.click();
+			await expect(page.locator(".ProseMirror p").first().locator("em")).toContainText(
+				"tail",
+			);
+			await expect(page.locator(".ProseMirror p").first()).toContainText(
+				"Plain intro tail",
+			);
+
+			await page.locator(".ProseMirror p").first().locator("strong").click();
 			await expect(boldButton).toHaveAttribute("aria-pressed", "true");
 			await expect(h2Button).toHaveAttribute("aria-pressed", "false");
 			await expect(h3Button).toHaveAttribute("aria-pressed", "false");

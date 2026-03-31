@@ -565,6 +565,18 @@ const bindToolbar = (
 		ol: toolbar?.querySelector<HTMLButtonElement>('button[data-command="ol"]'),
 		quote: toolbar?.querySelector<HTMLButtonElement>('button[data-command="quote"]'),
 	};
+	const formattingCommandNames = new Set([
+		"bold",
+		"italic",
+		"code",
+		"link",
+		"image",
+		"h2",
+		"h3",
+		"ul",
+		"ol",
+		"quote",
+	]);
 
 	const setButtonState = (
 		button: HTMLButtonElement | null | undefined,
@@ -575,6 +587,16 @@ const bindToolbar = (
 		}
 		button.classList.toggle("is-active", active);
 		button.setAttribute("aria-pressed", active ? "true" : "false");
+	};
+
+	const setButtonEnabled = (
+		button: HTMLButtonElement | null | undefined,
+		enabled: boolean,
+	) => {
+		if (!button) {
+			return;
+		}
+		button.disabled = !enabled;
 	};
 
 	const syncToolbarState = () => {
@@ -593,6 +615,44 @@ const bindToolbar = (
 		setButtonState(formattingButtons.ul, editor.isActive("bulletList"));
 		setButtonState(formattingButtons.ol, editor.isActive("orderedList"));
 		setButtonState(formattingButtons.quote, editor.isActive("blockquote"));
+
+		setButtonEnabled(
+			formattingButtons.bold,
+			editor.can().chain().focus().toggleBold().run(),
+		);
+		setButtonEnabled(
+			formattingButtons.italic,
+			editor.can().chain().focus().toggleItalic().run(),
+		);
+		setButtonEnabled(
+			formattingButtons.code,
+			editor.can().chain().focus().toggleCode().run(),
+		);
+		setButtonEnabled(
+			formattingButtons.link,
+			editor.can().chain().focus().setLink({ href: "https://example.com" }).run() ||
+				editor.isActive("link"),
+		);
+		setButtonEnabled(
+			formattingButtons.h2,
+			editor.can().chain().focus().toggleHeading({ level: 2 }).run(),
+		);
+		setButtonEnabled(
+			formattingButtons.h3,
+			editor.can().chain().focus().toggleHeading({ level: 3 }).run(),
+		);
+		setButtonEnabled(
+			formattingButtons.ul,
+			editor.can().chain().focus().toggleBulletList().run(),
+		);
+		setButtonEnabled(
+			formattingButtons.ol,
+			editor.can().chain().focus().toggleOrderedList().run(),
+		);
+		setButtonEnabled(
+			formattingButtons.quote,
+			editor.can().chain().focus().toggleBlockquote().run(),
+		);
 	};
 
 	const updatePreview = () => {
@@ -729,13 +789,30 @@ const bindToolbar = (
 		}
 	};
 
-	toolbar.addEventListener("click", (event) => {
-		const target = event.target as HTMLElement | null;
-		if (!target) {
+	const getToolbarButton = (target: EventTarget | null) => {
+		if (!(target instanceof HTMLElement)) {
+			return null;
+		}
+
+		return target.closest<HTMLButtonElement>("button[data-command]");
+	};
+
+	toolbar.addEventListener("pointerdown", (event) => {
+		const button = getToolbarButton(event.target);
+		if (!button) {
 			return;
 		}
 
-		const button = target.closest<HTMLButtonElement>("button[data-command]");
+		const commandName = button.getAttribute("data-command");
+		if (!commandName || !formattingCommandNames.has(commandName)) {
+			return;
+		}
+
+		event.preventDefault();
+	});
+
+	toolbar.addEventListener("click", (event) => {
+		const button = getToolbarButton(event.target);
 		if (!button) {
 			return;
 		}
