@@ -318,17 +318,20 @@ impl PublishBackend for S3PublishBackend {
             let objects = chunk
                 .iter()
                 .map(|key| {
-                    ObjectIdentifier::builder()
-                        .key(key)
-                        .build()
-                        .expect("failed to build s3 object identifier")
+                    ObjectIdentifier::builder().key(key).build().map_err(|err| {
+                        SiteError::internal(format!(
+                            "Failed to build s3 object identifier: {err:?}"
+                        ))
+                    })
                 })
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>, SiteError>>()?;
             let delete = Delete::builder()
                 .set_objects(Some(objects))
                 .quiet(true)
                 .build()
-                .expect("failed to build s3 delete request");
+                .map_err(|err| {
+                    SiteError::internal(format!("Failed to build s3 delete request: {err:?}"))
+                })?;
             self.client
                 .delete_objects()
                 .bucket(&self.bucket)
@@ -760,7 +763,8 @@ async fn publish_site_job(
     .await?;
 
     let tmp_dir = TempDir::new().map_err(SiteError::from)?;
-    let override_root = crate::resolve_site_template_override_root(site.id);
+    let override_root =
+        crate::resolve_site_template_override_root_with_upload_root(&upload_root, site.id);
     let files_written = render_site_into_dir(
         db.as_ref(),
         site.id,

@@ -79,17 +79,13 @@ pub(crate) async fn admin_login_callback(
         )));
     }
 
-    let code = match query.code {
-        Some(code) => code,
-        None => {
-            return Err(SiteError::UnAuthorized(
-                "missing authorization code".to_string(),
-            ));
-        }
+    let Some(code) = query.code else {
+        return Err(SiteError::UnAuthorized(
+            "missing authorization code".to_string(),
+        ));
     };
-    let state_value = match query.state {
-        Some(state) => state,
-        None => return Err(SiteError::UnAuthorized("missing state".to_string())),
+    let Some(state_value) = query.state else {
+        return Err(SiteError::UnAuthorized("missing state".to_string()));
     };
 
     let stored_state = session
@@ -142,24 +138,16 @@ pub(crate) async fn admin_login_callback(
         }
     };
 
-    let id_token = match token_response.id_token() {
-        Some(token) => token,
-        None => {
-            return Err(SiteError::internal(
-                "missing id_token in response".to_string(),
-            ));
-        }
+    let Some(id_token) = token_response.id_token() else {
+        return Err(SiteError::internal(
+            "missing id_token in response".to_string(),
+        ));
     };
 
     let nonce = Nonce::new(nonce_value);
-    let claims = match id_token.claims(&client.id_token_verifier(), &nonce) {
-        Ok(claims) => claims,
-        Err(error) => {
-            return Err(SiteError::UnAuthorized(format!(
-                "failed to verify id_token: {error}"
-            )));
-        }
-    };
+    let claims = id_token
+        .claims(&client.id_token_verifier(), &nonce)
+        .map_err(|error| SiteError::UnAuthorized(format!("failed to verify id_token: {error}")))?;
 
     let subject = claims.subject().as_str().to_string();
     let email = claims.email().map(|e| e.as_str());

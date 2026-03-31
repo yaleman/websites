@@ -1,3 +1,25 @@
+#![cfg_attr(not(test), forbid(unsafe_code))]
+#![deny(warnings)]
+#![deny(deprecated)]
+#![recursion_limit = "512"]
+#![warn(unused_extern_crates)]
+// Enable some groups of clippy lints.
+#![deny(clippy::suspicious)]
+#![deny(clippy::perf)]
+// Specific lints to enforce.
+#![deny(clippy::todo)]
+#![deny(clippy::unimplemented)]
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
+#![deny(clippy::panic)]
+#![deny(clippy::await_holding_lock)]
+#![deny(clippy::needless_pass_by_value)]
+#![deny(clippy::trivially_copy_pass_by_ref)]
+#![deny(clippy::disallowed_types)]
+#![deny(clippy::manual_let_else)]
+#![deny(clippy::indexing_slicing)]
+#![deny(clippy::unreachable)]
+
 use crate::constants::{
     CUSTOMIZABLE_TEMPLATE_FILES, LOG_PATH, REQUIRED_TEMPLATES, SITE_TEMPLATES_DIR,
 };
@@ -179,10 +201,17 @@ pub fn resolve_log_path() -> PathBuf {
     PathBuf::from(LOG_PATH)
 }
 
-pub fn resolve_site_template_override_root(site_id: Uuid) -> PathBuf {
-    resolve_upload_root()
+pub fn resolve_site_template_override_root_with_upload_root(
+    upload_root: &Path,
+    site_id: Uuid,
+) -> PathBuf {
+    upload_root
         .join(".site-template-overrides")
         .join(site_id.to_string())
+}
+
+pub fn resolve_site_template_override_root(site_id: Uuid) -> PathBuf {
+    resolve_site_template_override_root_with_upload_root(&resolve_upload_root(), site_id)
 }
 
 pub fn resolve_site_templates_root() -> PathBuf {
@@ -283,7 +312,7 @@ pub async fn render_site(
     rendered_dir: &Path,
     upload_root: &Path,
 ) -> Result<usize, SiteError> {
-    let override_root = resolve_site_template_override_root(site_id);
+    let override_root = resolve_site_template_override_root_with_upload_root(upload_root, site_id);
     fs::create_dir_all(rendered_dir).await?;
     let tmp_root = tempfile::tempdir_in(rendered_dir).map_err(SiteError::internal)?;
     let files_written = render_site_into_dir(
@@ -473,9 +502,10 @@ pub async fn render_content_preview(
     db: &DatabaseConnection,
     site_id: Uuid,
     content_id: Uuid,
-    templates_dir: &str,
+    templates_dir: PathBuf,
+    upload_root: &Path,
 ) -> Result<String, SiteError> {
-    let override_root = resolve_site_template_override_root(site_id);
+    let override_root = resolve_site_template_override_root_with_upload_root(upload_root, site_id);
     render_content_preview_with_overrides(db, site_id, content_id, templates_dir, &override_root)
         .await
 }
@@ -484,7 +514,7 @@ async fn render_content_preview_with_overrides(
     db: &DatabaseConnection,
     site_id: Uuid,
     content_id: Uuid,
-    templates_dir: &str,
+    templates_dir: PathBuf,
     override_root: &Path,
 ) -> Result<String, SiteError> {
     let site = entities::site::Entity::find_by_id(site_id)
@@ -498,7 +528,7 @@ async fn render_content_preview_with_overrides(
         .await?
         .ok_or_else(|| SiteError::ContentNotFound(content_id))?;
 
-    let template_root = Path::new(templates_dir).join(site.template_name.clone());
+    let template_root = templates_dir.join(site.template_name.clone());
     let tera = load_site_templates(&template_root, override_root).await?;
 
     let html = render_content_html(db, content.site_id, &content.page_content).await?;
@@ -526,9 +556,14 @@ async fn render_content_preview_with_overrides(
         .map_err(SiteError::from)
 }
 
-fn render_markdown(value: &str) -> String {
+async fn render_content_html(
+    db: &DatabaseConnection,
+    site_id: Uuid,
+    value: &str,
+) -> Result<String, SiteError> {
+    let expanded = expand_asset_shortcodes(db, site_id, value).await?;
     markdown::to_html_with_options(
-        value,
+        expanded.as_str(),
         &Options {
             compile: CompileOptions {
                 allow_dangerous_html: true,
@@ -537,16 +572,7 @@ fn render_markdown(value: &str) -> String {
             ..Options::default()
         },
     )
-    .expect("markdown rendering should not fail without MDX support")
-}
-
-async fn render_content_html(
-    db: &DatabaseConnection,
-    site_id: Uuid,
-    value: &str,
-) -> Result<String, SiteError> {
-    let expanded = expand_asset_shortcodes(db, site_id, value).await?;
-    Ok(render_markdown(&expanded))
+    .map_err(|err| SiteError::internal(format!("Failed to render markdown: {err:?}")))
 }
 
 fn absolute_log_path(path: &Path) -> PathBuf {
@@ -557,6 +583,12 @@ fn absolute_log_path(path: &Path) -> PathBuf {
     env::current_dir()
         .map(|cwd| cwd.join(path))
         .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.contains(&path) {
+        paths.push(path);
+    }
 }
 
 async fn load_template(
@@ -578,26 +610,51 @@ async fn load_template(
                 path=%absolute_log_path(&template_path).display(),
                 "Failed to load template, using fallback",
             );
-            let fallback_path = template_root
+            let configured_default_path = template_root
                 .parent()
                 .unwrap_or(template_root)
                 .join("default")
                 .join(filename);
-            let fallback_path = match fs::try_exists(&fallback_path).await {
-                Ok(true) => fallback_path,
-                Ok(false) | Err(_) => resolve_site_templates_root().join("default").join(filename),
+            let bundled_root = PathBuf::from(SITE_TEMPLATES_DIR);
+            let mut fallback_paths = Vec::new();
+
+            if let Some(template_name) = template_root.file_name() {
+                push_unique_path(
+                    &mut fallback_paths,
+                    bundled_root.join(template_name).join(filename),
+                );
+            }
+
+            push_unique_path(&mut fallback_paths, configured_default_path);
+            push_unique_path(
+                &mut fallback_paths,
+                bundled_root.join("default").join(filename),
+            );
+
+            let mut last_error = None;
+            for fallback_path in fallback_paths {
+                match fs::read_to_string(&fallback_path).await {
+                    Ok(fallback) => return Ok(fallback),
+                    Err(err) => {
+                        last_error = Some((fallback_path, err));
+                    }
+                }
+            }
+
+            let Some((fallback_path, fallback_error)) = last_error else {
+                error!(
+                    error=?err,
+                    path=%absolute_log_path(&template_path).display(),
+                    "Failed to load template and no fallback paths were generated"
+                );
+                return Err(SiteError::from(err));
             };
-            let fallback_log_path = absolute_log_path(&fallback_path);
-            let fallback = fs::read_to_string(&fallback_path)
-                .await
-                .inspect_err(|err| {
-                    error!(
-                        error=?err,
-                        path=%fallback_log_path.display(),
-                        "Failed to load fallback template"
-                    )
-                })?;
-            Ok(fallback)
+            error!(
+                error=?fallback_error,
+                path=%absolute_log_path(&fallback_path).display(),
+                "Failed to load fallback template"
+            );
+            Err(SiteError::from(fallback_error))
         }
     }
 }
@@ -3604,6 +3661,7 @@ mod tests {
         let db = test_db_start().await;
         let site = create_site_with_template_fixture(&db, "preview-site", "custom-preview").await;
         let templates_dir = TempDir::new().expect("failed to create templates dir");
+        let upload_root = TempDir::new().expect("failed to create upload dir");
         let template_root = templates_dir.path().join("custom-preview");
         fs::create_dir_all(&template_root)
             .await
@@ -3627,10 +3685,8 @@ mod tests {
             &db,
             site.id,
             content.id,
-            templates_dir
-                .path()
-                .to_str()
-                .expect("invalid templates path"),
+            templates_dir.path().into(),
+            upload_root.path(),
         )
         .await
         .expect("failed to render preview");
@@ -3675,10 +3731,7 @@ mod tests {
             &db,
             site.id,
             content.id,
-            templates_dir
-                .path()
-                .to_str()
-                .expect("invalid templates path"),
+            templates_dir.path().into(),
             override_root.path(),
         )
         .await
@@ -3689,78 +3742,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn render_content_preview_uses_configured_root_for_default_template_fallback() {
+    async fn render_content_preview_uses_bundled_default_template_when_configured_root_is_empty() {
         let _env_lock = crate::test_support::env_lock().lock_owned().await;
         let original = env::var_os("WEBSITES_SITE_TEMPLATES_DIR");
         let db = test_db_start().await;
         let site = create_site_fixture(&db).await;
         let templates_dir = TempDir::new().expect("failed to create templates dir");
-        let configured_templates_dir =
-            TempDir::new().expect("failed to create configured templates dir");
-        let default_root = configured_templates_dir.path().join("default");
-
-        fs::create_dir_all(&default_root)
-            .await
-            .expect("failed to create default template root");
-        fs::write(
-            default_root.join("base_template.html"),
-            r#"<!doctype html><html><body>{% block content %}{% endblock %}</body></html>"#,
-        )
-        .await
-        .expect("failed to write base template");
-        fs::write(
-            default_root.join("index.html"),
-            r#"{% extends "base_template.html" %}{% block content %}<main>index</main>{% endblock %}"#,
-        )
-        .await
-        .expect("failed to write index template");
-        fs::write(
-            default_root.join("post.html"),
-            r#"{% extends "base_template.html" %}{% block content %}<article>{{title}}</article>{% endblock %}"#,
-        )
-        .await
-        .expect("failed to write post template");
-        fs::write(
-            default_root.join("page.html"),
-            r#"{% extends "base_template.html" %}{% block content %}<article data-template="configured-fallback">{{title}}</article>{% endblock %}"#,
-        )
-        .await
-        .expect("failed to write page template");
-        fs::write(
-            default_root.join("tag.html"),
-            r#"{% extends "base_template.html" %}{% block content %}<section>tag</section>{% endblock %}"#,
-        )
-        .await
-        .expect("failed to write tag template");
-        fs::write(default_root.join("rss.xml"), "<rss />")
-            .await
-            .expect("failed to write rss template");
-        fs::write(default_root.join("atom.xml"), "<feed />")
-            .await
-            .expect("failed to write atom template");
+        let upload_root = TempDir::new().expect("failed to create upload dir");
 
         unsafe {
-            env::set_var(
-                "WEBSITES_SITE_TEMPLATES_DIR",
-                configured_templates_dir.path(),
-            );
+            env::set_var("WEBSITES_SITE_TEMPLATES_DIR", templates_dir.path());
         }
 
         let content =
-            create_content_fixture(&db, site.id, PageType::Page, "default-page", true).await;
+            create_content_fixture(&db, site.id, PageType::Page, "bundled-default-page", true)
+                .await;
         let rendered = render_content_preview(
             &db,
             site.id,
             content.id,
-            templates_dir
-                .path()
-                .to_str()
-                .expect("invalid templates path"),
+            templates_dir.path().into(),
+            upload_root.path(),
         )
         .await
         .expect("failed to render preview");
 
-        assert!(rendered.contains("data-template=\"configured-fallback\""));
+        assert!(rendered.contains(r#"<link rel="stylesheet" href="/assets/style.css" />"#));
+        assert!(rendered.contains(r#"<section class="content"><p>Body</p></section>"#));
 
         match original {
             Some(value) => unsafe {
@@ -3777,6 +3785,7 @@ mod tests {
         let db = test_db_start().await;
         let site = create_site_with_template_fixture(&db, "html-preview", "html-preview").await;
         let templates_dir = TempDir::new().expect("failed to create templates dir");
+        let upload_root = TempDir::new().expect("failed to create upload dir");
         let template_root = templates_dir.path().join("html-preview");
         fs::create_dir_all(&template_root)
             .await
@@ -3815,10 +3824,8 @@ mod tests {
             &db,
             site.id,
             content.id,
-            templates_dir
-                .path()
-                .to_str()
-                .expect("invalid templates path"),
+            templates_dir.path().into(),
+            upload_root.path(),
         )
         .await
         .expect("failed to render preview");
@@ -3832,6 +3839,7 @@ mod tests {
         let db = test_db_start().await;
         let site = create_site_with_template_fixture(&db, "asset-preview", "asset-preview").await;
         let templates_dir = TempDir::new().expect("failed to create templates dir");
+        let upload_root = TempDir::new().expect("failed to create upload dir");
         let template_root = templates_dir.path().join("asset-preview");
         fs::create_dir_all(&template_root)
             .await
@@ -3902,10 +3910,8 @@ mod tests {
             &db,
             site.id,
             content.id,
-            templates_dir
-                .path()
-                .to_str()
-                .expect("invalid templates path"),
+            templates_dir.path().into(),
+            upload_root.path(),
         )
         .await
         .expect("failed to render preview");

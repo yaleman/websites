@@ -42,9 +42,9 @@ pub(crate) async fn get_index(
 
     let template_shared = AdminTemplateData::new("Admin Dashboard").with_links(links);
     let template_shared = if query.imported.is_some() {
-        template_shared.with_toast_message("Site import complete.", "imported")
+        template_shared.with_toast_message(&"Site import complete.", &"imported")
     } else if query.deleted.is_some() {
-        template_shared.with_toast_message("Site deleted.", "deleted")
+        template_shared.with_toast_message(&"Site deleted.", &"deleted")
     } else {
         template_shared
     };
@@ -189,7 +189,7 @@ pub(crate) async fn admin_users(
     users.sort_by(|left, right| left.subject.cmp(&right.subject));
     let template_shared = AdminTemplateData::new("Users");
     let template_shared = if query.created.is_some() {
-        template_shared.with_toast_message("User created.", "created")
+        template_shared.with_toast_message(&"User created.", &"created")
     } else {
         template_shared
     };

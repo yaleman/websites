@@ -27,10 +27,9 @@ async fn ensure_site_owner_membership_is_idempotent() {
     .await
     .expect("failed to create site");
 
-    let first = match ensure_site_owner_membership(&db, "tester", None, site.id).await {
-        Ok(value) => value,
-        Err(_) => panic!("failed to create membership"),
-    };
+    let first = ensure_site_owner_membership(&db, "tester", None, site.id)
+        .await
+        .expect("failed to create membership");
     assert!(first.is_some(), "expected membership on first call");
     if let Some(membership) = first {
         assert_eq!(
@@ -40,10 +39,9 @@ async fn ensure_site_owner_membership_is_idempotent() {
         );
     }
 
-    let second = match ensure_site_owner_membership(&db, "tester", None, site.id).await {
-        Ok(value) => value,
-        Err(_) => panic!("failed to check membership"),
-    };
+    let second = ensure_site_owner_membership(&db, "tester", None, site.id)
+        .await
+        .expect("failed to check membership");
     assert!(second.is_none(), "expected no membership on second call");
 }
 

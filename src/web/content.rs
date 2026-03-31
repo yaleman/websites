@@ -779,6 +779,7 @@ pub(crate) async fn admin_site_content_scan_apply(
                     let imported = import_remote_scan_asset(
                         &txn,
                         state.oidc_client.as_ref(),
+                        state.upload_root.as_path(),
                         site_id,
                         &actor.subject,
                         remote_url,
@@ -1195,7 +1196,7 @@ pub(crate) async fn admin_site_content_source(
         .with_site_context(&site)
         .with_site_publish_configured(site_publish_configured);
     let template_shared = if query.saved.is_some() {
-        template_shared.with_toast_message("Content saved.", "saved")
+        template_shared.with_toast_message(&"Content saved.", &"saved")
     } else {
         template_shared
     };
@@ -1296,10 +1297,8 @@ pub(crate) async fn admin_site_content_preview(
         state.db.as_ref(),
         site_id,
         content_id,
-        state
-            .site_templates_root
-            .to_str()
-            .expect("theme root should be valid utf-8"),
+        state.site_templates_root,
+        state.upload_root.as_path(),
     )
     .await?;
     Ok(Html(rewrite_preview_asset_urls(&rendered, site_id)))

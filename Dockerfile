@@ -48,7 +48,7 @@ FROM gcr.io/distroless/cc-debian12 AS final
 WORKDIR /
 COPY --from=builder /app/target/release/websites /websites
 COPY --from=admin-assets /app/admin-ui-assets /admin-ui-assets
-COPY site_templates /data/site_templates
+COPY site_templates /site_templates
 
 ENV WEBSITES_LISTEN_ADDR="0.0.0.0:9000"
 ENV WEBSITES_DB_PATH="/data/websites.sqlite"

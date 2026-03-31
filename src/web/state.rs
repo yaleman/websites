@@ -56,8 +56,8 @@ impl AdminTemplateData {
 
     pub fn with_toast_message(
         self,
-        message: impl ToString,
-        clear_query_param: impl ToString,
+        message: &impl ToString,
+        clear_query_param: &impl ToString,
     ) -> Self {
         Self {
             page_message: Some(message.to_string()),
@@ -1504,25 +1504,25 @@ pub enum SiteRole {
 }
 
 impl SiteRole {
-    pub fn is_viewer(&self) -> bool {
-        *self == Self::Viewer
+    pub fn is_viewer(self) -> bool {
+        self == Self::Viewer
     }
 
-    pub fn is_owner(&self) -> bool {
-        *self == Self::Owner
+    pub fn is_owner(self) -> bool {
+        self == Self::Owner
     }
 
-    pub fn is_author(&self) -> bool {
-        *self == Self::Author
+    pub fn is_author(self) -> bool {
+        self == Self::Author
     }
 
-    pub fn is_editor(&self) -> bool {
-        *self == Self::Editor
+    pub fn is_editor(self) -> bool {
+        self == Self::Editor
     }
 
     /// Are they a system admin?
-    pub fn is_admin(&self) -> bool {
-        *self == Self::Admin
+    pub fn is_admin(self) -> bool {
+        self == Self::Admin
     }
 
     pub fn label(self) -> &'static str {
@@ -1755,8 +1755,8 @@ pub(crate) async fn build_admin_user_profile_template(
     let template_shared = if let Some(message) = view_state.page_message {
         if view_state.page_message_is_toast {
             template_shared.with_toast_message(
-                message,
-                view_state.clear_query_param.as_deref().unwrap_or("message"),
+                &message,
+                &view_state.clear_query_param.as_deref().unwrap_or("message"),
             )
         } else {
             template_shared.with_message(message)

@@ -10,11 +10,11 @@ pub(crate) async fn admin_themes(
     let themes = theme_admin_rows(state.db.as_ref(), state.site_templates_root.as_path()).await?;
     let template_shared = AdminTemplateData::new("Themes");
     let template_shared = if query.installed.is_some() {
-        template_shared.with_toast_message("Theme installed.", "installed")
+        template_shared.with_toast_message(&"Theme installed.", &"installed")
     } else if query.updated.is_some() {
-        template_shared.with_toast_message("Theme updated.", "updated")
+        template_shared.with_toast_message(&"Theme updated.", &"updated")
     } else if query.deleted.is_some() {
-        template_shared.with_toast_message("Theme deleted.", "deleted")
+        template_shared.with_toast_message(&"Theme deleted.", &"deleted")
     } else {
         template_shared
     };

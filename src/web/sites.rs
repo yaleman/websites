@@ -137,7 +137,7 @@ pub(crate) async fn admin_sites_import_create(
     txn.commit().await?;
 
     if let Some((site_id, media_filenames)) = existing_site_files {
-        remove_deleted_site_files(site_id, &media_filenames).await?;
+        remove_deleted_site_files(state.upload_root.as_path(), site_id, &media_filenames).await?;
     }
 
     Ok(Redirect::to("/admin?imported=1"))
@@ -274,11 +274,13 @@ pub(crate) fn site_template_reset_href(site_id: Uuid, file_name: &str) -> String
 
 pub(crate) async fn describe_template_source_origin(
     templates_root: &StdPath,
+    upload_root: &StdPath,
     site_id: Uuid,
     template_name: &str,
     file_name: &str,
 ) -> Result<(String, bool), SiteError> {
-    let override_path = resolve_site_template_override_root(site_id).join(file_name);
+    let override_path =
+        resolve_site_template_override_root_with_upload_root(upload_root, site_id).join(file_name);
     if fs::metadata(&override_path).await.is_ok() {
         return Ok(("site override".to_string(), true));
     }
@@ -293,11 +295,13 @@ pub(crate) async fn describe_template_source_origin(
 
 pub(crate) async fn load_editable_template_source(
     templates_root: &StdPath,
+    upload_root: &StdPath,
     site_id: Uuid,
     template_name: &str,
     file_name: &str,
 ) -> Result<(String, String, bool), SiteError> {
-    let override_path = resolve_site_template_override_root(site_id).join(file_name);
+    let override_path =
+        resolve_site_template_override_root_with_upload_root(upload_root, site_id).join(file_name);
     if let Ok(source) = fs::read_to_string(&override_path).await {
         return Ok((source, "site override".to_string(), true));
     }
@@ -322,14 +326,20 @@ pub(crate) async fn load_editable_template_source(
 
 pub(crate) async fn build_site_template_file_rows(
     templates_root: &StdPath,
+    upload_root: &StdPath,
     site_id: Uuid,
     template_name: &str,
 ) -> Result<Vec<AdminSiteTemplateFileRow>, SiteError> {
     let mut rows = Vec::with_capacity(CUSTOMIZABLE_TEMPLATE_FILES.len());
     for file_name in CUSTOMIZABLE_TEMPLATE_FILES {
-        let (source_origin, override_exists) =
-            describe_template_source_origin(templates_root, site_id, template_name, file_name)
-                .await?;
+        let (source_origin, override_exists) = describe_template_source_origin(
+            templates_root,
+            upload_root,
+            site_id,
+            template_name,
+            file_name,
+        )
+        .await?;
         rows.push(AdminSiteTemplateFileRow {
             file_name: file_name.to_string(),
             source_origin,
@@ -355,6 +365,7 @@ pub(crate) async fn admin_site_settings(
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
     let template_files = build_site_template_file_rows(
         state.site_templates_root.as_path(),
+        state.upload_root.as_path(),
         site.id,
         &site.template_name,
     )
@@ -412,7 +423,7 @@ pub(crate) async fn admin_site_settings(
         .with_site_publish_configured(site_publish_configured)
         .with_links(links);
     let template_shared = if let Some(imported) = query.imported {
-        template_shared.with_toast_message(wordpress_import_message(imported), "imported")
+        template_shared.with_toast_message(&wordpress_import_message(imported), &"imported")
     } else {
         template_shared
     };
@@ -459,32 +470,26 @@ pub(crate) async fn admin_site_publish(
             AdminLink::new(&format!("/admin/site/{site_id}/render"), "Render site"),
         ]);
     let template_shared = if let Some(saved) = query.saved {
-        template_shared.with_toast_message(
-            if saved == 1 {
-                "Publish configuration saved.".to_string()
-            } else {
-                "Publish configuration updated.".to_string()
-            },
-            "saved",
-        )
+        let msg = if saved == 1 {
+            "Publish configuration saved.".to_string()
+        } else {
+            "Publish configuration updated.".to_string()
+        };
+        template_shared.with_toast_message(&msg, &"saved")
     } else if let Some(queued) = query.queued {
-        template_shared.with_toast_message(
-            if queued == 1 {
-                "Publish job queued.".to_string()
-            } else {
-                format!("{queued} publish jobs queued.")
-            },
-            "queued",
-        )
+        let msg = if queued == 1 {
+            "Publish job queued.".to_string()
+        } else {
+            format!("{queued} publish jobs queued.")
+        };
+        template_shared.with_toast_message(&msg, &"queued")
     } else if let Some(disabled) = query.disabled {
-        template_shared.with_toast_message(
-            if disabled == 1 {
-                "Publish configuration disabled.".to_string()
-            } else {
-                format!("{disabled} publish configurations disabled.")
-            },
-            "disabled",
-        )
+        let msg = if disabled == 1 {
+            "Publish configuration disabled.".to_string()
+        } else {
+            format!("{disabled} publish configurations disabled.")
+        };
+        template_shared.with_toast_message(&msg, &"disabled")
     } else {
         template_shared
     };
@@ -1084,11 +1089,12 @@ pub(crate) async fn collect_site_media_filenames(
 }
 
 pub(crate) async fn remove_deleted_site_files(
+    upload_root: &StdPath,
     site_id: Uuid,
     media_filenames: &[String],
 ) -> Result<(), SiteError> {
     for filename in media_filenames {
-        let path = resolve_upload_root().join(filename);
+        let path = upload_root.join(filename);
         match fs::remove_file(&path).await {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1101,7 +1107,7 @@ pub(crate) async fn remove_deleted_site_files(
         }
     }
 
-    let override_root = resolve_site_template_override_root(site_id);
+    let override_root = resolve_site_template_override_root_with_upload_root(upload_root, site_id);
     match fs::remove_dir_all(&override_root).await {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1182,7 +1188,7 @@ pub(crate) async fn admin_site_delete(
         .map_err(|error| SiteError::internal(format!("failed to delete site: {error}")))?;
     txn.commit().await?;
 
-    remove_deleted_site_files(site_id, &media_filenames).await?;
+    remove_deleted_site_files(state.upload_root.as_path(), site_id, &media_filenames).await?;
 
     Ok(Redirect::to("/admin?deleted=1"))
 }
@@ -1200,6 +1206,7 @@ pub(crate) async fn admin_site_template_editor(
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
     let (source, source_origin, override_exists) = load_editable_template_source(
         state.site_templates_root.as_path(),
+        state.upload_root.as_path(),
         site.id,
         &site.template_name,
         file_name,
@@ -1217,9 +1224,9 @@ pub(crate) async fn admin_site_template_editor(
             AdminLink::new(&format!("/admin/site/{site_id}/render"), "Render site"),
         ]);
     let template_shared = if query.saved.is_some() {
-        template_shared.with_toast_message("Template override saved.", "saved")
+        template_shared.with_toast_message(&"Template override saved.", &"saved")
     } else if query.reset.is_some() {
-        template_shared.with_toast_message("Template override reset.", "reset")
+        template_shared.with_toast_message(&"Template override reset.", &"reset")
     } else {
         template_shared
     };
@@ -1249,7 +1256,8 @@ pub(crate) async fn admin_site_template_override_update(
     }
 
     let actor = current_user(&session).await?.subject;
-    let override_root = resolve_site_template_override_root(site_id);
+    let override_root =
+        resolve_site_template_override_root_with_upload_root(state.upload_root.as_path(), site_id);
     fs::create_dir_all(&override_root).await.map_err(|error| {
         SiteError::internal(format!(
             "failed to create template override directory: {error}"
@@ -1291,7 +1299,9 @@ pub(crate) async fn admin_site_template_override_reset(
     require_site_role(&state, &session, site_id, SiteRole::Owner).await?;
     let file_name = validate_customizable_template_file(&file_name)?;
     let actor = current_user(&session).await?.subject;
-    let override_path = resolve_site_template_override_root(site_id).join(file_name);
+    let override_path =
+        resolve_site_template_override_root_with_upload_root(state.upload_root.as_path(), site_id)
+            .join(file_name);
     match fs::remove_file(&override_path).await {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1338,7 +1348,7 @@ pub(crate) async fn admin_site_render(
         site_id,
         state.site_templates_root.as_path(),
         state.rendered_root.as_path(),
-        &resolve_upload_root(),
+        state.upload_root.as_path(),
     )
     .await
     .map_err(|error| SiteError::internal(format!("failed to render site {site_id}: {error}")))?;
@@ -1394,7 +1404,15 @@ pub(crate) async fn admin_site_export(
     Path(site_id): Path<Uuid>,
 ) -> Result<Response, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Owner).await?;
-    let export = export_site(state.db.as_ref(), site_id).await?;
+    let override_root =
+        resolve_site_template_override_root_with_upload_root(state.upload_root.as_path(), site_id);
+    let export = export_site_with_roots(
+        state.db.as_ref(),
+        site_id,
+        state.upload_root.as_path(),
+        &override_root,
+    )
+    .await?;
     let file_name = format!("{}-site-export.json", export.site.short_name);
     let body = serialize_site_export_pretty(&export)?;
     let mut response = body.into_response();

@@ -185,15 +185,15 @@ pub async fn run_admin_server(
     listen: &str,
     oidc: &OidcConfig,
     site_templates_root: PathBuf,
+    upload_root: PathBuf,
     rendered_root: PathBuf,
+    log_path: PathBuf,
 ) -> Result<(), anyhow::Error> {
     let jwt_secret = ensure_jwt_hs256_secret(db.as_ref())
         .await
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let jwt_signer =
         signer_from_secret(&jwt_secret).map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let upload_root = resolve_upload_root();
-    let log_path = resolve_log_path();
     let state = AdminState {
         db: db.clone(),
         oidc_client_id: ClientId::new(oidc.oidc_client_id.clone()),

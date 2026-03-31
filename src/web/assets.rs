@@ -28,7 +28,7 @@ pub(crate) fn latest_revision_summary(revisions: &[entities::content_revision::M
         .unwrap_or_else(|| "No revisions recorded.".to_string())
 }
 
-pub(crate) fn normalize_remote_asset_url(value: String) -> Result<Option<Url>, SiteError> {
+pub(crate) fn normalize_remote_asset_url(value: &str) -> Result<Option<Url>, SiteError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Ok(None);
@@ -113,17 +113,17 @@ pub(crate) async fn fetch_remote_asset(
 pub(crate) async fn import_remote_scan_asset<C: ConnectionTrait>(
     db: &C,
     client: &reqwest::Client,
+    upload_root: &StdPath,
     site_id: Uuid,
     uploader_sub: &str,
     remote_url: &str,
 ) -> Result<AssetReference, SiteError> {
-    let url = normalize_remote_asset_url(remote_url.to_string())?
+    let url = normalize_remote_asset_url(remote_url)?
         .ok_or_else(|| SiteError::BadRequest("missing remote asset url".to_string()))?;
     let (bytes, original_filename, mime_type) = fetch_remote_asset(client, url).await?;
-    let upload_root = resolve_upload_root();
     let asset = store_uploaded_asset(
         db,
-        &upload_root,
+        upload_root,
         site_id,
         uploader_sub,
         bytes,
@@ -198,7 +198,7 @@ pub(crate) async fn parse_asset_upload(
                         )));
                     }
                 };
-                source_url = normalize_remote_asset_url(value)?;
+                source_url = normalize_remote_asset_url(&value)?;
             }
             _ => continue,
         }
@@ -423,7 +423,7 @@ pub(crate) async fn admin_site_assets_create(
                         )));
                     }
                 };
-                source_url = normalize_remote_asset_url(value)?;
+                source_url = normalize_remote_asset_url(&value)?;
             }
             _ => continue,
         }
