@@ -22,14 +22,13 @@ jobs:
       setup-qemu: false
       cache: true
       cache-mode: max
+      cache-scope: websites-container
       context: .
       file: ./Dockerfile
       meta-images: ghcr.io/${{ github.repository }}
       meta-tags: |
         type=sha,prefix=sha-
         type=raw,value=latest
-      build-args: |
-        GITHUB_SHA=${{ github.sha }}
     secrets:
       registry-auths: |
         - registry: ghcr.io
