@@ -85,7 +85,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use tower_http::services::ServeDir;
 use tower_sessions::{Expiry, Session, SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use url::Url;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;

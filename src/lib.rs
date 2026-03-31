@@ -228,6 +228,31 @@ pub fn resolve_site_templates_root() -> PathBuf {
     PathBuf::from(SITE_TEMPLATES_DIR)
 }
 
+pub(crate) fn site_template_dir_candidates(
+    templates_root: &Path,
+    template_name: &str,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    push_unique_path(&mut candidates, templates_root.join(template_name));
+    for bundled_root in bundled_site_templates_roots() {
+        push_unique_path(&mut candidates, bundled_root.join(template_name));
+    }
+
+    candidates
+}
+
+pub(crate) fn site_template_asset_candidates(
+    templates_root: &Path,
+    template_name: &str,
+    asset_path: &Path,
+) -> Vec<PathBuf> {
+    site_template_dir_candidates(templates_root, template_name)
+        .into_iter()
+        .map(|path| path.join("assets").join(asset_path))
+        .collect()
+}
+
 pub fn is_customizable_template_file(filename: &str) -> bool {
     CUSTOMIZABLE_TEMPLATE_FILES.contains(&filename)
 }
@@ -486,13 +511,20 @@ pub(crate) async fn render_site_into_dir(
         files_written = files_written.saturating_add(1);
     }
 
-    let template_assets = template_root.join("assets");
-    copy_directory_recursive(
-        &template_assets,
-        &output_root.join("assets"),
-        &mut files_written,
-    )
-    .await?;
+    let mut copied_template_assets = HashSet::new();
+    for template_assets in site_template_dir_candidates(templates_dir, &site.template_name)
+        .into_iter()
+        .rev()
+        .map(|path| path.join("assets"))
+    {
+        copy_directory_recursive(
+            &template_assets,
+            &output_root.join("assets"),
+            &mut files_written,
+            &mut copied_template_assets,
+        )
+        .await?;
+    }
 
     copy_media_variants(
         db,
@@ -789,6 +821,7 @@ async fn copy_directory_recursive(
     source: &Path,
     destination: &Path,
     files_written: &mut usize,
+    copied_paths: &mut HashSet<PathBuf>,
 ) -> Result<(), SiteError> {
     let mut dirs = vec![(source.to_path_buf(), destination.to_path_buf())];
 
@@ -813,7 +846,9 @@ async fn copy_directory_recursive(
                 dirs.push((next_source, next_destination));
             } else if metadata.is_file() {
                 copy_file_if_exists(&next_source, &next_destination).await?;
-                *files_written = files_written.saturating_add(1);
+                if copied_paths.insert(next_destination) {
+                    *files_written = files_written.saturating_add(1);
+                }
             }
         }
     }
@@ -3855,6 +3890,38 @@ mod tests {
         let rendered = render_result.expect("failed to render preview");
         assert!(rendered.contains(r#"<link rel="stylesheet" href="/assets/style.css" />"#));
         assert!(rendered.contains(r#"<section class="content"><p>Body</p></section>"#));
+    }
+
+    #[tokio::test]
+    async fn render_site_copies_bundled_assets_when_configured_root_is_empty() {
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+        let templates_dir = TempDir::new().expect("failed to create templates dir");
+        let rendered_dir = TempDir::new().expect("failed to create rendered dir");
+        let upload_root = TempDir::new().expect("failed to create upload dir");
+
+        create_content_fixture(&db, site.id, PageType::Page, "bundled-assets-page", false).await;
+
+        render_site(
+            &db,
+            site.id,
+            templates_dir.path(),
+            rendered_dir.path(),
+            upload_root.path(),
+        )
+        .await
+        .expect("failed to render site");
+
+        let style_path = rendered_dir
+            .path()
+            .join(site.short_name)
+            .join("assets")
+            .join("style.css");
+        let style_contents = fs::read_to_string(style_path)
+            .await
+            .expect("failed to read copied bundled asset");
+
+        assert!(style_contents.contains("font-family"));
     }
 
     #[tokio::test]
