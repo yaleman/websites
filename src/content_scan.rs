@@ -1074,6 +1074,7 @@ fn html_entity_decode(value: &str) -> String {
 fn markdown_link_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| {
+        #[allow(clippy::expect_used)]
         Regex::new(r#"(?m)(!?)\[([^\]\n]+)\]\(([^)\s]+)\)"#).expect("valid markdown link regex")
     })
 }
@@ -1081,6 +1082,7 @@ fn markdown_link_regex() -> &'static Regex {
 fn html_anchor_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| {
+        #[allow(clippy::expect_used)]
         Regex::new(r#"(?is)<a\b[^>]*href\s*=\s*(?:["'])([^"']+)(?:["'])[^>]*>(.*?)</a>"#)
             .expect("valid html anchor regex")
     })
@@ -1088,17 +1090,24 @@ fn html_anchor_regex() -> &'static Regex {
 
 fn html_img_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| Regex::new(r#"(?is)<img\b([^>]*)/?>"#).expect("valid html image regex"))
+    REGEX.get_or_init(|| {
+        #[allow(clippy::expect_used)]
+        Regex::new(r#"(?is)<img\b([^>]*)/?>"#).expect("valid html image regex")
+    })
 }
 
 fn bare_url_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| Regex::new(r#"https?://[^\s<>\"]+"#).expect("valid bare url regex"))
+    REGEX.get_or_init(|| {
+        #[allow(clippy::expect_used)]
+        Regex::new(r#"https?://[^\s<>\"]+"#).expect("valid bare url regex")
+    })
 }
 
 fn style_attr_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| {
+        #[allow(clippy::expect_used)]
         Regex::new(r#"(?is)\bstyle\s*=\s*(?:"[^"]*"|'[^']*')"#).expect("valid style regex")
     })
 }
@@ -1106,6 +1115,7 @@ fn style_attr_regex() -> &'static Regex {
 fn class_attr_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| {
+        #[allow(clippy::expect_used)]
         Regex::new(r#"(?is)\bclass\s*=\s*(?:"[^"]+"|'[^']+')"#).expect("valid class regex")
     })
 }
@@ -1113,6 +1123,7 @@ fn class_attr_regex() -> &'static Regex {
 fn dangerous_html_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| {
+        #[allow(clippy::expect_used)]
         Regex::new(r#"(?is)<\s*(script|iframe|object|embed|form)\b[^>]*>"#)
             .expect("valid dangerous html regex")
     })
@@ -1121,6 +1132,7 @@ fn dangerous_html_regex() -> &'static Regex {
 fn complex_html_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| {
+        #[allow(clippy::expect_used)]
         Regex::new(r#"(?is)<\s*(div|section|table|ul|ol|li|blockquote|figure|figcaption)\b[^>]*>"#)
             .expect("valid complex html regex")
     })
@@ -1129,6 +1141,7 @@ fn complex_html_regex() -> &'static Regex {
 fn asset_shortcode_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| {
+        #[allow(clippy::expect_used)]
         Regex::new(
             r#"\[\[asset id="([^"]+)" variant="([^"]+)" alt="([^"]*)"(?: title="([^"]*)")?\]\]"#,
         )
@@ -1137,6 +1150,7 @@ fn asset_shortcode_regex() -> &'static Regex {
 }
 
 fn simple_tag_regex(tag: &str) -> Regex {
+    #[allow(clippy::expect_used)]
     Regex::new(&format!(r#"(?is)<{tag}\b[^>]*>(.*?)</{tag}>"#)).expect("valid simple tag regex")
 }
 

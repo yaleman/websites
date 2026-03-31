@@ -458,7 +458,9 @@ pub async fn execute(
     command: Commands,
     db_path: &Path,
     site_templates_dir: &Path,
+    upload_root: &Path,
     rendered_dir: &Path,
+    log_path: &Path,
     oidc: &OidcConfigArgs,
 ) -> Result<(), String> {
     let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
@@ -502,8 +504,9 @@ pub async fn execute(
             println!("oidc_client_id={oidc_client_id}");
             println!("oidc_discovery_url={oidc_discovery_url}");
             println!("site_templates_dir={}", site_templates_dir.display());
-            println!("upload_dir={}", crate::resolve_upload_root().display());
+            println!("upload_dir={}", upload_root.display());
             println!("rendered_dir={}", rendered_dir.display());
+            println!("log_path={}", log_path.display());
             Ok(())
         }
         Commands::Site { command } => match command {
@@ -674,18 +677,19 @@ pub async fn execute(
                 site_id,
                 templates_dir,
             } => {
-                let upload_root = resolve_upload_root();
                 let templates_dir =
                     resolve_site_render_templates_dir(templates_dir, site_templates_dir);
                 let files_written =
-                    render_site(db_ref, site_id, &templates_dir, rendered_dir, &upload_root)
+                    render_site(db_ref, site_id, &templates_dir, rendered_dir, upload_root)
                         .await
                         .map_err(|err| err.to_string())?;
                 println!("rendered site {} files {}", site_id, files_written);
                 Ok(())
             }
             SiteCommands::Export { site_id, output } => {
-                let export = export_site(db_ref, site_id)
+                let override_root =
+                    resolve_site_template_override_root_with_upload_root(upload_root, site_id);
+                let export = export_site_with_roots(db_ref, site_id, upload_root, &override_root)
                     .await
                     .map_err(|error| format!("failed to export site: {error}"))?;
                 let json = serialize_site_export_pretty(&export)
@@ -932,7 +936,9 @@ pub async fn execute(
                     &listen,
                     &oidc,
                     site_templates_dir.to_path_buf(),
+                    upload_root.to_path_buf(),
                     rendered_dir.to_path_buf(),
+                    log_path.to_path_buf(),
                 )
                 .await
                 .map_err(|err| err.to_string())

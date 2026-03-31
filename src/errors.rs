@@ -18,10 +18,10 @@ struct SiteErrorPage {
 }
 
 impl SiteErrorPage {
-    pub fn new(status_code: StatusCode, title: impl ToString, message: impl ToString) -> Self {
+    pub fn new(status_code: StatusCode, title: &str, message: &str) -> Self {
         SiteErrorPage {
             status_code,
-            template_shared: AdminTemplateData::new(title.to_string()).with_hide_nav(true),
+            template_shared: AdminTemplateData::new(title).with_hide_nav(true),
             message: message.to_string(),
         }
     }
@@ -58,8 +58,8 @@ pub enum SiteError {
 }
 
 impl SiteError {
-    pub fn internal(msg: impl ToString) -> Self {
-        SiteError::Internal(msg.to_string())
+    pub fn internal(msg: impl Into<String>) -> Self {
+        SiteError::Internal(msg.into())
     }
 }
 
@@ -71,7 +71,7 @@ impl IntoResponse for SiteError {
             SiteError::Internal(msg) => {
                 (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(msg)).into_response()
             }
-            SiteError::UnAuthorized(ref msg) => SiteErrorPage::new(StatusCode::UNAUTHORIZED, self.to_string(), format!("Please log in to access this page. {}", msg))
+            SiteError::UnAuthorized(ref msg) => SiteErrorPage::new(StatusCode::UNAUTHORIZED, &self.to_string(), &format!("Please log in to access this page. {}", msg))
                 .into_response(),
             SiteError::Database(error) => {
                 (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(error)).into_response()

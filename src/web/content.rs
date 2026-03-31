@@ -614,7 +614,7 @@ pub(crate) async fn get_global_search(
 
     Ok(AdminSearchTemplate {
         template_shared: AdminTemplateData::new("Search Content")
-            .with_message(message)
+            .with_message(&message)
             .with_nav_search_value(&query_text),
         rows,
         show_site_column: true,
@@ -650,7 +650,7 @@ pub(crate) async fn get_site_search(
         template_shared: AdminTemplateData::new("Search Content")
             .with_site_context(&site)
             .with_site_publish_configured(site_publish_configured)
-            .with_message(message)
+            .with_message(&message)
             .with_nav_search_value(&query_text)
             .with_links(vec![AdminLink::new(
                 &format!("/admin/site/{site_id}/content"),
@@ -779,6 +779,7 @@ pub(crate) async fn admin_site_content_scan_apply(
                     let imported = import_remote_scan_asset(
                         &txn,
                         state.oidc_client.as_ref(),
+                        state.upload_root.as_path(),
                         site_id,
                         &actor.subject,
                         remote_url,
@@ -1093,7 +1094,7 @@ pub(crate) async fn admin_site_content_detail(
     let route = content_primary_route(&content);
     let site_publish_configured = site_has_publish_config(state.db.as_ref(), site.id).await?;
     Ok(AdminContentDetailTemplate {
-        template_shared: AdminTemplateData::new(format!("Content: /{route}"))
+        template_shared: AdminTemplateData::new(&format!("Content: /{route}"))
             .with_site_context(&site)
             .with_site_publish_configured(site_publish_configured)
             .with_links(vec![
@@ -1187,7 +1188,7 @@ pub(crate) async fn admin_site_content_source(
         })?;
     let site_publish_configured = site_has_publish_config(state.db.as_ref(), site.id).await?;
 
-    let template_shared = AdminTemplateData::new(format!("Editing: {}", title))
+    let template_shared = AdminTemplateData::new(&format!("Editing: {}", title))
         .with_links(vec![
             AdminLink::new(&preview_href, "Preview").with_target_blank(),
             AdminLink::new(&back_href, "Back to site dashboard"),
@@ -1195,7 +1196,7 @@ pub(crate) async fn admin_site_content_source(
         .with_site_context(&site)
         .with_site_publish_configured(site_publish_configured);
     let template_shared = if query.saved.is_some() {
-        template_shared.with_toast_message("Content saved.", "saved")
+        template_shared.with_toast_message(&"Content saved.", &"saved")
     } else {
         template_shared
     };
@@ -1296,10 +1297,8 @@ pub(crate) async fn admin_site_content_preview(
         state.db.as_ref(),
         site_id,
         content_id,
-        state
-            .site_templates_root
-            .to_str()
-            .expect("theme root should be valid utf-8"),
+        state.site_templates_root,
+        state.upload_root.as_path(),
     )
     .await?;
     Ok(Html(rewrite_preview_asset_urls(&rendered, site_id)))
@@ -1410,7 +1409,7 @@ pub(crate) async fn admin_site_content_revisions(
         .collect();
 
     Ok(AdminContentRevisionsTemplate {
-        template_shared: AdminTemplateData::new(format!("Revisions for {content_id}"))
+        template_shared: AdminTemplateData::new(&format!("Revisions for {content_id}"))
             .with_site_context(&site)
             .with_site_publish_configured(site_publish_configured)
             .with_links(vec![AdminLink::new(
@@ -1481,13 +1480,13 @@ pub(crate) async fn admin_site_revision_diff(
     };
 
     Ok(AdminRevisionDiffTemplate {
-        template_shared: AdminTemplateData::new(format!(
+        template_shared: AdminTemplateData::new(&format!(
             "Diff for rev-{}",
             revision.revision_number
         ))
         .with_site_context(&site)
         .with_site_publish_configured(site_publish_configured)
-        .with_message(format!(
+        .with_message(&format!(
             "Comparing revision {} for content {}.",
             revision.revision_number, revision.content_id
         ))
