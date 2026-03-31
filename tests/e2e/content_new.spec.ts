@@ -83,11 +83,19 @@ test.describe("content new editor", () => {
 					`#editor .ProseMirror a[href="/media/images/${asset.storageBasename}"] img[src="/media/images/${asset.thumbnailFilename}"]`,
 				),
 			).toBeVisible();
+			const boldButton = page.getByRole("button", { name: "Bold" });
+			const italicButton = page.getByRole("button", { name: "Italic" });
+			const h2Button = page.getByRole("button", { name: "H2" });
+			const h3Button = page.getByRole("button", { name: "H3" });
+			const bulletButton = page.getByRole("button", { name: "Bullets" });
+			const numberedButton = page.getByRole("button", { name: "Numbered" });
+			const quoteButton = page.getByRole("button", { name: "Quote" });
 			expect(
 				consoleErrors.filter((message) => message.includes("contentMatchAt")),
 			).toHaveLength(0);
 			await page.locator(".ProseMirror").click();
 			await page.keyboard.type("Preview check");
+			await expect(boldButton).toHaveAttribute("aria-pressed", "false");
 			await expect(page.locator("[data-editor-preview]")).toBeHidden();
 
 			// TODO not currently tested as it's being removed/reworked
@@ -101,15 +109,119 @@ test.describe("content new editor", () => {
 			await page.getByRole("button", { name: "Markdown" }).click();
 			await expect(page.locator("[data-editor-source-panel]")).toBeVisible();
 			await expect(page.locator("#page_content")).toBeVisible();
-			await page.locator("#page_content").fill("## Raw heading\n\nraw body");
+			await page
+				.locator("#page_content")
+				.fill(
+					"Plain intro\n\n**Bold source**\n\n## Raw heading\n\n### Nested heading\n\n- Bullet line\n\n1. Numbered line\n\n> Quoted line",
+				);
 			await expect(page.locator("[data-editor-preview-body]")).toContainText(
 				"Raw heading",
 			);
 			await expect(page.locator("[data-editor-preview-body]")).toContainText(
-				"raw body",
+				"Nested heading",
 			);
+			await expect(page.locator(".ProseMirror")).toContainText("Bold source");
 			await expect(page.locator(".ProseMirror")).toContainText("Raw heading");
-			await expect(page.locator(".ProseMirror")).toContainText("raw body");
+			await expect(page.locator(".ProseMirror")).toContainText("Nested heading");
+			await expect(page.locator(".ProseMirror")).toContainText("Bullet line");
+			await expect(page.locator(".ProseMirror")).toContainText("Numbered line");
+			await expect(page.locator(".ProseMirror")).toContainText("Quoted line");
+
+			const editorHeadingSizes = await page.evaluate(() => {
+				const prose = document.querySelector(".ProseMirror");
+				if (!(prose instanceof HTMLElement)) {
+					throw new Error("Editor surface missing");
+				}
+
+				const h2 = prose.querySelector("h2");
+				const h3 = prose.querySelector("h3");
+				if (!(h2 instanceof HTMLElement) || !(h3 instanceof HTMLElement)) {
+					throw new Error("Editor headings missing");
+				}
+
+				return {
+					h2FontSize: Number.parseFloat(window.getComputedStyle(h2).fontSize),
+					h3FontSize: Number.parseFloat(window.getComputedStyle(h3).fontSize),
+				};
+			});
+			expect(editorHeadingSizes.h2FontSize).toBeGreaterThan(
+				editorHeadingSizes.h3FontSize,
+			);
+
+			const previewHeadingSizes = await page.evaluate(() => {
+				const preview = document.querySelector("[data-editor-preview-body]");
+				if (!(preview instanceof HTMLElement)) {
+					throw new Error("Preview surface missing");
+				}
+
+				const h2 = preview.querySelector("h2");
+				const h3 = preview.querySelector("h3");
+				if (!(h2 instanceof HTMLElement) || !(h3 instanceof HTMLElement)) {
+					throw new Error("Preview headings missing");
+				}
+
+				return {
+					h2FontSize: Number.parseFloat(window.getComputedStyle(h2).fontSize),
+					h3FontSize: Number.parseFloat(window.getComputedStyle(h3).fontSize),
+				};
+			});
+			expect(previewHeadingSizes.h2FontSize).toBeGreaterThan(
+				previewHeadingSizes.h3FontSize,
+			);
+
+			await page.locator(".ProseMirror p").first().click();
+			await page.keyboard.press("End");
+			await boldButton.click();
+			await expect(boldButton).toHaveAttribute("aria-pressed", "true");
+			await page.keyboard.type(" tail");
+			await expect(page.locator(".ProseMirror p").first()).toContainText(
+				"Plain intro tail",
+			);
+			await expect(page.locator(".ProseMirror p").first().locator("strong")).toContainText(
+				"tail",
+			);
+
+			await page.locator(".ProseMirror p").first().click();
+			await page.keyboard.press("End");
+			await page.keyboard.press("Shift+ArrowLeft");
+			await page.keyboard.press("Shift+ArrowLeft");
+			await page.keyboard.press("Shift+ArrowLeft");
+			await page.keyboard.press("Shift+ArrowLeft");
+			await italicButton.click();
+			await expect(page.locator(".ProseMirror p").first().locator("em")).toContainText(
+				"tail",
+			);
+			await expect(page.locator(".ProseMirror p").first()).toContainText(
+				"Plain intro tail",
+			);
+
+			await page.locator(".ProseMirror p").first().locator("strong").click();
+			await expect(boldButton).toHaveAttribute("aria-pressed", "true");
+			await expect(h2Button).toHaveAttribute("aria-pressed", "false");
+			await expect(h3Button).toHaveAttribute("aria-pressed", "false");
+
+			await page.locator(".ProseMirror h2").click();
+			await expect(h2Button).toHaveAttribute("aria-pressed", "true");
+			await expect(h3Button).toHaveAttribute("aria-pressed", "false");
+
+			await page.locator(".ProseMirror h3").click();
+			await expect(h2Button).toHaveAttribute("aria-pressed", "false");
+			await expect(h3Button).toHaveAttribute("aria-pressed", "true");
+
+			await page.locator(".ProseMirror ul li").click();
+			await expect(bulletButton).toHaveAttribute("aria-pressed", "true");
+			await expect(numberedButton).toHaveAttribute("aria-pressed", "false");
+			await expect(quoteButton).toHaveAttribute("aria-pressed", "false");
+
+			await page.locator(".ProseMirror ol li").click();
+			await expect(bulletButton).toHaveAttribute("aria-pressed", "false");
+			await expect(numberedButton).toHaveAttribute("aria-pressed", "true");
+			await expect(quoteButton).toHaveAttribute("aria-pressed", "false");
+
+			await page.locator(".ProseMirror blockquote p").click();
+			await expect(bulletButton).toHaveAttribute("aria-pressed", "false");
+			await expect(numberedButton).toHaveAttribute("aria-pressed", "false");
+			await expect(quoteButton).toHaveAttribute("aria-pressed", "true");
 
 			await page.goto(
 				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/memberships`,
