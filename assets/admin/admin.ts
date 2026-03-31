@@ -12,6 +12,8 @@ type SiteImportLookupSource = {
 	full_title: string | null;
 };
 
+const SITE_IMPORT_LOOKUP_TIMEOUT_MS = 5000;
+
 const initSiteImportPrompt = () => {
 	const root = document.querySelector<HTMLElement>("[data-site-import-root]");
 	const form = root?.querySelector<HTMLFormElement>("[data-site-import-form]");
@@ -105,6 +107,11 @@ const initSiteImportPrompt = () => {
 	const lookupExistingSite = async (
 		shortName: string,
 	): Promise<SiteImportLookupSource | null> => {
+		const controller = new AbortController();
+		const timeout = window.setTimeout(() => {
+			controller.abort();
+		}, SITE_IMPORT_LOOKUP_TIMEOUT_MS);
+
 		try {
 			const response = await fetch(
 				`${checkUrl}?short_name=${encodeURIComponent(shortName)}`,
@@ -112,16 +119,18 @@ const initSiteImportPrompt = () => {
 					headers: {
 						Accept: "application/json",
 					},
+					signal: controller.signal,
 				},
 			);
 			if (response.ok) {
 				return (await response.json()) as SiteImportLookupSource;
 			}
-			if (response.status !== 404) {
-				return null;
-			}
+
+			return lookupSiteOnDashboard(shortName);
 		} catch {
 			// Fall back to the dashboard HTML if the lookup endpoint is unavailable.
+		} finally {
+			window.clearTimeout(timeout);
 		}
 
 		return lookupSiteOnDashboard(shortName);
