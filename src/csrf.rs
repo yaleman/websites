@@ -18,13 +18,13 @@ impl SessionCsrfExt for Session {
         let mut tokens = self
             .get::<HashMap<String, String>>(SESSION_CSRF_TOKENS_KEY)
             .await
-            .map_err(|_| SiteError::internal("failed to read csrf state".to_string()))?
+            .map_err(|_| SiteError::internal("failed to read csrf state"))?
             .unwrap_or_default();
         let token = Uuid::now_v7().to_string();
         tokens.insert(scope.to_string(), token.clone());
         self.insert(SESSION_CSRF_TOKENS_KEY, tokens)
             .await
-            .map_err(|_| SiteError::internal("failed to persist csrf state".to_string()))?;
+            .map_err(|_| SiteError::internal("failed to persist csrf state"))?;
         Ok(token)
     }
 
@@ -40,7 +40,7 @@ impl SessionCsrfExt for Session {
         let mut tokens = self
             .get::<HashMap<String, String>>(SESSION_CSRF_TOKENS_KEY)
             .await
-            .map_err(|_| SiteError::internal("failed to read csrf state".to_string()))?
+            .map_err(|_| SiteError::internal("failed to read csrf state"))?
             .unwrap_or_default();
         let Some(expected_token) = tokens.get(scope) else {
             return Err(SiteError::BadRequest("missing csrf state".to_string()));
@@ -52,7 +52,7 @@ impl SessionCsrfExt for Session {
         tokens.remove(scope);
         self.insert(SESSION_CSRF_TOKENS_KEY, tokens)
             .await
-            .map_err(|_| SiteError::internal("failed to persist csrf state".to_string()))?;
+            .map_err(|_| SiteError::internal("failed to persist csrf state"))?;
         Ok(())
     }
 }

@@ -21,7 +21,7 @@ impl SiteErrorPage {
     pub fn new(status_code: StatusCode, title: &str, message: &str) -> Self {
         SiteErrorPage {
             status_code,
-            template_shared: AdminTemplateData::new(title.to_string()).with_hide_nav(true),
+            template_shared: AdminTemplateData::new(title).with_hide_nav(true),
             message: message.to_string(),
         }
     }
@@ -58,8 +58,8 @@ pub enum SiteError {
 }
 
 impl SiteError {
-    pub fn internal(msg: impl ToString) -> Self {
-        SiteError::Internal(msg.to_string())
+    pub fn internal(msg: impl Into<String>) -> Self {
+        SiteError::Internal(msg.into())
     }
 }
 

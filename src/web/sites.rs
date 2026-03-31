@@ -1213,7 +1213,7 @@ pub(crate) async fn admin_site_template_editor(
     )
     .await?;
 
-    let template_shared = AdminTemplateData::new(format!("Template Override: {file_name}"))
+    let template_shared = AdminTemplateData::new(&format!("Template Override: {file_name}"))
         .with_site_context(&site)
         .with_site_publish_configured(site_has_publish_config(state.db.as_ref(), site_id).await?)
         .with_links(vec![
@@ -1387,7 +1387,7 @@ pub(crate) async fn admin_site_render(
             .with_site_publish_configured(
                 site_has_publish_config(state.db.as_ref(), site_id).await?,
             )
-            .with_message(message)
+            .with_message(&message)
             .with_links(vec![
                 AdminLink::new(
                     &format!("/admin/site/{site_id}/content"),

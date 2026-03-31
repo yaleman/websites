@@ -25,11 +25,10 @@ pub(crate) struct AdminTemplateData {
 }
 
 impl AdminTemplateData {
-    pub fn new(title: impl ToString) -> Self {
-        let page_title = title.to_string();
+    pub fn new(page_title: &str) -> Self {
         Self {
-            document_title: page_title.clone(),
-            page_title,
+            document_title: page_title.to_string(),
+            page_title: page_title.to_string(),
             page_message: None,
             page_message_is_toast: false,
             clear_query_param: None,
@@ -43,7 +42,7 @@ impl AdminTemplateData {
         }
     }
 
-    pub fn with_message(self, message: impl ToString) -> Self {
+    pub fn with_message(self, message: &impl ToString) -> Self {
         Self {
             page_message: Some(message.to_string()),
             page_message_is_toast: false,
@@ -88,7 +87,7 @@ impl AdminTemplateData {
         Self { links, ..self }
     }
 
-    pub fn with_nav_search_value(self, value: impl ToString) -> Self {
+    pub fn with_nav_search_value(self, value: &impl ToString) -> Self {
         Self {
             nav_search_value: value.to_string(),
             ..self
@@ -1571,7 +1570,7 @@ pub(crate) async fn current_user(session: &Session) -> Result<entities::user::Mo
     session
         .get::<entities::user::Model>(SESSION_USER)
         .await
-        .map_err(|_| SiteError::internal("failed to read session".to_string()))?
+        .map_err(|_| SiteError::internal("failed to read session"))?
         .ok_or_else(|| SiteError::UnAuthorized("missing user session".to_string()))
 }
 
@@ -1751,7 +1750,7 @@ pub(crate) async fn build_admin_user_profile_template(
         .or(target.email.as_deref())
         .unwrap_or(&target.subject)
         .to_string();
-    let template_shared = AdminTemplateData::new(format!("User Profile: {profile_name}"));
+    let template_shared = AdminTemplateData::new(&format!("User Profile: {profile_name}"));
     let template_shared = if let Some(message) = view_state.page_message {
         if view_state.page_message_is_toast {
             template_shared.with_toast_message(
@@ -1759,7 +1758,7 @@ pub(crate) async fn build_admin_user_profile_template(
                 &view_state.clear_query_param.as_deref().unwrap_or("message"),
             )
         } else {
-            template_shared.with_message(message)
+            template_shared.with_message(&message)
         }
     } else {
         template_shared

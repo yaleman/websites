@@ -21,6 +21,7 @@ The system manages site metadata, content, tags, assets, and memberships in a SQ
 - Runtime logging must use `tracing` only, include timestamps, and write to stdout.
 - In async runtime codepaths, use `tokio::fs` instead of `std::fs` for filesystem operations.
 - Binaries should parse CLI arguments and environment variables via `clap`.
+- In Rust code, string errors are a last resort. Do not use `String`, `&str`, or other stringly-typed errors unless a human has explicitly reviewed and approved that case.
 - All askama templates should derive `askama_web::WebTemplate` so we don't have to manually implement `IntoResponse`
 - All admin templates should be based on `base_template.html` to keep navigation/UI consistent.
 - Each admin view should have its own template file (no shared admin view template).

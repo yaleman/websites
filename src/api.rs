@@ -413,7 +413,7 @@ async fn to_asset_detail(
 ) -> Result<ApiAssetDetail, ApiError> {
     let variants = list_asset_variants(db, asset.id)
         .await
-        .map_err(ApiError::Internal)?;
+        .map_err(|err| ApiError::Internal(err.to_string()))?;
     let thumbnail_url = variants
         .iter()
         .find(|variant| variant.variant_kind == "thumbnail")
@@ -514,7 +514,7 @@ pub(crate) async fn api_site_content_list(
 
     let mut items = list_content(state.db.as_ref(), site_id, page_type)
         .await
-        .map_err(ApiError::Internal)?;
+        .map_err(|err| ApiError::Internal(err.to_string()))?;
     items.sort_by(|left, right| right.created_at.cmp(&left.created_at));
     items.truncate(limit);
 
@@ -635,7 +635,7 @@ pub(crate) async fn api_site_content_create(
             .ok_or_else(|| ApiError::Internal("missing first revision for content".to_string()))?;
         crate::assign_tags_to_content(&txn, site_id, content.id, revision.id, tags)
             .await
-            .map_err(ApiError::Internal)?;
+            .map_err(|err| ApiError::Internal(err.to_string()))?;
     }
 
     log_audit_event(
@@ -777,7 +777,7 @@ pub(crate) async fn api_site_content_update(
         },
     )
     .await
-    .map_err(ApiError::Internal)?;
+    .map_err(|err| ApiError::Internal(err.to_string()))?;
 
     if let Some(tags) = tags {
         let revision = entities::content_revision::Entity::find()
@@ -789,7 +789,7 @@ pub(crate) async fn api_site_content_update(
             .ok_or_else(|| ApiError::Internal("missing latest revision for content".to_string()))?;
         sync_tags_to_content(&txn, site_id, content.id, revision.id, tags)
             .await
-            .map_err(ApiError::Internal)?;
+            .map_err(|err| ApiError::Internal(err.to_string()))?;
     }
 
     log_audit_event(
@@ -1241,7 +1241,7 @@ mod tests {
         session
             .insert(SESSION_USER, user)
             .await
-            .map_err(|_| SiteError::internal("failed to seed session".to_string()))?;
+            .map_err(|_| SiteError::internal("failed to seed session"))?;
         Ok(StatusCode::NO_CONTENT)
     }
 

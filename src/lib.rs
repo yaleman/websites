@@ -314,7 +314,9 @@ pub async fn render_site(
 ) -> Result<usize, SiteError> {
     let override_root = resolve_site_template_override_root_with_upload_root(upload_root, site_id);
     fs::create_dir_all(rendered_dir).await?;
-    let tmp_root = tempfile::tempdir_in(rendered_dir).map_err(SiteError::internal)?;
+    let tmp_root = tempfile::tempdir_in(rendered_dir).map_err(|err| {
+        SiteError::internal(format!("failed to create temporary directory: {err}"))
+    })?;
     let files_written = render_site_into_dir(
         db,
         site_id,
@@ -764,7 +766,7 @@ async fn copy_directory_recursive(
                 continue;
             }
 
-            Err(error) => return Err(SiteError::internal(error)),
+            Err(error) => return Err(SiteError::internal(error.to_string())),
         };
 
         fs::create_dir_all(&destination_path).await?;
@@ -1393,7 +1395,7 @@ pub async fn import_wordpress_xml<C: ConnectionTrait>(
         if !tag_names.is_empty() {
             let revision = get_revision_by_number(db, content_model.id, 1)
                 .await
-                .map_err(SiteError::internal)?
+                .map_err(|error| SiteError::internal(format!("failed to get revision: {error}")))?
                 .ok_or_else(|| {
                     SiteError::internal(format!(
                         "missing initial revision for imported content {}",
@@ -1402,7 +1404,7 @@ pub async fn import_wordpress_xml<C: ConnectionTrait>(
                 })?;
             assign_tags_to_content(db, site_id, content_model.id, revision.id, tag_names)
                 .await
-                .map_err(SiteError::internal)?;
+                .map_err(|err| SiteError::internal(err.to_string()))?;
         }
 
         let mut alias_paths = HashSet::new();
@@ -1726,7 +1728,7 @@ pub async fn delete_tag<C: ConnectionTrait>(
         .one(db)
         .await
         .map_err(SiteError::from)?
-        .ok_or_else(|| SiteError::internal("tag not found".to_string()))?;
+        .ok_or_else(|| SiteError::internal("tag not found"))?;
     if tag.site_id != site_id {
         return Err(SiteError::UnAuthorized(
             "tag does not belong to site".to_string(),
@@ -2128,7 +2130,7 @@ pub async fn assign_tags_to_content<C: ConnectionTrait>(
     content_id: Uuid,
     revision_id: Uuid,
     tag_names: Vec<String>,
-) -> Result<(), String> {
+) -> Result<(), SiteError> {
     let mut unique = HashSet::new();
 
     for raw in tag_names {
@@ -2146,7 +2148,7 @@ pub async fn assign_tags_to_content<C: ConnectionTrait>(
             .filter(entities::tag::Column::Name.eq(normalized.clone()))
             .one(db)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| SiteError::internal(format!("failed to query tag: {error}")))?;
         let tag = match existing_tag {
             Some(tag) => tag,
             None => create_tag(
@@ -2157,7 +2159,7 @@ pub async fn assign_tags_to_content<C: ConnectionTrait>(
                 },
             )
             .await
-            .map_err(|err| format!("Failed to create tag: {}", err))?,
+            .map_err(|err| SiteError::internal(format!("Failed to create tag: {}", err)))?,
         };
 
         let existing_content_tag = entities::content_tag::Entity::find()
@@ -2165,17 +2167,18 @@ pub async fn assign_tags_to_content<C: ConnectionTrait>(
             .filter(entities::content_tag::Column::TagId.eq(tag.id))
             .one(db)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                SiteError::internal(format!("failed to query content tag: {error}"))
+            })?;
         if existing_content_tag.is_none() {
             let content_tag = entities::content_tag::ActiveModel {
                 id: Set(Uuid::now_v7()),
                 content_id: Set(content_id),
                 tag_id: Set(tag.id),
             };
-            content_tag
-                .insert(db)
-                .await
-                .map_err(|error| error.to_string())?;
+            content_tag.insert(db).await.map_err(|error| {
+                SiteError::internal(format!("failed to insert content tag: {error}"))
+            })?;
         }
 
         let existing_revision_tag = entities::content_revision_tag::Entity::find()
@@ -2183,7 +2186,9 @@ pub async fn assign_tags_to_content<C: ConnectionTrait>(
             .filter(entities::content_revision_tag::Column::TagId.eq(tag.id))
             .one(db)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                SiteError::internal(format!("failed to query revision tag: {error}"))
+            })?;
         if existing_revision_tag.is_none() {
             let revision_tag = entities::content_revision_tag::ActiveModel {
                 id: Set(Uuid::now_v7()),
@@ -2191,10 +2196,9 @@ pub async fn assign_tags_to_content<C: ConnectionTrait>(
                 content_id: Set(content_id),
                 tag_id: Set(tag.id),
             };
-            revision_tag
-                .insert(db)
-                .await
-                .map_err(|error| error.to_string())?;
+            revision_tag.insert(db).await.map_err(|error| {
+                SiteError::internal(format!("failed to insert revision tag: {error}"))
+            })?;
         }
     }
 
@@ -2208,7 +2212,7 @@ pub async fn sync_tags_to_content<C: ConnectionTrait>(
     content_id: Uuid,
     revision_id: Uuid,
     tag_names: Vec<String>,
-) -> Result<(), String> {
+) -> Result<(), SiteError> {
     let mut unique = HashSet::new();
     let mut desired_tag_ids = Vec::new();
 
@@ -2227,7 +2231,7 @@ pub async fn sync_tags_to_content<C: ConnectionTrait>(
             .filter(entities::tag::Column::Name.eq(normalized.clone()))
             .one(db)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| SiteError::internal(format!("failed to query tag: {error}")))?;
         let tag = match existing_tag {
             Some(tag) => tag,
             None => create_tag(
@@ -2238,7 +2242,7 @@ pub async fn sync_tags_to_content<C: ConnectionTrait>(
                 },
             )
             .await
-            .map_err(|error| error.to_string())?,
+            .map_err(|error| SiteError::internal(format!("failed to create tag: {error}")))?,
         };
         desired_tag_ids.push(tag.id);
     }
@@ -2247,13 +2251,15 @@ pub async fn sync_tags_to_content<C: ConnectionTrait>(
         .filter(entities::content_tag::Column::ContentId.eq(content_id))
         .all(db)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| SiteError::internal(format!("failed to query content tags: {error}")))?;
     for existing in existing_content_tags {
         if !desired_tag_ids.contains(&existing.tag_id) {
             entities::content_tag::Entity::delete_by_id(existing.id)
                 .exec(db)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| {
+                    SiteError::internal(format!("failed to delete content tag: {error}"))
+                })?;
         }
     }
 
@@ -2261,13 +2267,15 @@ pub async fn sync_tags_to_content<C: ConnectionTrait>(
         .filter(entities::content_revision_tag::Column::RevisionId.eq(revision_id))
         .all(db)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| SiteError::internal(format!("failed to query revision tags: {error}")))?;
     for existing in existing_revision_tags {
         if !desired_tag_ids.contains(&existing.tag_id) {
             entities::content_revision_tag::Entity::delete_by_id(existing.id)
                 .exec(db)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| {
+                    SiteError::internal(format!("failed to delete revision tag: {error}"))
+                })?;
         }
     }
 
