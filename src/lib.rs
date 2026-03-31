@@ -219,6 +219,12 @@ pub fn resolve_site_templates_root() -> PathBuf {
         return PathBuf::from(value);
     }
 
+    for candidate in bundled_site_templates_roots() {
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+
     PathBuf::from(SITE_TEMPLATES_DIR)
 }
 
@@ -593,6 +599,29 @@ fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
     }
 }
 
+fn bundled_site_templates_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+
+    push_unique_path(&mut roots, PathBuf::from(SITE_TEMPLATES_DIR));
+    push_unique_path(&mut roots, PathBuf::from("/site_templates"));
+
+    if let Ok(exe) = env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        push_unique_path(&mut roots, dir.join("site_templates"));
+        if let Some(parent) = dir.parent() {
+            push_unique_path(&mut roots, parent.join("site_templates"));
+        }
+    }
+
+    push_unique_path(
+        &mut roots,
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("site_templates"),
+    );
+
+    roots
+}
+
 async fn load_template(
     template_root: &Path,
     override_root: &Path,
@@ -617,21 +646,25 @@ async fn load_template(
                 .unwrap_or(template_root)
                 .join("default")
                 .join(filename);
-            let bundled_root = PathBuf::from(SITE_TEMPLATES_DIR);
             let mut fallback_paths = Vec::new();
+            let bundled_roots = bundled_site_templates_roots();
 
             if let Some(template_name) = template_root.file_name() {
-                push_unique_path(
-                    &mut fallback_paths,
-                    bundled_root.join(template_name).join(filename),
-                );
+                for bundled_root in &bundled_roots {
+                    push_unique_path(
+                        &mut fallback_paths,
+                        bundled_root.join(template_name).join(filename),
+                    );
+                }
             }
 
             push_unique_path(&mut fallback_paths, configured_default_path);
-            push_unique_path(
-                &mut fallback_paths,
-                bundled_root.join("default").join(filename),
-            );
+            for bundled_root in bundled_roots {
+                push_unique_path(
+                    &mut fallback_paths,
+                    bundled_root.join("default").join(filename),
+                );
+            }
 
             let mut last_error = None;
             for fallback_path in fallback_paths {
@@ -3786,6 +3819,42 @@ mod tests {
                 env::remove_var("WEBSITES_SITE_TEMPLATES_DIR");
             },
         }
+    }
+
+    #[tokio::test]
+    async fn render_content_preview_uses_bundled_default_template_outside_repo_cwd() {
+        let _env_lock = crate::test_support::env_lock().lock_owned().await;
+        let original_cwd = env::current_dir().expect("failed to capture current dir");
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+        let templates_dir = TempDir::new().expect("failed to create templates dir");
+        let upload_root = TempDir::new().expect("failed to create upload dir");
+        let working_dir = TempDir::new().expect("failed to create working dir");
+
+        env::set_current_dir(working_dir.path()).expect("failed to change current dir");
+
+        let content = create_content_fixture(
+            &db,
+            site.id,
+            PageType::Page,
+            "bundled-default-off-cwd",
+            true,
+        )
+        .await;
+        let render_result = render_content_preview(
+            &db,
+            site.id,
+            content.id,
+            templates_dir.path().into(),
+            upload_root.path(),
+        )
+        .await;
+
+        env::set_current_dir(&original_cwd).expect("failed to restore current dir");
+
+        let rendered = render_result.expect("failed to render preview");
+        assert!(rendered.contains(r#"<link rel="stylesheet" href="/assets/style.css" />"#));
+        assert!(rendered.contains(r#"<section class="content"><p>Body</p></section>"#));
     }
 
     #[tokio::test]
