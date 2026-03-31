@@ -549,6 +549,16 @@ async fn render_content_html(
     Ok(render_markdown(&expanded))
 }
 
+fn absolute_log_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+
+    env::current_dir()
+        .map(|cwd| cwd.join(path))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
 async fn load_template(
     template_root: &Path,
     override_root: &Path,
@@ -565,7 +575,7 @@ async fn load_template(
         Err(err) => {
             debug!(
                 error=?err,
-                path=?template_path.display(),
+                path=%absolute_log_path(&template_path).display(),
                 "Failed to load template, using fallback",
             );
             let fallback_path = template_root
@@ -573,20 +583,20 @@ async fn load_template(
                 .unwrap_or(template_root)
                 .join("default")
                 .join(filename);
-            let fallback_path = if fallback_path.exists() {
-                fallback_path
-            } else {
-                PathBuf::from(SITE_TEMPLATES_DIR)
-                    .join("default")
-                    .join(filename)
+            let fallback_path = match fs::try_exists(&fallback_path).await {
+                Ok(true) => fallback_path,
+                Ok(false) | Err(_) => resolve_site_templates_root().join("default").join(filename),
             };
-            let fallback = fs::read_to_string(fallback_path).await.inspect_err(|err| {
-                error!(
-                    error=?err,
-                    path=?filename,
-                    "Failed to load fallback template"
-                )
-            })?;
+            let fallback_log_path = absolute_log_path(&fallback_path);
+            let fallback = fs::read_to_string(&fallback_path)
+                .await
+                .inspect_err(|err| {
+                    error!(
+                        error=?err,
+                        path=%fallback_log_path.display(),
+                        "Failed to load fallback template"
+                    )
+                })?;
             Ok(fallback)
         }
     }
@@ -3676,6 +3686,90 @@ mod tests {
 
         assert!(rendered.contains("data-template=\"override\""));
         assert!(!rendered.contains("data-template=\"shared\""));
+    }
+
+    #[tokio::test]
+    async fn render_content_preview_uses_configured_root_for_default_template_fallback() {
+        let _env_lock = crate::test_support::env_lock().lock_owned().await;
+        let original = env::var_os("WEBSITES_SITE_TEMPLATES_DIR");
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+        let templates_dir = TempDir::new().expect("failed to create templates dir");
+        let configured_templates_dir =
+            TempDir::new().expect("failed to create configured templates dir");
+        let default_root = configured_templates_dir.path().join("default");
+
+        fs::create_dir_all(&default_root)
+            .await
+            .expect("failed to create default template root");
+        fs::write(
+            default_root.join("base_template.html"),
+            r#"<!doctype html><html><body>{% block content %}{% endblock %}</body></html>"#,
+        )
+        .await
+        .expect("failed to write base template");
+        fs::write(
+            default_root.join("index.html"),
+            r#"{% extends "base_template.html" %}{% block content %}<main>index</main>{% endblock %}"#,
+        )
+        .await
+        .expect("failed to write index template");
+        fs::write(
+            default_root.join("post.html"),
+            r#"{% extends "base_template.html" %}{% block content %}<article>{{title}}</article>{% endblock %}"#,
+        )
+        .await
+        .expect("failed to write post template");
+        fs::write(
+            default_root.join("page.html"),
+            r#"{% extends "base_template.html" %}{% block content %}<article data-template="configured-fallback">{{title}}</article>{% endblock %}"#,
+        )
+        .await
+        .expect("failed to write page template");
+        fs::write(
+            default_root.join("tag.html"),
+            r#"{% extends "base_template.html" %}{% block content %}<section>tag</section>{% endblock %}"#,
+        )
+        .await
+        .expect("failed to write tag template");
+        fs::write(default_root.join("rss.xml"), "<rss />")
+            .await
+            .expect("failed to write rss template");
+        fs::write(default_root.join("atom.xml"), "<feed />")
+            .await
+            .expect("failed to write atom template");
+
+        unsafe {
+            env::set_var(
+                "WEBSITES_SITE_TEMPLATES_DIR",
+                configured_templates_dir.path(),
+            );
+        }
+
+        let content =
+            create_content_fixture(&db, site.id, PageType::Page, "default-page", true).await;
+        let rendered = render_content_preview(
+            &db,
+            site.id,
+            content.id,
+            templates_dir
+                .path()
+                .to_str()
+                .expect("invalid templates path"),
+        )
+        .await
+        .expect("failed to render preview");
+
+        assert!(rendered.contains("data-template=\"configured-fallback\""));
+
+        match original {
+            Some(value) => unsafe {
+                env::set_var("WEBSITES_SITE_TEMPLATES_DIR", value);
+            },
+            None => unsafe {
+                env::remove_var("WEBSITES_SITE_TEMPLATES_DIR");
+            },
+        }
     }
 
     #[tokio::test]
