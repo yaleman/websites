@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # ----------------
 FROM node:22-bookworm-slim AS admin-assets
 
@@ -8,45 +10,63 @@ ENV PATH="${PNPM_HOME}:${PATH}"
 
 RUN corepack enable
 
-COPY package.json pnpm-lock.yaml rspack.config.ts tsconfig.json /app/
+COPY package.json pnpm-lock.yaml /app/
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm install --frozen-lockfile
+
+COPY rspack.config.ts tsconfig.json /app/
 COPY assets /app/assets
 COPY templates /app/templates
 COPY postcss.config.mjs /app/postcss.config.mjs
 
-RUN pnpm install --frozen-lockfile
 RUN pnpm run build:admin
 
 # ----------------
 FROM debian:12 AS builder
 
-ARG GITHUB_SHA="$(git rev-parse HEAD)"
-
-# fixing the issue with getting OOMKilled in BuildKit
-# ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
-RUN mkdir /app
-COPY . /app/
-
 WORKDIR /app
-# install the dependencies
+
+ENV CARGO_HOME="/usr/local/cargo"
+ENV RUSTUP_HOME="/usr/local/rustup"
+ENV PATH="${CARGO_HOME}/bin:${PATH}"
+ENV CC="/usr/bin/clang"
+ENV CARGO_TARGET_DIR="/tmp/target"
+
 RUN apt-get update && apt-get install -y \
     curl \
     clang \
     git \
     build-essential \
     pkg-config \
-    mold
-# install rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-RUN mv /root/.cargo/bin/* /usr/local/bin/
-# do the build bits
-ENV CC="/usr/bin/clang"
-RUN cargo build --release --quiet --locked
+    mold \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+
+COPY Cargo.toml Cargo.lock /app/
+COPY vendor /app/vendor
+COPY src/lib.rs src/main.rs /app/src/
+COPY src/bin/session_seed.rs /app/src/bin/session_seed.rs
+
+RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cargo-git,target=/usr/local/cargo/git \
+    cargo fetch --locked
+
+COPY src /app/src
+COPY templates /app/templates
+COPY openapi.json /app/openapi.json
+
+RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=cargo-target,target=/tmp/target \
+    cargo build --release --quiet --locked \
+    && cp /tmp/target/release/websites /app/websites
 
 # ----------------
 FROM gcr.io/distroless/cc-debian12 AS final
 
 WORKDIR /
-COPY --from=builder /app/target/release/websites /websites
+COPY --from=builder /app/websites /websites
 COPY --from=admin-assets /app/admin-ui-assets /admin-ui-assets
 COPY site_templates /site_templates
 
