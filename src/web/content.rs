@@ -1314,24 +1314,41 @@ pub(crate) async fn admin_site_preview_asset(
         .await
         .map_err(|error| SiteError::internal(format!("failed to load site {site_id}: {error}")))?;
     let safe_asset_path = sanitize_preview_asset_path(&asset_path)?;
-    let file_path = state
-        .site_templates_root
-        .join(site.template_name)
-        .join("assets")
-        .join(safe_asset_path);
-    let metadata = fs::metadata(&file_path).await.map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            SiteError::NotFound
-        } else {
-            SiteError::internal(format!(
-                "failed to inspect preview asset {}: {error}",
-                file_path.display()
-            ))
+    let candidate_paths = crate::site_template_asset_candidates(
+        state.site_templates_root.as_path(),
+        &site.template_name,
+        safe_asset_path.as_path(),
+    );
+    let mut resolved_path = None;
+
+    for candidate_path in &candidate_paths {
+        let metadata = match fs::metadata(candidate_path).await {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(SiteError::internal(format!(
+                    "failed to inspect preview asset {}: {error}",
+                    candidate_path.display()
+                )));
+            }
+        };
+
+        if metadata.is_file() {
+            resolved_path = Some(candidate_path.clone());
+            break;
         }
-    })?;
-    if !metadata.is_file() {
-        return Err(SiteError::NotFound);
     }
+
+    let Some(file_path) = resolved_path else {
+        warn!(
+            site_id=%site_id,
+            template_name=%site.template_name,
+            asset_path=%safe_asset_path.display(),
+            candidate_paths=?candidate_paths,
+            "preview asset not found",
+        );
+        return Err(SiteError::NotFound);
+    };
 
     let mime = mime_guess::from_path(&file_path).first_or_octet_stream();
     let mut body = fs::read(&file_path).await.map_err(|error| {

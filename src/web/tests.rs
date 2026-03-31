@@ -955,6 +955,70 @@ fn test_app_router(mut state: AdminState, session_store: MemoryStore) -> TestRou
     }
 }
 
+#[tokio::test]
+async fn admin_site_preview_asset_uses_bundled_assets_when_configured_root_is_empty() {
+    let db = Arc::new(test_db_start().await);
+    let site = crate::create_site(
+        db.as_ref(),
+        "preview-site".to_string(),
+        "Preview Site".to_string(),
+        DEFAULT_TEMPLATE_NAME.to_string(),
+    )
+    .await
+    .expect("failed to create site");
+    let viewer = crate::entities::user::create_user(
+        db.as_ref(),
+        "viewer",
+        Some("viewer@example.com"),
+        Some("Viewer"),
+        false,
+    )
+    .await
+    .expect("failed to create viewer");
+    crate::create_membership(
+        db.as_ref(),
+        crate::NewMembership {
+            site_id: site.id,
+            user_id: viewer.id,
+            role: SiteRole::Viewer,
+        },
+    )
+    .await
+    .expect("failed to create viewer membership");
+
+    let session_store = MemoryStore::default();
+    let session_layer = SessionManagerLayer::new(session_store.clone())
+        .with_secure(false)
+        .with_expiry(Expiry::OnSessionEnd);
+    let assets_dir = tempfile::tempdir().expect("failed to create temp assets dir");
+    let upload_root = tempfile::tempdir().expect("failed to create temp upload root");
+    let site_templates_root = tempfile::tempdir().expect("failed to create temp template root");
+    let mut state = test_admin_state(db.clone());
+    state.upload_root = upload_root.path().to_path_buf();
+    state.site_templates_root = site_templates_root.path().to_path_buf();
+
+    let router =
+        build_admin_app(state.clone(), assets_dir.path(), upload_root.path()).layer(session_layer);
+    let cookie = seed_session_cookie(state, session_store, viewer.id).await;
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri(format!("/admin/site/{}/preview-assets/style.css", site.id))
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .expect("failed to build preview asset request"),
+        )
+        .await
+        .expect("failed to call preview asset route");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read preview asset response");
+    let css = String::from_utf8(body.to_vec()).expect("preview asset body should be utf-8");
+    assert!(css.contains("font-family"));
+}
+
 fn multipart_json_request_body(json: &str) -> (String, Vec<u8>) {
     multipart_json_request_body_with_replace(json, false)
 }
