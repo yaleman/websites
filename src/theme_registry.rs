@@ -560,7 +560,7 @@ mod tests {
 
     fn seed_site_templates_root() -> TempDir {
         let root = TempDir::new().expect("failed to create template root");
-        let default_source = Path::new(crate::constants::SITE_TEMPLATES_DIR).join("default");
+        let default_source = crate::resolve_site_templates_root().join("default");
         copy_dir_recursive(&default_source, &root.path().join(DEFAULT_TEMPLATE_NAME));
         root
     }

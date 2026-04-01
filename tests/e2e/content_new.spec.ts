@@ -10,8 +10,31 @@ import {
 	createUser,
 	seedSession,
 	setupHarness,
+	tinyPngBytes,
 } from "./support";
 import { defaultTimeout } from "./global_setup";
+
+async function uploadAssetFromPage(
+	page: import("@playwright/test").Page,
+	harness: { port: number; siteId: string },
+	filename: string,
+) {
+	await page.goto(
+		`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/assets/new`,
+		{ waitUntil: "domcontentloaded" },
+	);
+	await page.locator('input[type="file"]').setInputFiles({
+		name: filename,
+		mimeType: "image/png",
+		buffer: Buffer.from(tinyPngBytes),
+	});
+	await Promise.all([
+		page.waitForURL(
+			`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/assets`,
+		),
+		page.getByRole("button", { name: "Upload", exact: true }).click(),
+	]);
+}
 
 test.describe("content new editor", () => {
 	test.setTimeout(defaultTimeout);
@@ -311,6 +334,108 @@ test.describe("content new editor", () => {
 			await expect(page.locator("#slug")).toHaveValue("changed-title");
 			await page.locator("#title").fill("Another Title");
 			await expect(page.locator("#slug")).toHaveValue("another-title");
+
+			await context.close();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
+	test("refreshes the image picker after uploads from another tab", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const subject = "cross-tab-asset-refresh";
+			const userId = await createUser(harness, subject);
+			await addMembership(harness, userId, "owner");
+
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				subject,
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/new`,
+				{ waitUntil: "domcontentloaded" },
+			);
+
+			const uploadPage = await context.newPage();
+			await uploadAssetFromPage(uploadPage, harness, "fresh-cross-tab-image.png");
+			await uploadPage.close();
+
+			await page.bringToFront();
+			await page.getByRole("button", { name: "Image" }).click();
+			const modal = page.getByRole("dialog", { name: "Insert image" });
+			await expect(modal).toBeVisible();
+			await expect(
+				modal.locator(".asset-card", {
+					hasText: "fresh-cross-tab-image.png",
+				}),
+			).toBeVisible();
+
+			await context.close();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
+	test("refreshes an open image picker after uploading from the modal link", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const subject = "modal-link-asset-refresh";
+			const userId = await createUser(harness, subject);
+			await addMembership(harness, userId, "owner");
+
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				subject,
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/new`,
+				{ waitUntil: "domcontentloaded" },
+			);
+
+			await page.getByRole("button", { name: "Image" }).click();
+			const modal = page.getByRole("dialog", { name: "Insert image" });
+			await expect(modal).toBeVisible();
+
+			const uploadLink = modal.getByRole("link", { name: "Upload image" });
+			await expect(uploadLink).toHaveAttribute(
+				"href",
+				`/admin/site/${harness.siteId}/assets/new`,
+			);
+			await expect(uploadLink).toHaveAttribute("target", "_blank");
+			await expect(uploadLink).toHaveAttribute("rel", "noopener noreferrer");
+			await expect(
+				modal.locator(".asset-card", {
+					hasText: "modal-refresh-image.png",
+				}),
+			).toHaveCount(0);
+
+			const [uploadPage] = await Promise.all([
+				context.waitForEvent("page"),
+				uploadLink.click(),
+			]);
+			await uploadPage.waitForURL(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/assets/new`,
+			);
+			await uploadAssetFromPage(uploadPage, harness, "modal-refresh-image.png");
+			await uploadPage.close();
+
+			await page.bringToFront();
+			await expect(
+				modal.locator(".asset-card", {
+					hasText: "modal-refresh-image.png",
+				}),
+			).toBeVisible();
 
 			await context.close();
 		} finally {

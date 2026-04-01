@@ -207,7 +207,7 @@ fn copy_dir_recursive(source: &StdPath, target: &StdPath) {
 
 fn test_site_templates_root() -> tempfile::TempDir {
     let root = tempfile::tempdir().expect("failed to create temp template root");
-    let default_source = std::path::Path::new(crate::constants::SITE_TEMPLATES_DIR).join("default");
+    let default_source = crate::resolve_site_templates_root().join("default");
     let default_target = root.path().join("default");
     copy_dir_recursive(&default_source, &default_target);
     root
