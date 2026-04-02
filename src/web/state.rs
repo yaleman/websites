@@ -1,5 +1,6 @@
 use super::content::format_optional_datetime;
 use super::*;
+use serde::{Deserialize, Deserializer};
 
 pub(crate) struct AdminTemplateData {
     pub(crate) page_title: String,
@@ -246,6 +247,7 @@ pub(crate) struct AdminContentListTemplate {
 
     pub(crate) site_id: Uuid,
     pub(crate) page_type_options: Vec<AdminSelectOption>,
+    pub(crate) status_options: Vec<AdminSelectOption>,
     pub(crate) current_sort_by: &'static str,
     pub(crate) sort_headers: Vec<AdminContentListSortHeader>,
     pub(crate) content_rows: Vec<AdminContentListRow>,
@@ -790,6 +792,7 @@ pub(crate) struct AdminUserProfileQuery {
 #[derive(Debug, Deserialize)]
 pub(crate) struct AdminContentListQuery {
     pub(crate) page_type: Option<String>,
+    pub(crate) status: Option<ContentListStatusFilter>,
     pub(crate) sort_by: Option<String>,
 }
 
@@ -965,6 +968,68 @@ impl ContentListPageTypeFilter {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContentListStatusFilter {
+    All,
+    Draft,
+    Published,
+}
+
+impl ContentListStatusFilter {
+    pub(crate) fn draft(self) -> Option<bool> {
+        match self {
+            Self::All => None,
+            Self::Draft => Some(true),
+            Self::Published => Some(false),
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Draft => "draft",
+            Self::Published => "published",
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::All => "All statuses",
+            Self::Draft => "Draft",
+            Self::Published => "Published",
+        }
+    }
+
+    pub(crate) fn options(self) -> Vec<AdminSelectOption> {
+        [Self::All, Self::Draft, Self::Published]
+            .into_iter()
+            .map(|option| AdminSelectOption {
+                label: option.label(),
+                value: option.as_str(),
+                selected: option == self,
+            })
+            .collect()
+    }
+}
+
+impl<'de> Deserialize<'de> for ContentListStatusFilter {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "all" => Ok(Self::All),
+            "draft" => Ok(Self::Draft),
+            "published" => Ok(Self::Published),
+            _ => Err(serde::de::Error::unknown_variant(
+                &value,
+                &["all", "draft", "published"],
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ContentListSortBy {
     TitleAsc,
     TitleDesc,
@@ -1123,6 +1188,7 @@ pub(crate) fn sort_content_items(
 pub(crate) fn content_list_href(
     site_id: Uuid,
     page_type_filter: ContentListPageTypeFilter,
+    status_filter: ContentListStatusFilter,
     sort_by: ContentListSortBy,
 ) -> String {
     let mut href = format!("/admin/site/{site_id}/content?sort_by={}", sort_by.as_str());
@@ -1130,12 +1196,17 @@ pub(crate) fn content_list_href(
         href.push_str("&page_type=");
         href.push_str(page_type_filter.as_str());
     }
+    if status_filter != ContentListStatusFilter::All {
+        href.push_str("&status=");
+        href.push_str(status_filter.as_str());
+    }
     href
 }
 
 pub(crate) fn build_content_list_sort_headers(
     site_id: Uuid,
     page_type_filter: ContentListPageTypeFilter,
+    status_filter: ContentListStatusFilter,
     sort_by: ContentListSortBy,
 ) -> Vec<AdminContentListSortHeader> {
     [
@@ -1147,7 +1218,12 @@ pub(crate) fn build_content_list_sort_headers(
     .into_iter()
     .map(|(column, label)| AdminContentListSortHeader {
         label,
-        href: content_list_href(site_id, page_type_filter, sort_by.next_for_column(column)),
+        href: content_list_href(
+            site_id,
+            page_type_filter,
+            status_filter,
+            sort_by.next_for_column(column),
+        ),
         indicator: sort_by.indicator_for(column),
     })
     .collect()
@@ -1261,7 +1337,7 @@ pub(crate) async fn load_content_scan_reports(
     scan_limit: usize,
 ) -> Result<LoadedContentScanReports, SiteError> {
     let context = ScanContext::load(db, site_id, content_id, domains_raw).await?;
-    let mut content_items = list_content(db, site_id, None)
+    let mut content_items = list_content(db, site_id, None, None)
         .await
         .map_err(SiteError::internal)?;
     content_items.sort_by(|left, right| {

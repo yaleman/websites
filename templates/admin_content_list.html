@@ -9,6 +9,14 @@
       {% endfor %}
     </select>
   </div>
+  <div class="min-w-[16rem] flex-1">
+    <label for="status">Status</label>
+    <select id="status" name="status">
+      {% for option in status_options %}
+      <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
   <input type="hidden" name="sort_by" value="{{ current_sort_by }}" />
   <button type="submit" class="btn shrink-0">Filter</button>
 </form>

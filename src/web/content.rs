@@ -57,9 +57,17 @@ pub(crate) async fn admin_site_content_list(
     });
 
     let page_type_filter = ContentListPageTypeFilter::from_query(query.page_type.as_deref());
+    let status_filter = query.status.unwrap_or(ContentListStatusFilter::All);
     let sort_by = ContentListSortBy::from_query(query.sort_by.as_deref());
 
-    match list_content(state.db.as_ref(), site_id, page_type_filter.page_type()).await {
+    match list_content(
+        state.db.as_ref(),
+        site_id,
+        page_type_filter.page_type(),
+        status_filter.draft(),
+    )
+    .await
+    {
         Ok(mut pages) => {
             sort_content_items(&mut pages, sort_by);
 
@@ -88,8 +96,14 @@ pub(crate) async fn admin_site_content_list(
 
                 site_id,
                 page_type_options: page_type_filter.options(),
+                status_options: status_filter.options(),
                 current_sort_by: sort_by.as_str(),
-                sort_headers: build_content_list_sort_headers(site_id, page_type_filter, sort_by),
+                sort_headers: build_content_list_sort_headers(
+                    site_id,
+                    page_type_filter,
+                    status_filter,
+                    sort_by,
+                ),
                 content_rows: pages
                     .into_iter()
                     .map(|item| AdminContentListRow {

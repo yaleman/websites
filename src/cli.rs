@@ -1036,7 +1036,7 @@ pub async fn execute(
             }
             ContentCommands::List { site_id, page_type } => {
                 let page_filter = page_type.as_deref().map(PageType::from_str).transpose()?;
-                let content = list_content(db_ref, site_id, page_filter).await?;
+                let content = list_content(db_ref, site_id, page_filter, None).await?;
                 if content.is_empty() {
                     println!("no content");
                     return Ok(());

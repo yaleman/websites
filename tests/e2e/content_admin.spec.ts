@@ -152,6 +152,7 @@ test.describe("content admin", () => {
 				slug: "zulu-post",
 				pageContent: "Zulu body",
 				creatorSub: subject,
+				draft: false,
 			});
 			await createContent(harness, {
 				pageType: "page",
@@ -171,8 +172,31 @@ test.describe("content admin", () => {
 				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content`,
 				{ waitUntil: "domcontentloaded" },
 			);
+			await expect(page).toHaveURL(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content`,
+			);
+			await expect(page.locator("tbody tr")).toHaveCount(3);
+
+			await page.selectOption("#status", "draft");
+			await page.getByRole("button", { name: "Filter" }).click();
+			await expect(page).toHaveURL(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content?page_type=all&status=draft&sort_by=created_desc`,
+			);
+			await expect(page.locator("tbody tr")).toHaveCount(2);
+			await expect(page.locator("body")).not.toContainText("Zulu Post");
+
+			await page.selectOption("#status", "published");
+			await page.getByRole("button", { name: "Filter" }).click();
+			await expect(page).toHaveURL(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content?page_type=all&status=published&sort_by=created_desc`,
+			);
+			await expect(page.locator("tbody tr")).toHaveCount(1);
+			await expect(page.locator("body")).toContainText("Zulu Post");
+			await expect(page.locator("body")).not.toContainText("Alpha Page");
+			await expect(page.locator("body")).not.toContainText("Beta Page");
 
 			await page.selectOption("#page_type", "page");
+			await page.selectOption("#status", "draft");
 			await page.getByRole("button", { name: "Filter" }).click();
 			await page
 				.getByRole("columnheader", { name: "Title" })
@@ -184,7 +208,7 @@ test.describe("content admin", () => {
 				.click();
 
 			await expect(page).toHaveURL(
-				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content?sort_by=title_desc&page_type=page`,
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content?sort_by=title_desc&page_type=page&status=draft`,
 			);
 
 			await expect(
