@@ -35,6 +35,23 @@ const initSiteImportPrompt = () => {
 	}
 
 	let requestSerial = 0;
+	let duplicateConfirmationRequired = false;
+	let lookupPending = false;
+
+	const syncSubmitState = () => {
+		if (lookupPending) {
+			submit.disabled = true;
+			submit.textContent = "Checking existing site";
+			return;
+		}
+		if (duplicateConfirmationRequired) {
+			submit.disabled = !replace.checked;
+			submit.textContent = "Replace site and import";
+			return;
+		}
+		submit.disabled = false;
+		submit.textContent = "Import site";
+	};
 
 	const setStatus = (message: string | null) => {
 		if (!status) {
@@ -47,8 +64,9 @@ const initSiteImportPrompt = () => {
 	const resetPrompt = () => {
 		prompt.hidden = true;
 		replace.checked = false;
-		submit.disabled = false;
-		submit.textContent = "Import site";
+		duplicateConfirmationRequired = false;
+		lookupPending = false;
+		syncSubmitState();
 		setStatus(null);
 	};
 
@@ -57,9 +75,9 @@ const initSiteImportPrompt = () => {
 		details.textContent = lookup.full_title
 			? `Site ${lookup.short_name} already exists as ${lookup.full_title}. Importing will replace the existing site.`
 			: `Site ${lookup.short_name} already exists. Importing will replace the existing site.`;
-		replace.checked = false;
-		submit.disabled = true;
-		submit.textContent = "Replace site and import";
+		duplicateConfirmationRequired = true;
+		lookupPending = false;
+		syncSubmitState();
 		setStatus(null);
 	};
 
@@ -137,10 +155,7 @@ const initSiteImportPrompt = () => {
 	};
 
 	replace.addEventListener("change", () => {
-		submit.disabled = prompt.hidden || !replace.checked;
-		submit.textContent = replace.checked
-			? "Replace site and import"
-			: "Import site";
+		syncSubmitState();
 	});
 
 	form.addEventListener("submit", (event) => {
@@ -175,8 +190,9 @@ const initSiteImportPrompt = () => {
 			prompt.hidden = false;
 			details.textContent = `Checking whether site ${shortName} already exists...`;
 			replace.checked = false;
-			submit.disabled = true;
-			submit.textContent = "Checking existing site";
+			duplicateConfirmationRequired = true;
+			lookupPending = true;
+			syncSubmitState();
 			setStatus(null);
 
 			const lookup = await lookupExistingSite(shortName);
@@ -184,6 +200,10 @@ const initSiteImportPrompt = () => {
 				return;
 			}
 			if (!lookup) {
+				prompt.hidden = true;
+				duplicateConfirmationRequired = false;
+				lookupPending = false;
+				syncSubmitState();
 				setStatus(
 					"Could not verify whether this site already exists. You can still submit the import.",
 				);

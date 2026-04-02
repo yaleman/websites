@@ -37,6 +37,37 @@ const bindConfirmingForms = () => {
 		});
 };
 
+const assetLibraryRefreshKey = (siteId: string) => `site-assets-updated:${siteId}`;
+
+const announceAssetLibraryUpdate = () => {
+	const currentPath = window.location.pathname;
+	const currentMatch = currentPath.match(/^\/admin\/site\/([^/]+)\/assets$/);
+	if (!currentMatch) {
+		return;
+	}
+
+	let referrerPath = "";
+	try {
+		if (document.referrer) {
+			referrerPath = new URL(document.referrer).pathname;
+		}
+	} catch {
+		return;
+	}
+
+	const [, siteId] = currentMatch;
+	if (
+		referrerPath !== `/admin/site/${siteId}/assets/new` &&
+		!new RegExp(`^/admin/site/${siteId}/assets/[^/]+/replace$`).test(
+			referrerPath,
+		)
+	) {
+		return;
+	}
+
+	window.localStorage.setItem(assetLibraryRefreshKey(siteId), `${Date.now()}`);
+};
+
 const normalizeSlug = (value: string) => {
 	let slug = "";
 	let previousDash = false;
@@ -250,8 +281,11 @@ const createAssetModal = (editor: Editor) => {
 
 	let selectedAsset: components["schemas"]["AssetLibraryItem"] | null = null;
 	let searchTimeout: number | null = null;
+	let isModalOpen = false;
+	let refreshPromise: Promise<void> | null = null;
 
 	const setModalOpen = (open: boolean) => {
+		isModalOpen = open;
 		if (open) {
 			modal.removeAttribute("hidden");
 			modal.setAttribute("aria-hidden", "false");
@@ -313,6 +347,7 @@ const createAssetModal = (editor: Editor) => {
 		const { data, error } = await OPENAPI_CLIENT.GET(
 			ApiPaths.api_site_assets_library,
 			{
+				cache: "no-store",
 				params: {
 					path: { site_id: siteId },
 					query: {
@@ -331,58 +366,85 @@ const createAssetModal = (editor: Editor) => {
 		return payload.assets ?? [];
 	};
 
-	const loadRecent = async () => {
-		if (!recentGrid) {
+	const restoreSelection = (
+		assets: components["schemas"]["AssetLibraryItem"][],
+	) => {
+		if (!selectedAsset) {
+			clearSelection();
 			return;
 		}
-		renderAssetGrid(recentGrid, [], "Loading recent images...");
-		clearSelection();
-		try {
-			const assets = await fetchAssets({
-				limit: 12,
-				type: typeSelect?.value ?? "all",
-			});
-			renderAssetGrid(recentGrid, assets, "No images uploaded yet.");
-			clearSelection();
-		} catch {
-			renderAssetGrid(recentGrid, [], "Unable to load recent images.");
-			clearSelection();
+		const matchingAsset =
+			assets.find((asset) => asset.id === selectedAsset?.id) ?? null;
+		if (matchingAsset) {
+			setSelectedAsset(matchingAsset);
+			return;
 		}
+		clearSelection();
 	};
 
-	const loadSearch = async (query: string) => {
-		if (!resultsGrid) {
+	const refreshVisibleAssets = async () => {
+		if (refreshPromise) {
+			await refreshPromise;
 			return;
 		}
-		renderAssetGrid(resultsGrid, [], "Searching...");
-		clearSelection();
+
+		refreshPromise = (async () => {
+			const query = searchInput?.value.trim() ?? "";
+			const selectedType = typeSelect?.value ?? "all";
+			const showingResults = query.length > 0;
+
+			setSectionVisibility(showingResults);
+
+			if (showingResults) {
+				if (!resultsGrid) {
+					return;
+				}
+				renderAssetGrid(resultsGrid, [], "Searching...");
+				try {
+					const assets = await fetchAssets({
+						query,
+						limit: 50,
+						type: selectedType,
+					});
+					renderAssetGrid(resultsGrid, assets, "No matches found.");
+					restoreSelection(assets);
+				} catch {
+					renderAssetGrid(resultsGrid, [], "Unable to load search results.");
+					clearSelection();
+				}
+				return;
+			}
+
+			if (!recentGrid) {
+				return;
+			}
+			renderAssetGrid(recentGrid, [], "Loading recent images...");
+			try {
+				const assets = await fetchAssets({
+					limit: 12,
+					type: selectedType,
+				});
+				renderAssetGrid(recentGrid, assets, "No images uploaded yet.");
+				restoreSelection(assets);
+			} catch {
+				renderAssetGrid(recentGrid, [], "Unable to load recent images.");
+				clearSelection();
+			}
+		})();
+
 		try {
-			const assets = await fetchAssets({
-				query,
-				limit: 50,
-				type: typeSelect?.value ?? "all",
-			});
-			renderAssetGrid(resultsGrid, assets, "No matches found.");
-			clearSelection();
-		} catch {
-			renderAssetGrid(resultsGrid, [], "Unable to load search results.");
-			clearSelection();
+			await refreshPromise;
+		} finally {
+			refreshPromise = null;
 		}
 	};
 
 	const scheduleSearch = () => {
-		const query = searchInput?.value.trim() ?? "";
 		if (searchTimeout) {
 			window.clearTimeout(searchTimeout);
 		}
 		searchTimeout = window.setTimeout(() => {
-			if (query) {
-				setSectionVisibility(true);
-				loadSearch(query);
-			} else {
-				setSectionVisibility(false);
-				loadRecent();
-			}
+			void refreshVisibleAssets();
 		}, 300);
 	};
 
@@ -480,7 +542,7 @@ const createAssetModal = (editor: Editor) => {
 	const open = () => {
 		resetModalState();
 		setModalOpen(true);
-		loadRecent();
+		void refreshVisibleAssets();
 	};
 
 	const close = () => {
@@ -499,6 +561,27 @@ const createAssetModal = (editor: Editor) => {
 		if (event.key === "Escape") {
 			close();
 		}
+	});
+
+	window.addEventListener("focus", () => {
+		if (!isModalOpen) {
+			return;
+		}
+		void refreshVisibleAssets();
+	});
+
+	document.addEventListener("visibilitychange", () => {
+		if (!isModalOpen || document.visibilityState !== "visible") {
+			return;
+		}
+		void refreshVisibleAssets();
+	});
+
+	window.addEventListener("storage", (event) => {
+		if (!isModalOpen || event.key !== assetLibraryRefreshKey(siteId)) {
+			return;
+		}
+		void refreshVisibleAssets();
 	});
 
 	searchInput?.addEventListener("input", scheduleSearch);
@@ -1236,6 +1319,7 @@ function doPageStartup() {
 	bindNewContentSlugController();
 	initMembershipCreateForm();
 	bindConfirmingForms();
+	announceAssetLibraryUpdate();
 	initEditor();
 
 	const apiUrl = new URL("/", window.location.origin).href;
