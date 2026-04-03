@@ -2396,3 +2396,96 @@ async fn admin_site_wordpress_import_reports_updated_password_protected_titles()
     assert!(content[0].draft);
     assert_eq!(content[0].published_at, None);
 }
+
+#[tokio::test]
+async fn admin_site_wordpress_import_accepts_large_xml_uploads() {
+    let db = Arc::new(test_db_start().await);
+    let site = crate::create_site(
+        db.as_ref(),
+        "wordpress-site".to_string(),
+        "WordPress Site".to_string(),
+        DEFAULT_TEMPLATE_NAME.to_string(),
+    )
+    .await
+    .expect("failed to create site");
+    let user = crate::entities::user::create_user(
+        db.as_ref(),
+        "author",
+        Some("author@example.com"),
+        Some("Author"),
+        false,
+    )
+    .await
+    .expect("failed to create author");
+    crate::create_membership(
+        db.as_ref(),
+        crate::NewMembership {
+            site_id: site.id,
+            user_id: user.id,
+            role: SiteRole::Author,
+        },
+    )
+    .await
+    .expect("failed to create author membership");
+
+    let large_body = "A".repeat(3 * 1024 * 1024);
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:wp="http://wordpress.org/export/1.2/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <item>
+      <title>Imported Post</title>
+      <link>https://example.com/2020/01/imported-post/?p=123</link>
+      <wp:post_id>123</wp:post_id>
+      <wp:post_name>imported-post</wp:post_name>
+      <wp:post_type>post</wp:post_type>
+      <wp:status>publish</wp:status>
+      <content:encoded><![CDATA[{large_body}]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"#
+    );
+    let (boundary, body) = multipart_wordpress_xml_request_body(&xml);
+
+    let session_store = MemoryStore::default();
+    let router = test_app_router(test_admin_state(db.clone()), session_store.clone());
+    let cookie =
+        seed_session_cookie(test_admin_state(db.clone()), session_store.clone(), user.id).await;
+
+    let response = router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/site/{}/settings/wordpress-import", site.id))
+                .header(header::COOKIE, &cookie)
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .expect("failed to build wordpress import request"),
+        )
+        .await
+        .expect("failed to call wordpress import route");
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::LOCATION)
+            .expect("missing location header")
+            .to_str()
+            .expect("invalid location header"),
+        format!("/admin/site/{}/settings", site.id)
+    );
+
+    let content = crate::list_content(db.as_ref(), site.id, Some(PageType::Post), None)
+        .await
+        .expect("failed to list site content");
+    assert_eq!(content.len(), 1);
+    assert_eq!(content[0].title, "Imported Post");
+    assert_eq!(content[0].page_content.len(), large_body.len());
+}
