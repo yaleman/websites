@@ -275,6 +275,12 @@ test.describe("content admin", () => {
 			);
 			await expect(page.locator("body")).toContainText("Current Site Match");
 			await expect(page.locator("body")).not.toContainText("Other Site Match");
+			await page.getByRole("link", { name: "Current Site Match" }).click();
+			await expect(page).toHaveURL(
+				new RegExp(
+					`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/[^/]+/edit$`,
+				),
+			);
 
 			await page.goto(`https://127.0.0.1:${harness.port}/admin`, {
 				waitUntil: "domcontentloaded",
@@ -289,6 +295,12 @@ test.describe("content admin", () => {
 			await expect(page.locator("body")).toContainText("Other Site Match");
 			await expect(page.locator("body")).toContainText("Test Site");
 			await expect(page.locator("body")).toContainText("Other Search Site");
+			await page.getByRole("link", { name: "Other Site Match" }).click();
+			await expect(page).toHaveURL(
+				new RegExp(
+					`https://127.0.0.1:${harness.port}/admin/site/[^/]+/content/[^/]+/edit$`,
+				),
+			);
 
 			await context.close();
 		} finally {

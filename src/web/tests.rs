@@ -123,6 +123,34 @@ fn sort_content_items_orders_titles_descending_case_insensitively() {
 }
 
 #[test]
+fn build_search_rows_links_to_editor() {
+    let site_id = Uuid::now_v7();
+    let content_id = Uuid::now_v7();
+    let rows = build_search_rows(
+        vec![entities::content_item::Model {
+            id: content_id,
+            site_id,
+            page_type: PageType::Page,
+            title: "Search Result".to_string(),
+            slug: "search-result".to_string(),
+            page_content: "body".to_string(),
+            draft: false,
+            creator_sub: "tester".to_string(),
+            created_at: Utc::now(),
+            last_updated: None,
+            published_at: None,
+        }],
+        &HashMap::from([(site_id, "Test Site".to_string())]),
+    );
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].edit_href,
+        format!("/admin/site/{site_id}/content/{content_id}/edit")
+    );
+}
+
+#[test]
 fn content_list_status_filter_deserializes_expected_values() {
     let draft = ContentListStatusFilter::deserialize(StrDeserializer::<ValueError>::new("draft"))
         .expect("expected draft status filter to deserialize");
@@ -258,7 +286,13 @@ fn copy_dir_recursive(source: &StdPath, target: &StdPath) {
 
 fn test_site_templates_root() -> tempfile::TempDir {
     let root = tempfile::tempdir().expect("failed to create temp template root");
-    let default_source = crate::resolve_site_templates_root().join("default");
+    let default_source = crate::site_template_dir_candidates(
+        &crate::resolve_site_templates_root(),
+        DEFAULT_TEMPLATE_NAME,
+    )
+    .into_iter()
+    .find(|path| path.exists())
+    .expect("expected a bundled default site template directory");
     let default_target = root.path().join("default");
     copy_dir_recursive(&default_source, &default_target);
     root
