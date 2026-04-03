@@ -797,11 +797,6 @@ pub(crate) struct AdminContentListQuery {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct AdminSiteSettingsQuery {
-    pub(crate) imported: Option<usize>,
-}
-
-#[derive(Debug, Deserialize)]
 pub(crate) struct AdminSiteRenderQuery {
     pub(crate) publish: Option<usize>,
 }

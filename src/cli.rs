@@ -1346,9 +1346,9 @@ pub async fn execute(
                 let imported = db_ref
                     .transaction::<_, _, String>(|txn| {
                         Box::pin(async move {
-                            let mut imported = 0usize;
+                            let mut imported = WordpressImportSummary::default();
                             for current_file in &file_path {
-                                imported = imported.saturating_add(
+                                imported.merge(
                                     import_wordpress(txn, site_id, current_file, &creator_sub)
                                         .await
                                         .map_err(|err| err.to_string())?,
@@ -1361,7 +1361,12 @@ pub async fn execute(
                                 "content_item",
                                 &site_id,
                                 Some(site_id),
-                                Some(json!({"imported": imported, "files": file_path})),
+                                Some(json!({
+                                    "imported": imported.imported_count,
+                                    "updated": imported.updated_count,
+                                    "updated_titles": imported.updated_titles,
+                                    "files": file_path,
+                                })),
                             )
                             .await
                             .map_err(|err| format!("Failed to create audit event: {}", err))?;
@@ -1370,7 +1375,7 @@ pub async fn execute(
                     })
                     .await
                     .map_err(|error| format!("failed to import wordpress: {error}"))?;
-                println!("imported {} wordpress items", imported);
+                println!("{}", format_wordpress_import_summary(&imported));
                 Ok(())
             }
         },
