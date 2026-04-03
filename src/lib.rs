@@ -1254,16 +1254,22 @@ pub async fn update_content<C: ConnectionTrait>(
     Ok(content)
 }
 
-/// Returns all content records for a site, optionally filtered by page_type.
+/// Returns all content records for a site, optionally filtered by page_type and draft status.
 pub async fn list_content(
     db: &DatabaseConnection,
     site_id: Uuid,
     page_type: Option<PageType>,
+    draft: Option<bool>,
 ) -> Result<Vec<entities::content_item::Model>, String> {
     let query = entities::content_item::Entity::find()
         .filter(entities::content_item::Column::SiteId.eq(site_id));
     let query = if let Some(filter) = page_type {
         query.filter(entities::content_item::Column::PageType.eq(filter))
+    } else {
+        query
+    };
+    let query = if let Some(filter) = draft {
+        query.filter(entities::content_item::Column::Draft.eq(filter))
     } else {
         query
     };
@@ -2807,17 +2813,17 @@ mod tests {
 
         let content = create_content_fixture(&db, site.id, PageType::Post, "hello", true).await;
 
-        let all_content = list_content(&db, site.id, None)
+        let all_content = list_content(&db, site.id, None, None)
             .await
             .expect("failed to list content");
         assert_eq!(all_content.len(), 1);
 
-        let post_content = list_content(&db, site.id, Some(PageType::Post))
+        let post_content = list_content(&db, site.id, Some(PageType::Post), None)
             .await
             .expect("failed to list post content");
         assert_eq!(post_content.len(), 1);
 
-        let page_content = list_content(&db, site.id, Some(PageType::Page))
+        let page_content = list_content(&db, site.id, Some(PageType::Page), None)
             .await
             .expect("failed to list page content");
         assert_eq!(page_content.len(), 0);
@@ -2935,6 +2941,37 @@ mod tests {
             .expect("failed to load revision tag links");
         assert_eq!(revision_tag_links.len(), 1);
         assert_eq!(revision_tag_links[0].content_id, content.id);
+    }
+
+    #[tokio::test]
+    async fn list_content_filters_by_draft_status() {
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+
+        create_content_fixture(&db, site.id, PageType::Page, "draft-page", true).await;
+        create_content_fixture(&db, site.id, PageType::Post, "published-post", false).await;
+
+        let all_content = list_content(&db, site.id, None, None)
+            .await
+            .expect("failed to list all content");
+        let draft_content = list_content(&db, site.id, None, Some(true))
+            .await
+            .expect("failed to list draft content");
+        let published_content = list_content(&db, site.id, None, Some(false))
+            .await
+            .expect("failed to list published content");
+
+        assert_eq!(all_content.len(), 2);
+        assert_eq!(draft_content.len(), 1);
+        assert_eq!(published_content.len(), 1);
+        assert!(
+            draft_content[0].draft,
+            "expected draft filter to return drafts"
+        );
+        assert!(
+            !published_content[0].draft,
+            "expected published filter to return non-drafts"
+        );
     }
 
     #[tokio::test]
@@ -3344,7 +3381,7 @@ mod tests {
         .expect("failed to import wordpress data");
         assert_eq!(imported, 1);
 
-        let content = list_content(&db, site.id, None)
+        let content = list_content(&db, site.id, None, None)
             .await
             .expect("failed to list content");
         assert_eq!(content.len(), 1);
@@ -3414,7 +3451,7 @@ mod tests {
         .expect("failed to import wordpress data");
         assert_eq!(imported, 1);
 
-        let content = list_content(&db, site.id, Some(PageType::Page))
+        let content = list_content(&db, site.id, Some(PageType::Page), None)
             .await
             .expect("failed to list imported page content");
         assert_eq!(content.len(), 1);
@@ -3496,7 +3533,7 @@ mod tests {
         .expect("failed to import wordpress data");
         assert_eq!(imported, 2);
 
-        let content = list_content(&db, site.id, None)
+        let content = list_content(&db, site.id, None, None)
             .await
             .expect("failed to list content");
         assert_eq!(content.len(), 2);
@@ -3550,7 +3587,7 @@ mod tests {
         assert_eq!(imported_first, 1);
         assert_eq!(imported_second, 0);
 
-        let content = list_content(&db, site.id, None)
+        let content = list_content(&db, site.id, None, None)
             .await
             .expect("failed to list content");
         assert_eq!(content.len(), 1);
@@ -3601,7 +3638,7 @@ mod tests {
         .expect("failed to import wordpress data");
         assert_eq!(imported, 1);
 
-        let content = list_content(&db, site.id, Some(PageType::Post))
+        let content = list_content(&db, site.id, Some(PageType::Post), None)
             .await
             .expect("failed to list imported content");
         assert_eq!(content.len(), 1);

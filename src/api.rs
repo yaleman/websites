@@ -512,7 +512,7 @@ pub(crate) async fn api_site_content_list(
     let page_type = parse_page_type(query.page_type.as_deref())?;
     let limit = query.limit.unwrap_or(50).clamp(1, 200) as usize;
 
-    let mut items = list_content(state.db.as_ref(), site_id, page_type)
+    let mut items = list_content(state.db.as_ref(), site_id, page_type, None)
         .await
         .map_err(|err| ApiError::Internal(err.to_string()))?;
     items.sort_by(|left, right| right.created_at.cmp(&left.created_at));

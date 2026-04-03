@@ -10,6 +10,7 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use axum::routing::get;
+use serde::de::value::{Error as ValueError, StrDeserializer};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use tower::ServiceExt;
@@ -119,6 +120,56 @@ fn sort_content_items_orders_titles_descending_case_insensitively() {
 
     let titles = items.into_iter().map(|item| item.title).collect::<Vec<_>>();
     assert_eq!(titles, vec!["Zulu post", "Beta page", "alpha page"]);
+}
+
+#[test]
+fn content_list_status_filter_deserializes_expected_values() {
+    let draft = ContentListStatusFilter::deserialize(StrDeserializer::<ValueError>::new("draft"))
+        .expect("expected draft status filter to deserialize");
+    let published =
+        ContentListStatusFilter::deserialize(StrDeserializer::<ValueError>::new("published"))
+            .expect("expected published status filter to deserialize");
+    let all = ContentListStatusFilter::deserialize(StrDeserializer::<ValueError>::new("all"))
+        .expect("expected all status filter to deserialize");
+
+    assert_eq!(draft, ContentListStatusFilter::Draft);
+    assert_eq!(published, ContentListStatusFilter::Published);
+    assert_eq!(all, ContentListStatusFilter::All);
+    assert!(
+        ContentListStatusFilter::deserialize(StrDeserializer::<ValueError>::new("invalid"))
+            .is_err(),
+        "expected invalid status filter to fail deserialization"
+    );
+}
+
+#[test]
+fn content_list_href_preserves_non_default_status_filter() {
+    let href = content_list_href(
+        Uuid::nil(),
+        ContentListPageTypeFilter::Page,
+        ContentListStatusFilter::Draft,
+        ContentListSortBy::TitleDesc,
+    );
+
+    assert_eq!(
+        href,
+        "/admin/site/00000000-0000-0000-0000-000000000000/content?sort_by=title_desc&page_type=page&status=draft"
+    );
+}
+
+#[test]
+fn content_list_href_omits_default_status_filter() {
+    let href = content_list_href(
+        Uuid::nil(),
+        ContentListPageTypeFilter::All,
+        ContentListStatusFilter::All,
+        ContentListSortBy::CreatedDesc,
+    );
+
+    assert_eq!(
+        href,
+        "/admin/site/00000000-0000-0000-0000-000000000000/content?sort_by=created_desc"
+    );
 }
 
 #[tokio::test]
@@ -2118,7 +2169,7 @@ async fn admin_site_wordpress_import_is_idempotent_per_file() {
         format!("/admin/site/{}/settings?imported=1", site.id)
     );
 
-    let first_content = crate::list_content(db.as_ref(), site.id, None)
+    let first_content = crate::list_content(db.as_ref(), site.id, None, None)
         .await
         .expect("failed to list content after first wordpress import");
     assert_eq!(first_content.len(), 1);
@@ -2152,7 +2203,7 @@ async fn admin_site_wordpress_import_is_idempotent_per_file() {
         format!("/admin/site/{}/settings?imported=0", site.id)
     );
 
-    let second_content = crate::list_content(db.as_ref(), site.id, None)
+    let second_content = crate::list_content(db.as_ref(), site.id, None, None)
         .await
         .expect("failed to list content after second wordpress import");
     assert_eq!(second_content.len(), 1);
