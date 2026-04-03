@@ -160,7 +160,7 @@ test.describe("site settings", () => {
 			await page.getByRole("button", { name: "Import WordPress XML" }).click();
 
 			await expect(page).toHaveURL(
-				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/settings?imported=1`,
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/settings`,
 			);
 			await expect(page.locator(".message--toast")).toContainText(
 				"Imported 1 WordPress item.",
@@ -178,7 +178,7 @@ test.describe("site settings", () => {
 			await page.getByRole("button", { name: "Import WordPress XML" }).click();
 
 			await expect(page).toHaveURL(
-				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/settings?imported=0`,
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/settings`,
 			);
 			await expect(page.locator(".message--toast")).toContainText(
 				"No new WordPress items were imported.",

@@ -3,6 +3,35 @@ use super::dashboard::{load_log_view, normalize_log_level_filter};
 use super::state::*;
 use super::*;
 
+const WORDPRESS_IMPORT_FLASH_KEY: &str = "wordpress_import_flash";
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct WordpressImportFlash {
+    imported_count: usize,
+    updated_count: usize,
+    updated_titles: Vec<String>,
+}
+
+impl From<&crate::WordpressImportSummary> for WordpressImportFlash {
+    fn from(summary: &crate::WordpressImportSummary) -> Self {
+        Self {
+            imported_count: summary.imported_count,
+            updated_count: summary.updated_count,
+            updated_titles: summary.updated_titles.clone(),
+        }
+    }
+}
+
+impl From<WordpressImportFlash> for crate::WordpressImportSummary {
+    fn from(flash: WordpressImportFlash) -> Self {
+        Self {
+            imported_count: flash.imported_count,
+            updated_count: flash.updated_count,
+            updated_titles: flash.updated_titles,
+        }
+    }
+}
+
 pub(crate) async fn admin_sites_new(
     State(state): State<AdminState>,
 ) -> Result<Response, SiteError> {
@@ -356,7 +385,6 @@ pub(crate) async fn admin_site_settings(
     State(state): State<AdminState>,
     session: Session,
     Path(site_id): Path<Uuid>,
-    Query(query): Query<AdminSiteSettingsQuery>,
 ) -> Result<AdminSiteSettingsTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
     let viewer = current_user(&session).await?;
@@ -418,12 +446,21 @@ pub(crate) async fn admin_site_settings(
         ));
     }
 
+    let import_flash = session
+        .remove::<WordpressImportFlash>(WORDPRESS_IMPORT_FLASH_KEY)
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!("failed to read wordpress import flash: {error}"))
+        })?;
     let template_shared = AdminTemplateData::new("Site Settings")
         .with_site_context(&site)
         .with_site_publish_configured(site_publish_configured)
         .with_links(links);
-    let template_shared = if let Some(imported) = query.imported {
-        template_shared.with_toast_message(&wordpress_import_message(imported), &"imported")
+    let template_shared = if let Some(import_flash) = import_flash {
+        template_shared.with_toast_message(
+            &wordpress_import_message(&import_flash),
+            &"wordpress-import",
+        )
     } else {
         template_shared
     };
@@ -978,7 +1015,9 @@ pub(crate) async fn admin_site_wordpress_import(
         &site.id.to_string(),
         Some(site.id),
         Some(json!({
-            "imported": imported,
+            "imported": imported.imported_count,
+            "updated": imported.updated_count,
+            "updated_titles": imported.updated_titles,
             "file_name": uploaded_name,
         })),
     )
@@ -986,11 +1025,18 @@ pub(crate) async fn admin_site_wordpress_import(
     .map_err(|error| {
         SiteError::internal(format!("failed to log WordPress import audit: {error}"))
     })?;
+    session
+        .insert(
+            WORDPRESS_IMPORT_FLASH_KEY,
+            WordpressImportFlash::from(&imported),
+        )
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!("failed to store wordpress import flash: {error}"))
+        })?;
     txn.commit().await?;
 
-    Ok(Redirect::to(&format!(
-        "/admin/site/{site_id}/settings?imported={imported}"
-    )))
+    Ok(Redirect::to(&format!("/admin/site/{site_id}/settings")))
 }
 
 pub(crate) async fn admin_site_settings_update(
@@ -1053,14 +1099,8 @@ pub(crate) async fn admin_site_settings_update(
     Ok(Redirect::to(&format!("/admin/site/{site_id}/settings")))
 }
 
-pub(crate) fn wordpress_import_message(imported: usize) -> String {
-    if imported == 0 {
-        "No new WordPress items were imported.".to_string()
-    } else if imported == 1 {
-        "Imported 1 WordPress item.".to_string()
-    } else {
-        format!("Imported {imported} WordPress items.")
-    }
+fn wordpress_import_message(imported: &WordpressImportFlash) -> String {
+    crate::format_wordpress_import_summary(&imported.clone().into())
 }
 
 pub(crate) async fn collect_site_media_filenames(

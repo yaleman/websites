@@ -1,6 +1,9 @@
 use super::state::*;
 use super::*;
 use super::{assets::*, content::*, dashboard::*, sites::*, themes::*};
+use axum::extract::DefaultBodyLimit;
+
+const WORDPRESS_IMPORT_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 pub(crate) async fn health_check() -> Json<&'static str> {
     Json("ok")
@@ -122,7 +125,8 @@ pub(crate) fn build_admin_app(
         )
         .route(
             "/admin/site/{site_id}/settings/wordpress-import",
-            axum::routing::post(admin_site_wordpress_import),
+            axum::routing::post(admin_site_wordpress_import)
+                .layer(DefaultBodyLimit::max(WORDPRESS_IMPORT_MAX_BYTES)),
         )
         .route(
             "/admin/site/{site_id}/publish",

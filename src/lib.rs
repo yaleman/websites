@@ -161,6 +161,63 @@ pub struct UpdateContent {
     pub editor_sub: String,
 }
 
+const WORDPRESS_PASSWORD_PROTECTED_TITLE_PREFIX: &str = "[PASSWORD-PROTECTED] ";
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct WordpressImportSummary {
+    pub imported_count: usize,
+    pub updated_count: usize,
+    pub updated_titles: Vec<String>,
+}
+
+impl WordpressImportSummary {
+    pub fn merge(&mut self, other: Self) {
+        self.imported_count = self.imported_count.saturating_add(other.imported_count);
+        self.updated_count = self.updated_count.saturating_add(other.updated_count);
+        for title in other.updated_titles {
+            self.push_updated_title(title);
+        }
+    }
+
+    pub fn push_updated_title(&mut self, title: String) {
+        if self
+            .updated_titles
+            .iter()
+            .any(|existing| existing == &title)
+        {
+            return;
+        }
+        self.updated_titles.push(title);
+    }
+}
+
+pub fn format_wordpress_import_summary(summary: &WordpressImportSummary) -> String {
+    let mut parts = Vec::new();
+
+    match summary.imported_count {
+        0 if summary.updated_count == 0 => {
+            parts.push("No new WordPress items were imported.".to_string());
+        }
+        0 => {}
+        1 => parts.push("Imported 1 WordPress item.".to_string()),
+        count => parts.push(format!("Imported {count} WordPress items.")),
+    }
+
+    match summary.updated_count {
+        0 => {}
+        1 => parts.push(format!(
+            "Updated 1 existing WordPress item: {}.",
+            summary.updated_titles.join(", ")
+        )),
+        count => parts.push(format!(
+            "Updated {count} existing WordPress items: {}.",
+            summary.updated_titles.join(", ")
+        )),
+    }
+
+    parts.join(" ")
+}
+
 #[derive(Clone, Serialize)]
 struct SiteListItem {
     title: String,
@@ -1370,6 +1427,7 @@ struct WordpressItem {
     post_type: Option<String>,
     title: Option<String>,
     slug: Option<String>,
+    post_password: Option<String>,
     content: Option<String>,
     status: Option<String>,
     post_date: Option<String>,
@@ -1385,7 +1443,7 @@ pub async fn import_wordpress<C: ConnectionTrait>(
     site_id: Uuid,
     file_path: &str,
     creator_sub: &str,
-) -> Result<usize, SiteError> {
+) -> Result<WordpressImportSummary, SiteError> {
     let xml = fs::read_to_string(file_path).await?;
     import_wordpress_xml(db, site_id, &xml, creator_sub).await
 }
@@ -1395,9 +1453,9 @@ pub async fn import_wordpress_xml<C: ConnectionTrait>(
     site_id: Uuid,
     xml: &str,
     creator_sub: &str,
-) -> Result<usize, SiteError> {
+) -> Result<WordpressImportSummary, SiteError> {
     let items = parse_wordpress_wxr(xml)?;
-    let mut imported = 0usize;
+    let mut summary = WordpressImportSummary::default();
 
     for item in items {
         let Some(post_type) = item
@@ -1410,14 +1468,20 @@ pub async fn import_wordpress_xml<C: ConnectionTrait>(
             continue;
         };
 
-        let title = item.title.unwrap_or_else(|| "Untitled".to_string());
+        let source_title = item.title.unwrap_or_else(|| "Untitled".to_string());
+        let password_protected = wordpress_post_has_password(item.post_password.as_deref());
+        let stored_title = if password_protected {
+            wordpress_password_protected_title(&source_title)
+        } else {
+            source_title.clone()
+        };
         let slug = item
             .slug
             .filter(|slug| !slug.trim().is_empty())
-            .unwrap_or_else(|| normalize_slug(&title));
+            .unwrap_or_else(|| normalize_slug(&source_title));
         let content = item.content.unwrap_or_default();
         let status = item.status.unwrap_or_else(|| "draft".to_string());
-        let draft = status != "publish";
+        let draft = password_protected || status != "publish";
         let tag_names = item.tags;
         let created_at =
             resolve_wordpress_timestamp(item.post_date_gmt.as_deref(), item.post_date.as_deref());
@@ -1438,7 +1502,7 @@ pub async fn import_wordpress_xml<C: ConnectionTrait>(
             known_aliases.push(alias_path);
         }
 
-        if wordpress_item_exists(
+        if let Some(existing_content) = find_wordpress_existing_item(
             db,
             site_id,
             post_type,
@@ -1447,6 +1511,27 @@ pub async fn import_wordpress_xml<C: ConnectionTrait>(
         )
         .await?
         {
+            if password_protected
+                && wordpress_existing_item_requires_password_protection_update(
+                    &existing_content,
+                    stored_title.as_str(),
+                )
+            {
+                let updated = reconcile_wordpress_password_protected_content(
+                    db,
+                    existing_content,
+                    stored_title.as_str(),
+                    creator_sub,
+                )
+                .await
+                .map_err(|error| {
+                    SiteError::internal(format!(
+                        "failed to update password-protected imported content: {error}"
+                    ))
+                })?;
+                summary.updated_count = summary.updated_count.saturating_add(1);
+                summary.push_updated_title(updated.title);
+            }
             continue;
         }
 
@@ -1455,7 +1540,7 @@ pub async fn import_wordpress_xml<C: ConnectionTrait>(
             NewContent {
                 site_id,
                 page_type: post_type,
-                title,
+                title: stored_title,
                 slug,
                 page_content: content,
                 draft,
@@ -1498,10 +1583,94 @@ pub async fn import_wordpress_xml<C: ConnectionTrait>(
             .await?;
         }
 
-        imported = imported.saturating_add(1);
+        summary.imported_count = summary.imported_count.saturating_add(1);
     }
 
-    Ok(imported)
+    Ok(summary)
+}
+
+async fn reconcile_wordpress_password_protected_content<C: ConnectionTrait>(
+    db: &C,
+    existing: entities::content_item::Model,
+    stored_title: &str,
+    editor_sub: &str,
+) -> Result<entities::content_item::Model, String> {
+    let now = Utc::now();
+    let mut active = existing.clone().into_active_model();
+    active.title = Set(stored_title.to_string());
+    active.draft = Set(true);
+    active.published_at = Set(None);
+    active.last_updated = Set(Some(now));
+
+    let content: entities::content_item::Model = active
+        .update(db)
+        .await
+        .map_err(|error: DbErr| error.to_string())?;
+
+    let revisions = entities::content_revision::Entity::find()
+        .filter(entities::content_revision::Column::ContentId.eq(content.id))
+        .all(db)
+        .await
+        .map_err(|error: DbErr| error.to_string())?;
+    let revision_number = i32::try_from(revisions.len())
+        .map_err(|error: std::num::TryFromIntError| error.to_string())?
+        .saturating_add(1);
+
+    let revision = entities::content_revision::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        content_id: Set(content.id),
+        site_id: Set(content.site_id),
+        revision_number: Set(revision_number),
+        title: Set(content.title.clone()),
+        slug: Set(content.slug.clone()),
+        page_content: Set(content.page_content.clone()),
+        draft: Set(content.draft),
+        page_type: Set(content.page_type),
+        editor_sub: Set(editor_sub.to_string()),
+        created_at: Set(now),
+    }
+    .insert(db)
+    .await
+    .map_err(|error| error.to_string())?;
+
+    let content_tags = entities::content_tag::Entity::find()
+        .filter(entities::content_tag::Column::ContentId.eq(content.id))
+        .all(db)
+        .await
+        .map_err(|error: DbErr| error.to_string())?;
+
+    for content_tag in content_tags {
+        entities::content_revision_tag::ActiveModel {
+            id: Set(Uuid::now_v7()),
+            revision_id: Set(revision.id),
+            content_id: Set(content.id),
+            tag_id: Set(content_tag.tag_id),
+        }
+        .insert(db)
+        .await
+        .map_err(|error: DbErr| error.to_string())?;
+    }
+
+    let aliases = entities::content_alias::Entity::find()
+        .filter(entities::content_alias::Column::ContentId.eq(content.id))
+        .all(db)
+        .await
+        .map_err(|error: DbErr| error.to_string())?;
+
+    for alias in aliases {
+        let _revision_alias = entities::content_revision_alias::ActiveModel {
+            id: Set(Uuid::now_v7()),
+            revision_id: Set(revision.id),
+            content_id: Set(content.id),
+            alias_path: Set(alias.alias_path),
+            kind: Set(alias.kind),
+        }
+        .insert(db)
+        .await
+        .map_err(|error: DbErr| error.to_string())?;
+    }
+
+    Ok(content)
 }
 
 async fn apply_imported_content_timestamps<C: ConnectionTrait>(
@@ -1537,32 +1706,40 @@ async fn apply_imported_content_timestamps<C: ConnectionTrait>(
     Ok(content)
 }
 
-async fn wordpress_item_exists<C: ConnectionTrait>(
+async fn find_wordpress_existing_item<C: ConnectionTrait>(
     db: &C,
     site_id: Uuid,
     page_type: PageType,
     slug: &str,
     alias_paths: &[String],
-) -> Result<bool, SiteError> {
+) -> Result<Option<entities::content_item::Model>, SiteError> {
     for alias_path in alias_paths {
         let existing_alias = entities::content_alias::Entity::find()
             .filter(entities::content_alias::Column::SiteId.eq(site_id))
             .filter(entities::content_alias::Column::AliasPath.eq(alias_path.as_str()))
             .one(db)
             .await?;
-        if existing_alias.is_some() {
-            return Ok(true);
+        if let Some(existing_alias) = existing_alias {
+            let content = entities::content_item::Entity::find_by_id(existing_alias.content_id)
+                .one(db)
+                .await?
+                .ok_or_else(|| {
+                    SiteError::internal(format!(
+                        "missing content {} for existing alias {}",
+                        existing_alias.content_id, existing_alias.alias_path
+                    ))
+                })?;
+            return Ok(Some(content));
         }
     }
 
-    let existing_content = entities::content_item::Entity::find()
+    entities::content_item::Entity::find()
         .filter(entities::content_item::Column::SiteId.eq(site_id))
         .filter(entities::content_item::Column::PageType.eq(page_type))
         .filter(entities::content_item::Column::Slug.eq(slug))
         .one(db)
-        .await?;
-
-    Ok(existing_content.is_some())
+        .await
+        .map_err(SiteError::from)
 }
 
 async fn create_alias_if_missing<C: ConnectionTrait>(
@@ -1674,6 +1851,7 @@ fn assign_wordpress_field(
         "link" => item.link = Some(value.to_string()),
         "wp:post_id" => item.post_id = Some(value.to_string()),
         "wp:post_name" => item.slug = Some(value.to_string()),
+        "wp:post_password" => item.post_password = Some(value.to_string()),
         "wp:post_type" => item.post_type = Some(value.to_string()),
         "wp:status" => item.status = Some(value.to_string()),
         "wp:post_date" => item.post_date = Some(value.to_string()),
@@ -1704,6 +1882,25 @@ fn resolve_wordpress_timestamp(
     gmt_value
         .and_then(wordpress_date_to_utc)
         .or_else(|| local_value.and_then(wordpress_date_to_utc))
+}
+
+fn wordpress_post_has_password(password: Option<&str>) -> bool {
+    password.is_some_and(|password| !password.trim().is_empty())
+}
+
+fn wordpress_password_protected_title(title: &str) -> String {
+    if title.starts_with(WORDPRESS_PASSWORD_PROTECTED_TITLE_PREFIX) {
+        return title.to_string();
+    }
+
+    format!("{WORDPRESS_PASSWORD_PROTECTED_TITLE_PREFIX}{title}")
+}
+
+fn wordpress_existing_item_requires_password_protection_update(
+    existing: &entities::content_item::Model,
+    stored_title: &str,
+) -> bool {
+    existing.title != stored_title || !existing.draft || existing.published_at.is_some()
 }
 
 fn wordpress_link_to_alias(link: &str) -> Option<String> {
@@ -3379,7 +3576,8 @@ mod tests {
         )
         .await
         .expect("failed to import wordpress data");
-        assert_eq!(imported, 1);
+        assert_eq!(imported.imported_count, 1);
+        assert_eq!(imported.updated_count, 0);
 
         let content = list_content(&db, site.id, None, None)
             .await
@@ -3449,7 +3647,7 @@ mod tests {
         )
         .await
         .expect("failed to import wordpress data");
-        assert_eq!(imported, 1);
+        assert_eq!(imported.imported_count, 1);
 
         let content = list_content(&db, site.id, Some(PageType::Page), None)
             .await
@@ -3531,7 +3729,7 @@ mod tests {
         )
         .await
         .expect("failed to import wordpress data");
-        assert_eq!(imported, 2);
+        assert_eq!(imported.imported_count, 2);
 
         let content = list_content(&db, site.id, None, None)
             .await
@@ -3584,8 +3782,9 @@ mod tests {
         .await
         .expect("failed to import wordpress data the second time");
 
-        assert_eq!(imported_first, 1);
-        assert_eq!(imported_second, 0);
+        assert_eq!(imported_first.imported_count, 1);
+        assert_eq!(imported_second.imported_count, 0);
+        assert_eq!(imported_second.updated_count, 0);
 
         let content = list_content(&db, site.id, None, None)
             .await
@@ -3636,7 +3835,7 @@ mod tests {
         )
         .await
         .expect("failed to import wordpress data");
-        assert_eq!(imported, 1);
+        assert_eq!(imported.imported_count, 1);
 
         let content = list_content(&db, site.id, Some(PageType::Post), None)
             .await
@@ -3706,13 +3905,306 @@ mod tests {
         )
         .await
         .expect("failed to import wordpress data");
-        assert_eq!(imported, 1);
+        assert_eq!(imported.imported_count, 1);
 
         let aliases = list_aliases(&db, site.id, None)
             .await
             .expect("failed to list aliases");
         assert_eq!(aliases.len(), 1);
         assert_eq!(aliases[0].alias_path, "/?p=123");
+    }
+
+    #[test]
+    fn parse_wordpress_wxr_captures_post_password() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:wp="http://wordpress.org/export/1.2/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <item>
+      <title>Imported Post</title>
+      <wp:post_name>imported-post</wp:post_name>
+      <wp:post_password>secret</wp:post_password>
+      <wp:post_type>post</wp:post_type>
+      <wp:status>publish</wp:status>
+      <content:encoded><![CDATA[Hello world]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"#;
+
+        let items = parse_wordpress_wxr(xml).expect("failed to parse wordpress xml");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].post_password.as_deref(), Some("secret"));
+        assert!(wordpress_post_has_password(
+            items[0].post_password.as_deref()
+        ));
+        assert!(!wordpress_post_has_password(Some("   ")));
+    }
+
+    #[tokio::test]
+    async fn import_wordpress_password_protected_posts_become_drafts_with_prefixed_titles() {
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let file_path = temp_dir.path().join("import.xml");
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:wp="http://wordpress.org/export/1.2/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <item>
+      <title>Imported Post</title>
+      <link>https://example.com/2020/01/imported-post/?p=123</link>
+      <wp:post_id>123</wp:post_id>
+      <wp:post_name>imported-post</wp:post_name>
+      <wp:post_password>secret</wp:post_password>
+      <wp:post_type>post</wp:post_type>
+      <wp:status>publish</wp:status>
+      <content:encoded><![CDATA[Hello world]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"#;
+
+        fs::write(&file_path, xml.as_bytes())
+            .await
+            .expect("failed to write import file");
+
+        let imported = import_wordpress(
+            &db,
+            site.id,
+            file_path.to_str().expect("invalid path"),
+            "creator",
+        )
+        .await
+        .expect("failed to import wordpress data");
+        assert_eq!(imported.imported_count, 1);
+        assert_eq!(imported.updated_count, 0);
+
+        let content = list_content(&db, site.id, Some(PageType::Post), None)
+            .await
+            .expect("failed to list imported content");
+        assert_eq!(content.len(), 1);
+        assert_eq!(
+            content[0].title,
+            "[PASSWORD-PROTECTED] Imported Post".to_string()
+        );
+        assert!(content[0].draft);
+        assert_eq!(content[0].published_at, None);
+    }
+
+    #[tokio::test]
+    async fn import_wordpress_password_protected_slug_fallback_uses_original_title() {
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let file_path = temp_dir.path().join("import.xml");
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:wp="http://wordpress.org/export/1.2/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <item>
+      <title>Locked Post</title>
+      <wp:post_password>secret</wp:post_password>
+      <wp:post_type>post</wp:post_type>
+      <wp:status>publish</wp:status>
+      <content:encoded><![CDATA[Hello world]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"#;
+
+        fs::write(&file_path, xml.as_bytes())
+            .await
+            .expect("failed to write import file");
+
+        let imported = import_wordpress(
+            &db,
+            site.id,
+            file_path.to_str().expect("invalid path"),
+            "creator",
+        )
+        .await
+        .expect("failed to import wordpress data");
+        assert_eq!(imported.imported_count, 1);
+
+        let content = list_content(&db, site.id, Some(PageType::Post), None)
+            .await
+            .expect("failed to list imported content");
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].slug, "locked-post".to_string());
+    }
+
+    #[tokio::test]
+    async fn import_wordpress_password_protected_reconciles_existing_item_in_place() {
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+        let existing = create_content(
+            &db,
+            NewContent {
+                site_id: site.id,
+                page_type: PageType::Post,
+                title: "Imported Post".to_string(),
+                slug: "imported-post".to_string(),
+                page_content: "Hello world".to_string(),
+                draft: false,
+                creator_sub: "creator".to_string(),
+                published_at: Some(Utc::now()),
+            },
+        )
+        .await
+        .expect("failed to create existing content");
+        create_alias(
+            &db,
+            NewAlias {
+                content_id: existing.id,
+                site_id: site.id,
+                alias_path: "/?p=123".to_string(),
+                kind: "alias".to_string(),
+            },
+        )
+        .await
+        .expect("failed to create alias");
+        let initial_revisions = list_revisions(&db, existing.id)
+            .await
+            .expect("failed to list existing revisions");
+        assert_eq!(initial_revisions.len(), 1);
+
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let file_path = temp_dir.path().join("import.xml");
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:wp="http://wordpress.org/export/1.2/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <item>
+      <title>Imported Post</title>
+      <link>https://example.com/2020/01/imported-post/?p=123</link>
+      <wp:post_id>123</wp:post_id>
+      <wp:post_name>imported-post</wp:post_name>
+      <wp:post_password>secret</wp:post_password>
+      <wp:post_type>post</wp:post_type>
+      <wp:status>publish</wp:status>
+      <content:encoded><![CDATA[Hello world]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"#;
+
+        fs::write(&file_path, xml.as_bytes())
+            .await
+            .expect("failed to write import file");
+
+        let imported = import_wordpress(
+            &db,
+            site.id,
+            file_path.to_str().expect("invalid path"),
+            "creator",
+        )
+        .await
+        .expect("failed to import wordpress data");
+        assert_eq!(imported.imported_count, 0);
+        assert_eq!(imported.updated_count, 1);
+        assert_eq!(
+            imported.updated_titles,
+            vec!["[PASSWORD-PROTECTED] Imported Post".to_string()]
+        );
+
+        let content = list_content(&db, site.id, Some(PageType::Post), None)
+            .await
+            .expect("failed to list imported content");
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].id, existing.id);
+        assert_eq!(
+            content[0].title,
+            "[PASSWORD-PROTECTED] Imported Post".to_string()
+        );
+        assert!(content[0].draft);
+        assert_eq!(content[0].published_at, None);
+
+        let revisions = list_revisions(&db, existing.id)
+            .await
+            .expect("failed to list revisions");
+        assert_eq!(revisions.len(), 2);
+        assert_eq!(
+            revisions[0].title,
+            "[PASSWORD-PROTECTED] Imported Post".to_string()
+        );
+        assert!(revisions[0].draft);
+    }
+
+    #[tokio::test]
+    async fn import_wordpress_password_protected_does_not_double_prefix_titles() {
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+        let existing = create_content(
+            &db,
+            NewContent {
+                site_id: site.id,
+                page_type: PageType::Post,
+                title: "[PASSWORD-PROTECTED] Imported Post".to_string(),
+                slug: "imported-post".to_string(),
+                page_content: "Hello world".to_string(),
+                draft: true,
+                creator_sub: "creator".to_string(),
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create existing content");
+        create_alias(
+            &db,
+            NewAlias {
+                content_id: existing.id,
+                site_id: site.id,
+                alias_path: "/?p=123".to_string(),
+                kind: "alias".to_string(),
+            },
+        )
+        .await
+        .expect("failed to create alias");
+
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let file_path = temp_dir.path().join("import.xml");
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:wp="http://wordpress.org/export/1.2/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <item>
+      <title>[PASSWORD-PROTECTED] Imported Post</title>
+      <link>https://example.com/?p=123</link>
+      <wp:post_id>123</wp:post_id>
+      <wp:post_name>imported-post</wp:post_name>
+      <wp:post_password>secret</wp:post_password>
+      <wp:post_type>post</wp:post_type>
+      <wp:status>publish</wp:status>
+      <content:encoded><![CDATA[Hello world]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"#;
+
+        fs::write(&file_path, xml.as_bytes())
+            .await
+            .expect("failed to write import file");
+
+        let imported = import_wordpress(
+            &db,
+            site.id,
+            file_path.to_str().expect("invalid path"),
+            "creator",
+        )
+        .await
+        .expect("failed to import wordpress data");
+        assert_eq!(imported.imported_count, 0);
+        assert_eq!(imported.updated_count, 0);
+
+        let content = list_content(&db, site.id, Some(PageType::Post), None)
+            .await
+            .expect("failed to list imported content");
+        assert_eq!(content.len(), 1);
+        assert_eq!(
+            content[0].title,
+            "[PASSWORD-PROTECTED] Imported Post".to_string()
+        );
+
+        let revisions = list_revisions(&db, existing.id)
+            .await
+            .expect("failed to list revisions");
+        assert_eq!(revisions.len(), 1);
     }
 
     #[tokio::test]

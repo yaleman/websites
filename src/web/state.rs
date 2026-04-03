@@ -797,11 +797,6 @@ pub(crate) struct AdminContentListQuery {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct AdminSiteSettingsQuery {
-    pub(crate) imported: Option<usize>,
-}
-
-#[derive(Debug, Deserialize)]
 pub(crate) struct AdminSiteRenderQuery {
     pub(crate) publish: Option<usize>,
 }
@@ -1240,7 +1235,7 @@ pub(crate) fn build_search_rows(
                 .get(&row.site_id)
                 .cloned()
                 .unwrap_or_else(|| "Unknown site".to_string()),
-            edit_href: format!("/admin/site/{}/content/{}", row.site_id, row.id),
+            edit_href: format!("/admin/site/{}/content/{}/edit", row.site_id, row.id),
             title: row.title,
             created_at: row.created_at.to_rfc3339(),
         })

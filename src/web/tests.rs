@@ -123,6 +123,34 @@ fn sort_content_items_orders_titles_descending_case_insensitively() {
 }
 
 #[test]
+fn build_search_rows_links_to_editor() {
+    let site_id = Uuid::now_v7();
+    let content_id = Uuid::now_v7();
+    let rows = build_search_rows(
+        vec![entities::content_item::Model {
+            id: content_id,
+            site_id,
+            page_type: PageType::Page,
+            title: "Search Result".to_string(),
+            slug: "search-result".to_string(),
+            page_content: "body".to_string(),
+            draft: false,
+            creator_sub: "tester".to_string(),
+            created_at: Utc::now(),
+            last_updated: None,
+            published_at: None,
+        }],
+        &HashMap::from([(site_id, "Test Site".to_string())]),
+    );
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].edit_href,
+        format!("/admin/site/{site_id}/content/{content_id}/edit")
+    );
+}
+
+#[test]
 fn content_list_status_filter_deserializes_expected_values() {
     let draft = ContentListStatusFilter::deserialize(StrDeserializer::<ValueError>::new("draft"))
         .expect("expected draft status filter to deserialize");
@@ -258,7 +286,13 @@ fn copy_dir_recursive(source: &StdPath, target: &StdPath) {
 
 fn test_site_templates_root() -> tempfile::TempDir {
     let root = tempfile::tempdir().expect("failed to create temp template root");
-    let default_source = crate::resolve_site_templates_root().join("default");
+    let default_source = crate::site_template_dir_candidates(
+        &crate::resolve_site_templates_root(),
+        DEFAULT_TEMPLATE_NAME,
+    )
+    .into_iter()
+    .find(|path| path.exists())
+    .expect("expected a bundled default site template directory");
     let default_target = root.path().join("default");
     copy_dir_recursive(&default_source, &default_target);
     root
@@ -2166,7 +2200,28 @@ async fn admin_site_wordpress_import_is_idempotent_per_file() {
             .expect("missing first location header")
             .to_str()
             .expect("invalid first location header"),
-        format!("/admin/site/{}/settings?imported=1", site.id)
+        format!("/admin/site/{}/settings", site.id)
+    );
+
+    let first_settings_response = router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/admin/site/{}/settings", site.id))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("failed to build first settings request"),
+        )
+        .await
+        .expect("failed to load site settings after first import");
+    assert_eq!(first_settings_response.status(), StatusCode::OK);
+    let first_settings_body = to_bytes(first_settings_response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read first settings body");
+    assert!(
+        String::from_utf8_lossy(&first_settings_body).contains("Imported 1 WordPress item."),
+        "expected wordpress import toast after first import"
     );
 
     let first_content = crate::list_content(db.as_ref(), site.id, None, None)
@@ -2181,7 +2236,7 @@ async fn admin_site_wordpress_import_is_idempotent_per_file() {
             Request::builder()
                 .method("POST")
                 .uri(format!("/admin/site/{}/settings/wordpress-import", site.id))
-                .header(header::COOKIE, cookie)
+                .header(header::COOKIE, &cookie)
                 .header(
                     header::CONTENT_TYPE,
                     format!("multipart/form-data; boundary={boundary}"),
@@ -2200,11 +2255,271 @@ async fn admin_site_wordpress_import_is_idempotent_per_file() {
             .expect("missing second location header")
             .to_str()
             .expect("invalid second location header"),
-        format!("/admin/site/{}/settings?imported=0", site.id)
+        format!("/admin/site/{}/settings", site.id)
+    );
+
+    let second_settings_response = router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/admin/site/{}/settings", site.id))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("failed to build second settings request"),
+        )
+        .await
+        .expect("failed to load site settings after second import");
+    assert_eq!(second_settings_response.status(), StatusCode::OK);
+    let second_settings_body = to_bytes(second_settings_response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read second settings body");
+    assert!(
+        String::from_utf8_lossy(&second_settings_body)
+            .contains("No new WordPress items were imported."),
+        "expected wordpress import toast after duplicate import"
     );
 
     let second_content = crate::list_content(db.as_ref(), site.id, None, None)
         .await
         .expect("failed to list content after second wordpress import");
     assert_eq!(second_content.len(), 1);
+}
+
+#[tokio::test]
+async fn admin_site_wordpress_import_reports_updated_password_protected_titles() {
+    let db = Arc::new(test_db_start().await);
+    let site = crate::create_site(
+        db.as_ref(),
+        "wordpress-site".to_string(),
+        "WordPress Site".to_string(),
+        DEFAULT_TEMPLATE_NAME.to_string(),
+    )
+    .await
+    .expect("failed to create site");
+    let user = crate::entities::user::create_user(
+        db.as_ref(),
+        "author",
+        Some("author@example.com"),
+        Some("Author"),
+        false,
+    )
+    .await
+    .expect("failed to create author");
+    crate::create_membership(
+        db.as_ref(),
+        crate::NewMembership {
+            site_id: site.id,
+            user_id: user.id,
+            role: SiteRole::Author,
+        },
+    )
+    .await
+    .expect("failed to create author membership");
+    let existing = crate::create_content(
+        db.as_ref(),
+        crate::NewContent {
+            site_id: site.id,
+            page_type: PageType::Post,
+            title: "Imported Post".to_string(),
+            slug: "imported-post".to_string(),
+            page_content: "Hello world".to_string(),
+            draft: false,
+            creator_sub: "author".to_string(),
+            published_at: Some(Utc::now()),
+        },
+    )
+    .await
+    .expect("failed to create existing content");
+    crate::create_alias(
+        db.as_ref(),
+        crate::NewAlias {
+            content_id: existing.id,
+            site_id: site.id,
+            alias_path: "/?p=123".to_string(),
+            kind: "alias".to_string(),
+        },
+    )
+    .await
+    .expect("failed to create existing alias");
+
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:wp="http://wordpress.org/export/1.2/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <item>
+      <title>Imported Post</title>
+      <link>https://example.com/2020/01/imported-post/?p=123</link>
+      <wp:post_id>123</wp:post_id>
+      <wp:post_name>imported-post</wp:post_name>
+      <wp:post_password>secret</wp:post_password>
+      <wp:post_type>post</wp:post_type>
+      <wp:status>publish</wp:status>
+      <content:encoded><![CDATA[Hello world]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"#;
+    let (boundary, body) = multipart_wordpress_xml_request_body(xml);
+
+    let session_store = MemoryStore::default();
+    let router = test_app_router(test_admin_state(db.clone()), session_store.clone());
+    let cookie =
+        seed_session_cookie(test_admin_state(db.clone()), session_store.clone(), user.id).await;
+
+    let response = router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/site/{}/settings/wordpress-import", site.id))
+                .header(header::COOKIE, &cookie)
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .expect("failed to build wordpress import request"),
+        )
+        .await
+        .expect("failed to call wordpress import route");
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::LOCATION)
+            .expect("missing location header")
+            .to_str()
+            .expect("invalid location header"),
+        format!("/admin/site/{}/settings", site.id)
+    );
+
+    let settings_response = router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/admin/site/{}/settings", site.id))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("failed to build settings request"),
+        )
+        .await
+        .expect("failed to load site settings after wordpress import");
+    assert_eq!(settings_response.status(), StatusCode::OK);
+    let settings_body = to_bytes(settings_response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read settings body");
+    let settings_html = String::from_utf8(settings_body.to_vec())
+        .expect("site settings body should be valid utf-8");
+    assert!(
+        settings_html
+            .contains("Updated 1 existing WordPress item: [PASSWORD-PROTECTED] Imported Post."),
+        "expected wordpress import update toast"
+    );
+
+    let content = crate::list_content(db.as_ref(), site.id, Some(PageType::Post), None)
+        .await
+        .expect("failed to list site content");
+    assert_eq!(content.len(), 1);
+    assert_eq!(
+        content[0].title,
+        "[PASSWORD-PROTECTED] Imported Post".to_string()
+    );
+    assert!(content[0].draft);
+    assert_eq!(content[0].published_at, None);
+}
+
+#[tokio::test]
+async fn admin_site_wordpress_import_accepts_large_xml_uploads() {
+    let db = Arc::new(test_db_start().await);
+    let site = crate::create_site(
+        db.as_ref(),
+        "wordpress-site".to_string(),
+        "WordPress Site".to_string(),
+        DEFAULT_TEMPLATE_NAME.to_string(),
+    )
+    .await
+    .expect("failed to create site");
+    let user = crate::entities::user::create_user(
+        db.as_ref(),
+        "author",
+        Some("author@example.com"),
+        Some("Author"),
+        false,
+    )
+    .await
+    .expect("failed to create author");
+    crate::create_membership(
+        db.as_ref(),
+        crate::NewMembership {
+            site_id: site.id,
+            user_id: user.id,
+            role: SiteRole::Author,
+        },
+    )
+    .await
+    .expect("failed to create author membership");
+
+    let large_body = "A".repeat(3 * 1024 * 1024);
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:wp="http://wordpress.org/export/1.2/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <item>
+      <title>Imported Post</title>
+      <link>https://example.com/2020/01/imported-post/?p=123</link>
+      <wp:post_id>123</wp:post_id>
+      <wp:post_name>imported-post</wp:post_name>
+      <wp:post_type>post</wp:post_type>
+      <wp:status>publish</wp:status>
+      <content:encoded><![CDATA[{large_body}]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"#
+    );
+    let (boundary, body) = multipart_wordpress_xml_request_body(&xml);
+
+    let session_store = MemoryStore::default();
+    let router = test_app_router(test_admin_state(db.clone()), session_store.clone());
+    let cookie =
+        seed_session_cookie(test_admin_state(db.clone()), session_store.clone(), user.id).await;
+
+    let response = router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/site/{}/settings/wordpress-import", site.id))
+                .header(header::COOKIE, &cookie)
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .expect("failed to build wordpress import request"),
+        )
+        .await
+        .expect("failed to call wordpress import route");
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::LOCATION)
+            .expect("missing location header")
+            .to_str()
+            .expect("invalid location header"),
+        format!("/admin/site/{}/settings", site.id)
+    );
+
+    let content = crate::list_content(db.as_ref(), site.id, Some(PageType::Post), None)
+        .await
+        .expect("failed to list site content");
+    assert_eq!(content.len(), 1);
+    assert_eq!(content[0].title, "Imported Post");
+    assert_eq!(content[0].page_content.len(), large_body.len());
 }
