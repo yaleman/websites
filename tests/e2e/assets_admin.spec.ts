@@ -18,7 +18,9 @@ import { defaultTimeout } from "./global_setup";
 test.describe("assets admin", () => {
 	test.setTimeout(defaultTimeout);
 
-	test("shows asset metadata and recent uploads", async ({ browser }) => {
+	test("shows asset metadata and the upload page asset browser", async ({
+		browser,
+	}) => {
 		const harness = await setupHarness();
 
 		try {
@@ -63,7 +65,7 @@ test.describe("assets admin", () => {
 				page.getByRole("button", { name: "Upload", exact: true }),
 			).toBeVisible();
 			await expect(
-				page.getByRole("heading", { name: "Recent Uploads" }),
+				page.getByRole("heading", { name: "Browse Assets" }),
 			).toBeVisible();
 			await expect(page.locator("body")).toContainText("banner.png");
 			await expect(page.getByRole("img", { name: "banner.png" })).toBeVisible();

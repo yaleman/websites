@@ -212,6 +212,8 @@ pub(crate) struct AdminAssetsTemplate {
     pub(crate) template_shared: AdminTemplateData,
     pub(crate) site_id: Uuid,
     pub(crate) site_full_title: String,
+    pub(crate) sort_by_options: Vec<AdminSelectOption>,
+    pub(crate) sort_dir_options: Vec<AdminSelectOption>,
     pub(crate) assets: Vec<AdminAssetRow>,
 }
 #[allow(dead_code)]
@@ -221,7 +223,9 @@ pub(crate) struct AdminAssetsNewTemplate {
     pub(crate) template_shared: AdminTemplateData,
     pub(crate) site_id: Uuid,
     pub(crate) site_full_title: String,
-    pub(crate) recent_assets: Vec<AdminAssetRow>,
+    pub(crate) sort_by_options: Vec<AdminSelectOption>,
+    pub(crate) sort_dir_options: Vec<AdminSelectOption>,
+    pub(crate) assets: Vec<AdminAssetRow>,
 }
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
@@ -797,6 +801,12 @@ pub(crate) struct AdminContentListQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct AdminAssetListQuery {
+    pub(crate) sort_by: Option<String>,
+    pub(crate) sort_dir: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct AdminSiteRenderQuery {
     pub(crate) publish: Option<usize>,
 }
@@ -1037,6 +1047,19 @@ pub(crate) enum ContentListSortBy {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AssetSortBy {
+    Uploaded,
+    Size,
+    Name,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AssetSortDirection {
+    Asc,
+    Desc,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ContentListSortColumn {
     Title,
     Type,
@@ -1108,6 +1131,129 @@ impl ContentListSortBy {
             | (ContentListSortColumn::Created, Self::CreatedDesc)
             | (ContentListSortColumn::Updated, Self::UpdatedDesc) => " (desc)",
             _ => "",
+        }
+    }
+}
+
+impl AssetSortBy {
+    pub(crate) fn from_query(value: Option<&str>) -> Self {
+        match value {
+            Some("size") => Self::Size,
+            Some("name") => Self::Name,
+            Some("uploaded") | None => Self::Uploaded,
+            Some(_) => Self::Uploaded,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Uploaded => "uploaded",
+            Self::Size => "size",
+            Self::Name => "name",
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Uploaded => "Date uploaded",
+            Self::Size => "File size",
+            Self::Name => "File name",
+        }
+    }
+
+    pub(crate) fn options(self) -> Vec<AdminSelectOption> {
+        [Self::Uploaded, Self::Size, Self::Name]
+            .into_iter()
+            .map(|option| AdminSelectOption {
+                label: option.label(),
+                value: option.as_str(),
+                selected: option == self,
+            })
+            .collect()
+    }
+}
+
+impl AssetSortDirection {
+    pub(crate) fn from_query(value: Option<&str>) -> Self {
+        match value {
+            Some("asc") => Self::Asc,
+            Some("desc") | None => Self::Desc,
+            Some(_) => Self::Desc,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Asc => "asc",
+            Self::Desc => "desc",
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Asc => "Ascending",
+            Self::Desc => "Descending",
+        }
+    }
+
+    pub(crate) fn options(self) -> Vec<AdminSelectOption> {
+        [Self::Desc, Self::Asc]
+            .into_iter()
+            .map(|option| AdminSelectOption {
+                label: option.label(),
+                value: option.as_str(),
+                selected: option == self,
+            })
+            .collect()
+    }
+}
+
+pub(crate) fn sort_assets(
+    assets: &mut [entities::asset::Model],
+    sort_by: AssetSortBy,
+    sort_dir: AssetSortDirection,
+) {
+    let compare_name_ci =
+        |left: &entities::asset::Model, right: &entities::asset::Model| -> std::cmp::Ordering {
+            left.original_filename
+                .to_lowercase()
+                .cmp(&right.original_filename.to_lowercase())
+        };
+
+    match sort_by {
+        AssetSortBy::Uploaded => {
+            assets.sort_by(|left, right| {
+                let primary = match sort_dir {
+                    AssetSortDirection::Asc => left.created_at.cmp(&right.created_at),
+                    AssetSortDirection::Desc => right.created_at.cmp(&left.created_at),
+                };
+                primary
+                    .then_with(|| compare_name_ci(left, right))
+                    .then_with(|| right.id.cmp(&left.id))
+            });
+        }
+        AssetSortBy::Size => {
+            assets.sort_by(|left, right| {
+                let primary = match sort_dir {
+                    AssetSortDirection::Asc => left.byte_length.cmp(&right.byte_length),
+                    AssetSortDirection::Desc => right.byte_length.cmp(&left.byte_length),
+                };
+                primary
+                    .then_with(|| compare_name_ci(left, right))
+                    .then_with(|| right.created_at.cmp(&left.created_at))
+                    .then_with(|| right.id.cmp(&left.id))
+            });
+        }
+        AssetSortBy::Name => {
+            assets.sort_by(|left, right| {
+                let primary = match sort_dir {
+                    AssetSortDirection::Asc => compare_name_ci(left, right),
+                    AssetSortDirection::Desc => compare_name_ci(right, left),
+                };
+                primary
+                    .then_with(|| right.created_at.cmp(&left.created_at))
+                    .then_with(|| right.id.cmp(&left.id))
+            });
         }
     }
 }

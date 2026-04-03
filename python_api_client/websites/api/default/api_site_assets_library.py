@@ -18,6 +18,8 @@ def _get_kwargs(
     q: str | Unset = UNSET,
     limit: int | Unset = UNSET,
     type_: str | Unset = UNSET,
+    sort_by: str | Unset = UNSET,
+    sort_dir: str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
@@ -27,6 +29,10 @@ def _get_kwargs(
     params["limit"] = limit
 
     params["type"] = type_
+
+    params["sort_by"] = sort_by
+
+    params["sort_dir"] = sort_dir
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -93,6 +99,8 @@ def sync_detailed(
     q: str | Unset = UNSET,
     limit: int | Unset = UNSET,
     type_: str | Unset = UNSET,
+    sort_by: str | Unset = UNSET,
+    sort_dir: str | Unset = UNSET,
 ) -> Response[ApiErrorResponse | AssetLibraryResponse]:
     """
     Args:
@@ -100,6 +108,8 @@ def sync_detailed(
         q (str | Unset):
         limit (int | Unset):
         type_ (str | Unset):
+        sort_by (str | Unset):
+        sort_dir (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -114,6 +124,8 @@ def sync_detailed(
         q=q,
         limit=limit,
         type_=type_,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     )
 
     response = client.get_httpx_client().request(
@@ -130,6 +142,8 @@ def sync(
     q: str | Unset = UNSET,
     limit: int | Unset = UNSET,
     type_: str | Unset = UNSET,
+    sort_by: str | Unset = UNSET,
+    sort_dir: str | Unset = UNSET,
 ) -> ApiErrorResponse | AssetLibraryResponse | None:
     """
     Args:
@@ -137,6 +151,8 @@ def sync(
         q (str | Unset):
         limit (int | Unset):
         type_ (str | Unset):
+        sort_by (str | Unset):
+        sort_dir (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -152,6 +168,8 @@ def sync(
         q=q,
         limit=limit,
         type_=type_,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     ).parsed
 
 
@@ -162,6 +180,8 @@ async def asyncio_detailed(
     q: str | Unset = UNSET,
     limit: int | Unset = UNSET,
     type_: str | Unset = UNSET,
+    sort_by: str | Unset = UNSET,
+    sort_dir: str | Unset = UNSET,
 ) -> Response[ApiErrorResponse | AssetLibraryResponse]:
     """
     Args:
@@ -169,6 +189,8 @@ async def asyncio_detailed(
         q (str | Unset):
         limit (int | Unset):
         type_ (str | Unset):
+        sort_by (str | Unset):
+        sort_dir (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -183,6 +205,8 @@ async def asyncio_detailed(
         q=q,
         limit=limit,
         type_=type_,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -197,6 +221,8 @@ async def asyncio(
     q: str | Unset = UNSET,
     limit: int | Unset = UNSET,
     type_: str | Unset = UNSET,
+    sort_by: str | Unset = UNSET,
+    sort_dir: str | Unset = UNSET,
 ) -> ApiErrorResponse | AssetLibraryResponse | None:
     """
     Args:
@@ -204,6 +230,8 @@ async def asyncio(
         q (str | Unset):
         limit (int | Unset):
         type_ (str | Unset):
+        sort_by (str | Unset):
+        sort_dir (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -220,5 +248,7 @@ async def asyncio(
             q=q,
             limit=limit,
             type_=type_,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
         )
     ).parsed

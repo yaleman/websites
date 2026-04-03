@@ -21,10 +21,30 @@
   </div>
 </form>
 
-<section class="surface grid gap-4 p-4 md:p-6" id="recent-uploads">
-  <h2>Recent Uploads</h2>
-  {% if recent_assets.is_empty() %}
-  <p class="inline-body">No recent uploads yet.</p>
+<section class="surface grid gap-4 p-4 md:p-6" id="asset-browser">
+  <h2>Browse Assets</h2>
+  <form method="get" action class="flex flex-wrap items-end gap-2">
+    <div class="min-w-[14rem] flex-1">
+      <label for="sort_by">Sort By</label>
+      <select id="sort_by" name="sort_by">
+        {% for option in sort_by_options %}
+        <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="min-w-[14rem] flex-1">
+      <label for="sort_dir">Direction</label>
+      <select id="sort_dir" name="sort_dir">
+        {% for option in sort_dir_options %}
+        <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn shrink-0">Sort</button>
+  </form>
+
+  {% if assets.is_empty() %}
+  <p class="inline-body">No assets uploaded yet.</p>
   {% else %}
   <table>
     <thead>
@@ -35,7 +55,7 @@
       </tr>
     </thead>
     <tbody>
-      {% for asset in recent_assets %}
+      {% for asset in assets %}
       <tr>
         <td>
           {% if asset.original_exists %}

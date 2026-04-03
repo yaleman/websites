@@ -15,10 +15,31 @@ const inferAltFromFilename = (filename: string) => {
 	return trimmed.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
 };
 
+const formatAssetSize = (byteLength: number) => {
+	if (byteLength < 1024) {
+		return `${byteLength} B`;
+	}
+	if (byteLength < 1024 * 1024) {
+		return `${(byteLength / 1024).toFixed(1)} KB`;
+	}
+	return `${(byteLength / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const formatAssetDate = (value: string) => {
+	const parsed = new Date(value);
+	if (Number.isNaN(parsed.getTime())) {
+		return value;
+	}
+	return new Intl.DateTimeFormat(undefined, {
+		dateStyle: "medium",
+		timeStyle: "short",
+	}).format(parsed);
+};
+
 const formatAssetMeta = (asset: components["schemas"]["AssetLibraryItem"]) => {
 	const dimensions =
 		asset.width && asset.height ? `${asset.width}×${asset.height}` : "size n/a";
-	return `${asset.mime_type} • ${dimensions}`;
+	return `${asset.mime_type} • ${dimensions} • ${formatAssetSize(asset.byte_length)} • ${formatAssetDate(asset.created_at)}`;
 };
 
 const bindConfirmingForms = () => {
@@ -263,6 +284,12 @@ const createAssetModal = (editor: Editor) => {
 	);
 	const typeSelect =
 		modal.querySelector<HTMLSelectElement>("[data-asset-type]");
+	const sortBySelect = modal.querySelector<HTMLSelectElement>(
+		"[data-asset-sort-by]",
+	);
+	const sortDirSelect = modal.querySelector<HTMLSelectElement>(
+		"[data-asset-sort-dir]",
+	);
 	const recentSection = modal.querySelector<HTMLElement>(
 		"[data-asset-recent-section]",
 	);
@@ -343,6 +370,8 @@ const createAssetModal = (editor: Editor) => {
 		query?: string;
 		limit: number;
 		type: string;
+		sortBy: string;
+		sortDir: string;
 	}) => {
 		const { data, error } = await OPENAPI_CLIENT.GET(
 			ApiPaths.api_site_assets_library,
@@ -354,6 +383,8 @@ const createAssetModal = (editor: Editor) => {
 						q: options.query || "",
 						type: options.type,
 						limit: options.limit,
+						sort_by: options.sortBy,
+						sort_dir: options.sortDir,
 					},
 				},
 			},
@@ -391,6 +422,8 @@ const createAssetModal = (editor: Editor) => {
 		refreshPromise = (async () => {
 			const query = searchInput?.value.trim() ?? "";
 			const selectedType = typeSelect?.value ?? "all";
+			const selectedSortBy = sortBySelect?.value ?? "uploaded";
+			const selectedSortDir = sortDirSelect?.value ?? "desc";
 			const showingResults = query.length > 0;
 
 			setSectionVisibility(showingResults);
@@ -405,6 +438,8 @@ const createAssetModal = (editor: Editor) => {
 						query,
 						limit: 50,
 						type: selectedType,
+						sortBy: selectedSortBy,
+						sortDir: selectedSortDir,
 					});
 					renderAssetGrid(resultsGrid, assets, "No matches found.");
 					restoreSelection(assets);
@@ -423,6 +458,8 @@ const createAssetModal = (editor: Editor) => {
 				const assets = await fetchAssets({
 					limit: 12,
 					type: selectedType,
+					sortBy: selectedSortBy,
+					sortDir: selectedSortDir,
 				});
 				renderAssetGrid(recentGrid, assets, "No images uploaded yet.");
 				restoreSelection(assets);
@@ -529,6 +566,12 @@ const createAssetModal = (editor: Editor) => {
 			window.clearTimeout(searchTimeout);
 			searchTimeout = null;
 		}
+		if (sortBySelect) {
+			sortBySelect.value = "uploaded";
+		}
+		if (sortDirSelect) {
+			sortDirSelect.value = "desc";
+		}
 		if (altInput) {
 			altInput.value = "";
 		}
@@ -592,6 +635,12 @@ const createAssetModal = (editor: Editor) => {
 		}
 	});
 	typeSelect?.addEventListener("change", scheduleSearch);
+	sortBySelect?.addEventListener("change", () => {
+		void refreshVisibleAssets();
+	});
+	sortDirSelect?.addEventListener("change", () => {
+		void refreshVisibleAssets();
+	});
 	externalInput?.addEventListener("input", setInsertEnabled);
 	externalInput?.addEventListener("keydown", (event) => {
 		if (event.key === "Enter") {

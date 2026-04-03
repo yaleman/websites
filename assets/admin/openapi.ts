@@ -159,6 +159,8 @@ export interface components {
             title?: string | null;
         };
         AssetLibraryItem: {
+            /** Format: int32 */
+            byte_length: number;
             created_at: string;
             has_thumbnail: boolean;
             /** Format: int32 */
@@ -488,6 +490,8 @@ export interface operations {
             query?: {
                 limit?: number;
                 q?: string;
+                sort_by?: string;
+                sort_dir?: string;
                 type?: string;
             };
             header?: never;

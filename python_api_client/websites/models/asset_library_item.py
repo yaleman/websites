@@ -14,6 +14,7 @@ T = TypeVar("T", bound="AssetLibraryItem")
 
 @_attrs_define
 class AssetLibraryItem:
+    byte_length: int
     created_at: str
     has_thumbnail: bool
     id: UUID
@@ -26,6 +27,8 @@ class AssetLibraryItem:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        byte_length = self.byte_length
+
         created_at = self.created_at
 
         has_thumbnail = self.has_thumbnail
@@ -60,6 +63,7 @@ class AssetLibraryItem:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
+                "byte_length": byte_length,
                 "created_at": created_at,
                 "has_thumbnail": has_thumbnail,
                 "id": id,
@@ -80,6 +84,8 @@ class AssetLibraryItem:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
+        byte_length = d.pop("byte_length")
+
         created_at = d.pop("created_at")
 
         has_thumbnail = d.pop("has_thumbnail")
@@ -120,6 +126,7 @@ class AssetLibraryItem:
         width = _parse_width(d.pop("width", UNSET))
 
         asset_library_item = cls(
+            byte_length=byte_length,
             created_at=created_at,
             has_thumbnail=has_thumbnail,
             id=id,
