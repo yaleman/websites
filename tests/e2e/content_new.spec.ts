@@ -219,6 +219,38 @@ test.describe("content new editor", () => {
 			await expect(page.locator(".ProseMirror")).toContainText("Bullet line");
 			await expect(page.locator(".ProseMirror")).toContainText("Numbered line");
 			await expect(page.locator(".ProseMirror")).toContainText("Quoted line");
+			const listStyles = await page.evaluate(() => {
+				const prose = document.querySelector(".ProseMirror");
+				const preview = document.querySelector("[data-editor-preview-body]");
+				if (!(prose instanceof HTMLElement) || !(preview instanceof HTMLElement)) {
+					throw new Error("Editor surfaces missing");
+				}
+
+				const editorBulletList = prose.querySelector("ul");
+				const editorNumberedList = prose.querySelector("ol");
+				const previewBulletList = preview.querySelector("ul");
+				const previewNumberedList = preview.querySelector("ol");
+				if (
+					!(editorBulletList instanceof HTMLElement) ||
+					!(editorNumberedList instanceof HTMLElement) ||
+					!(previewBulletList instanceof HTMLElement) ||
+					!(previewNumberedList instanceof HTMLElement)
+				) {
+					throw new Error("Rendered lists missing");
+				}
+
+				return {
+					editorBullet: window.getComputedStyle(editorBulletList).listStyleType,
+					editorNumbered: window.getComputedStyle(editorNumberedList).listStyleType,
+					previewBullet: window.getComputedStyle(previewBulletList).listStyleType,
+					previewNumbered:
+						window.getComputedStyle(previewNumberedList).listStyleType,
+				};
+			});
+			expect(listStyles.editorBullet).toBe("disc");
+			expect(listStyles.editorNumbered).toBe("decimal");
+			expect(listStyles.previewBullet).toBe("disc");
+			expect(listStyles.previewNumbered).toBe("decimal");
 
 			const editorHeadingSizes = await page.evaluate(() => {
 				const prose = document.querySelector(".ProseMirror");
