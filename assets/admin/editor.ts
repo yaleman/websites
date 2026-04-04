@@ -747,11 +747,7 @@ const bindToolbar = (
 		}
 
 		sizeControl.value = activeSizeValue();
-		const canSetNormal = editor.can().chain().focus().setParagraph().run();
-		const canSetHeading = HEADING_LEVELS.some((level) =>
-			editor.can().chain().focus().toggleHeading({ level }).run(),
-		);
-		sizeControl.disabled = !(canSetNormal || canSetHeading);
+		sizeControl.disabled = !editor.isEditable;
 	};
 
 	const syncToolbarState = () => {

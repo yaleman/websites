@@ -694,10 +694,24 @@ test.describe("content new editor", () => {
 				harness,
 				"editor-user",
 			);
+			const consoleErrors: string[] = [];
+			page.on("console", (message) => {
+				if (message.type() === "error") {
+					consoleErrors.push(message.text());
+				}
+			});
 			await page.goto(
 				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/edit`,
 				{ waitUntil: "domcontentloaded" },
 			);
+
+			const sizeSelect = page.getByRole("combobox", { name: "Size" });
+			await expect(sizeSelect).toBeVisible();
+			await expect(sizeSelect).toBeEnabled();
+			await expect(sizeSelect).toHaveValue("normal");
+			expect(
+				consoleErrors.filter((message) => message.includes("contentMatchAt")),
+			).toHaveLength(0);
 
 			await page.getByRole("button", { name: "Markdown" }).click();
 			await page.locator("#page_content").fill("Updated body from source mode");
