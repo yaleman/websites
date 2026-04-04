@@ -34,6 +34,11 @@
 		@apply block max-w-full h-auto;
 	}
 
+	.editor-shell .ProseMirror h1,
+	.editor-preview__body h1 {
+		@apply mt-10 mb-4 text-4xl font-bold tracking-tight text-slate-950;
+	}
+
 	.editor-shell .ProseMirror h2,
 	.editor-preview__body h2 {
 		@apply mt-8 mb-3 border-b border-slate-200 pb-2 text-2xl font-semibold tracking-tight text-slate-950;
@@ -42,6 +47,21 @@
 	.editor-shell .ProseMirror h3,
 	.editor-preview__body h3 {
 		@apply mt-6 mb-2 text-xl font-semibold text-slate-800;
+	}
+
+	.editor-shell .ProseMirror h4,
+	.editor-preview__body h4 {
+		@apply mt-5 mb-2 text-lg font-semibold text-slate-900;
+	}
+
+	.editor-shell .ProseMirror h5,
+	.editor-preview__body h5 {
+		@apply mt-4 mb-2 text-base font-semibold text-slate-800;
+	}
+
+	.editor-shell .ProseMirror h6,
+	.editor-preview__body h6 {
+		@apply mt-4 mb-2 text-sm font-semibold uppercase tracking-[0.12em] text-slate-700;
 	}
 }
 
@@ -60,6 +80,22 @@
 
 	.editor-button.is-active {
 		@apply border-slate-900 bg-slate-900 text-white;
+	}
+
+	.editor-field {
+		@apply inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm font-medium text-slate-700 shadow-sm focus-within:ring-2 focus-within:ring-slate-200;
+	}
+
+	.editor-field__label {
+		@apply whitespace-nowrap;
+	}
+
+	.editor-select {
+		@apply min-w-[7rem] border-0 bg-transparent p-0 text-sm text-slate-700 focus:outline-none;
+	}
+
+	.editor-select:disabled {
+		@apply cursor-not-allowed text-slate-400;
 	}
 
 	.editor-toolbar + .editor-shell {
