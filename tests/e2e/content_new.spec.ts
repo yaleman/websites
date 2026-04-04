@@ -36,6 +36,36 @@ async function uploadAssetFromPage(
 	]);
 }
 
+async function selectTextInEditor(
+	page: import("@playwright/test").Page,
+	selector: string,
+	targetText: string,
+) {
+	await page.locator(selector).evaluate((element, expectedText) => {
+		const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+		let currentNode: Node | null = walker.nextNode();
+		while (currentNode) {
+			const text = currentNode.textContent ?? "";
+			const start = text.indexOf(expectedText);
+			if (start >= 0) {
+				const range = document.createRange();
+				range.setStart(currentNode, start);
+				range.setEnd(currentNode, start + expectedText.length);
+				const selection = window.getSelection();
+				if (!selection) {
+					throw new Error("Selection unavailable");
+				}
+				selection.removeAllRanges();
+				selection.addRange(range);
+				return;
+			}
+			currentNode = walker.nextNode();
+		}
+
+		throw new Error(`Could not find text "${expectedText}" in ${selector}`);
+	}, targetText);
+}
+
 test.describe("content new editor", () => {
 	test.setTimeout(defaultTimeout);
 
@@ -402,6 +432,134 @@ test.describe("content new editor", () => {
 				page.getByRole("heading", { name: "Memberships", exact: true }),
 			).toBeVisible();
 			await expect(page.locator('[aria-label="test-user"]')).toBeVisible();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
+	test("applies toolbar features through the visible controls", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const userId = await createUser(harness, "toolbar-audit-user");
+			await addMembership(harness, userId, "owner");
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				"toolbar-audit-user",
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/new`,
+				{ waitUntil: "domcontentloaded" },
+			);
+
+			const proseMirror = page.locator(".ProseMirror");
+			const boldButton = page.getByRole("button", { name: "Bold" });
+			const italicButton = page.getByRole("button", { name: "Italic" });
+			const codeButton = page.getByRole("button", { name: "Code" });
+			const linkButton = page.getByRole("button", { name: "Link" });
+			const bulletButton = page.getByRole("button", { name: "Bullets" });
+			const numberedButton = page.getByRole("button", { name: "Numbered" });
+			const quoteButton = page.getByRole("button", { name: "Quote" });
+			const sourceButton = page.getByRole("button", { name: "Markdown" });
+
+			await proseMirror.click();
+			await page.keyboard.type("Alpha Beta Gamma Delta");
+			await sourceButton.click();
+			await expect(page.locator("[data-editor-source-panel]")).toBeVisible();
+
+			await selectTextInEditor(page, ".ProseMirror p", "Alpha");
+			await boldButton.click();
+			await expect(page.locator(".ProseMirror strong")).toContainText("Alpha");
+
+			await selectTextInEditor(page, ".ProseMirror p", "Beta");
+			await italicButton.click();
+			await expect(page.locator(".ProseMirror em")).toContainText("Beta");
+
+			await selectTextInEditor(page, ".ProseMirror p", "Gamma");
+			await codeButton.click();
+			await expect(page.locator(".ProseMirror code")).toContainText("Gamma");
+
+			page.once("dialog", async (dialog) => {
+				expect(dialog.type()).toBe("prompt");
+				await dialog.accept("https://example.com/docs");
+			});
+			await selectTextInEditor(page, ".ProseMirror p", "Delta");
+			await linkButton.click();
+			await expect(
+				page.locator('.ProseMirror a[href="https://example.com/docs"]'),
+			).toContainText("Delta");
+
+			const richTextMarkdown = await page.locator("#page_content").inputValue();
+			expect(richTextMarkdown).toContain("**Alpha**");
+			expect(richTextMarkdown).toMatch(/(\*|_)Beta(\*|_)/);
+			expect(richTextMarkdown).toContain("`Gamma`");
+			expect(richTextMarkdown).toContain("[Delta](https://example.com/docs)");
+
+			const inlineStyles = await page.evaluate(() => {
+				const prose = document.querySelector(".ProseMirror");
+				const preview = document.querySelector("[data-editor-preview-body]");
+				if (!(prose instanceof HTMLElement) || !(preview instanceof HTMLElement)) {
+					throw new Error("Editor surfaces missing");
+				}
+
+				const editorLink = prose.querySelector("a");
+				const editorCode = prose.querySelector("code");
+				const previewLink = preview.querySelector("a");
+				const previewCode = preview.querySelector("code");
+				if (
+					!(editorLink instanceof HTMLElement) ||
+					!(editorCode instanceof HTMLElement) ||
+					!(previewLink instanceof HTMLElement) ||
+					!(previewCode instanceof HTMLElement)
+				) {
+					throw new Error("Rendered inline formatting missing");
+				}
+
+				return {
+					editorLinkDecoration:
+						window.getComputedStyle(editorLink).textDecorationLine,
+					previewLinkDecoration:
+						window.getComputedStyle(previewLink).textDecorationLine,
+					editorCodeBackground:
+						window.getComputedStyle(editorCode).backgroundColor,
+					previewCodeBackground:
+						window.getComputedStyle(previewCode).backgroundColor,
+				};
+			});
+			expect(inlineStyles.editorLinkDecoration).toContain("underline");
+			expect(inlineStyles.previewLinkDecoration).toContain("underline");
+			expect(inlineStyles.editorCodeBackground).not.toBe("rgba(0, 0, 0, 0)");
+			expect(inlineStyles.previewCodeBackground).not.toBe("rgba(0, 0, 0, 0)");
+
+			await page.locator("#page_content").fill("First item\n\nSecond item\n\nThird quote");
+			await expect(proseMirror).toContainText("First item");
+			await expect(proseMirror).toContainText("Second item");
+			await expect(proseMirror).toContainText("Third quote");
+
+			await page.locator(".ProseMirror p", { hasText: "First item" }).click();
+			await bulletButton.click();
+			await expect(page.locator(".ProseMirror ul li")).toContainText("First item");
+
+			await page.locator(".ProseMirror p", { hasText: "Second item" }).click();
+			await numberedButton.click();
+			await expect(page.locator(".ProseMirror ol li")).toContainText("Second item");
+
+			await page.locator(".ProseMirror p", { hasText: "Third quote" }).click();
+			await quoteButton.click();
+			await expect(page.locator(".ProseMirror blockquote p")).toContainText(
+				"Third quote",
+			);
+
+			const structuralMarkdown = await page.locator("#page_content").inputValue();
+			expect(structuralMarkdown).toContain("- First item");
+			expect(structuralMarkdown).toContain("1. Second item");
+			expect(structuralMarkdown).toContain("> Third quote");
+
+			await context.close();
 		} finally {
 			await cleanupHarness(harness);
 		}
