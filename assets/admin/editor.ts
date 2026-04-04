@@ -9,6 +9,7 @@ import createClient from "openapi-fetch";
 import { ApiPaths, type components, type paths } from "./openapi";
 
 let OPENAPI_CLIENT: Client<paths, `${string}/${string}`>;
+const HEADING_LEVELS = [1, 2, 3, 4, 5, 6] as const;
 
 const inferAltFromFilename = (filename: string) => {
 	const trimmed = filename.replace(/\.[^/.]+$/, "");
@@ -684,6 +685,9 @@ const bindToolbar = (
 	const sourceButton = toolbar?.querySelector<HTMLButtonElement>(
 		'button[data-command="source"]',
 	);
+	const sizeControl = toolbar?.querySelector<HTMLSelectElement>(
+		'select[data-command="size"]',
+	);
 	const formattingButtons = {
 		bold: toolbar?.querySelector<HTMLButtonElement>('button[data-command="bold"]'),
 		italic: toolbar?.querySelector<HTMLButtonElement>(
@@ -691,8 +695,6 @@ const bindToolbar = (
 		),
 		code: toolbar?.querySelector<HTMLButtonElement>('button[data-command="code"]'),
 		link: toolbar?.querySelector<HTMLButtonElement>('button[data-command="link"]'),
-		h2: toolbar?.querySelector<HTMLButtonElement>('button[data-command="h2"]'),
-		h3: toolbar?.querySelector<HTMLButtonElement>('button[data-command="h3"]'),
 		ul: toolbar?.querySelector<HTMLButtonElement>('button[data-command="ul"]'),
 		ol: toolbar?.querySelector<HTMLButtonElement>('button[data-command="ol"]'),
 		quote: toolbar?.querySelector<HTMLButtonElement>('button[data-command="quote"]'),
@@ -703,8 +705,6 @@ const bindToolbar = (
 		"code",
 		"link",
 		"image",
-		"h2",
-		"h3",
 		"ul",
 		"ol",
 		"quote",
@@ -731,22 +731,38 @@ const bindToolbar = (
 		button.disabled = !enabled;
 	};
 
+	const activeSizeValue = () => {
+		for (const level of HEADING_LEVELS) {
+			if (editor.isActive("heading", { level })) {
+				return `h${level}`;
+			}
+		}
+
+		return "normal";
+	};
+
+	const syncSizeControl = () => {
+		if (!sizeControl) {
+			return;
+		}
+
+		sizeControl.value = activeSizeValue();
+		const canSetNormal = editor.can().chain().focus().setParagraph().run();
+		const canSetHeading = HEADING_LEVELS.some((level) =>
+			editor.can().chain().focus().toggleHeading({ level }).run(),
+		);
+		sizeControl.disabled = !(canSetNormal || canSetHeading);
+	};
+
 	const syncToolbarState = () => {
 		setButtonState(formattingButtons.bold, editor.isActive("bold"));
 		setButtonState(formattingButtons.italic, editor.isActive("italic"));
 		setButtonState(formattingButtons.code, editor.isActive("code"));
 		setButtonState(formattingButtons.link, editor.isActive("link"));
-		setButtonState(
-			formattingButtons.h2,
-			editor.isActive("heading", { level: 2 }),
-		);
-		setButtonState(
-			formattingButtons.h3,
-			editor.isActive("heading", { level: 3 }),
-		);
 		setButtonState(formattingButtons.ul, editor.isActive("bulletList"));
 		setButtonState(formattingButtons.ol, editor.isActive("orderedList"));
 		setButtonState(formattingButtons.quote, editor.isActive("blockquote"));
+		syncSizeControl();
 
 		setButtonEnabled(
 			formattingButtons.bold,
@@ -764,14 +780,6 @@ const bindToolbar = (
 			formattingButtons.link,
 			editor.can().chain().focus().setLink({ href: "https://example.com" }).run() ||
 				editor.isActive("link"),
-		);
-		setButtonEnabled(
-			formattingButtons.h2,
-			editor.can().chain().focus().toggleHeading({ level: 2 }).run(),
-		);
-		setButtonEnabled(
-			formattingButtons.h3,
-			editor.can().chain().focus().toggleHeading({ level: 3 }).run(),
 		);
 		setButtonEnabled(
 			formattingButtons.ul,
@@ -895,12 +903,6 @@ const bindToolbar = (
 				openAssetModal();
 				return;
 			}
-			case "h2":
-				editor.chain().focus().toggleHeading({ level: 2 }).run();
-				return;
-			case "h3":
-				editor.chain().focus().toggleHeading({ level: 3 }).run();
-				return;
 			case "ul":
 				editor.chain().focus().toggleBulletList().run();
 				return;
@@ -956,6 +958,28 @@ const bindToolbar = (
 
 		event.preventDefault();
 		handleCommand(commandName);
+		syncToolbarState();
+	});
+
+	sizeControl?.addEventListener("change", (event) => {
+		event.preventDefault();
+		const sizeValue = sizeControl.value;
+		if (sizeValue === "normal") {
+			editor.chain().focus().setParagraph().run();
+			syncToolbarState();
+			return;
+		}
+
+		const parsedLevel = Number.parseInt(sizeValue.replace(/^h/, ""), 10);
+		const level = HEADING_LEVELS.find(
+			(headingLevel) => headingLevel === parsedLevel,
+		);
+		if (!level) {
+			syncToolbarState();
+			return;
+		}
+
+		editor.chain().focus().toggleHeading({ level }).run();
 		syncToolbarState();
 	});
 
@@ -1321,7 +1345,12 @@ const initEditor = () => {
 			content: textarea.value || "",
 			contentType: "markdown",
 			extensions: [
-				StarterKit.configure({ link: false }),
+				StarterKit.configure({
+					link: false,
+					heading: {
+						levels: [1, 2, 3, 4, 5, 6],
+					},
+				}),
 				Image.configure({ inline: true }),
 				Link.configure({ openOnClick: false }),
 				Markdown,

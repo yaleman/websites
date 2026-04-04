@@ -7,8 +7,18 @@
         <button type="button" class="editor-button" data-command="image">Image</button>
     </div>
     <div class="editor-toolbar__group flex gap-2 border-r border-slate-200 pr-2 last:border-r-0 last:pr-0">
-        <button type="button" class="editor-button" data-command="h2" aria-pressed="false">H2</button>
-        <button type="button" class="editor-button" data-command="h3" aria-pressed="false">H3</button>
+        <label class="editor-field" for="editor_size">
+            <span class="editor-field__label">Size</span>
+            <select id="editor_size" class="editor-select" data-command="size" aria-label="Size">
+                <option value="normal">Normal</option>
+                <option value="h1">H1</option>
+                <option value="h2">H2</option>
+                <option value="h3">H3</option>
+                <option value="h4">H4</option>
+                <option value="h5">H5</option>
+                <option value="h6">H6</option>
+            </select>
+        </label>
     </div>
     <div class="editor-toolbar__group flex gap-2 border-r border-slate-200 pr-2 last:border-r-0 last:pr-0">
         <button type="button" class="editor-button" data-command="ul" aria-pressed="false">Bullets</button>

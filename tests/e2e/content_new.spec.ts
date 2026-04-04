@@ -108,18 +108,64 @@ test.describe("content new editor", () => {
 			).toBeVisible();
 			const boldButton = page.getByRole("button", { name: "Bold" });
 			const italicButton = page.getByRole("button", { name: "Italic" });
-			const h2Button = page.getByRole("button", { name: "H2" });
-			const h3Button = page.getByRole("button", { name: "H3" });
+			const sizeSelect = page.getByRole("combobox", { name: "Size" });
 			const bulletButton = page.getByRole("button", { name: "Bullets" });
 			const numberedButton = page.getByRole("button", { name: "Numbered" });
 			const quoteButton = page.getByRole("button", { name: "Quote" });
 			expect(
 				consoleErrors.filter((message) => message.includes("contentMatchAt")),
 			).toHaveLength(0);
+			await expect(sizeSelect).toBeVisible();
+			const sizeOptions = await sizeSelect.locator("option").evaluateAll((options) =>
+				options.map((option) => ({
+					value: (option as HTMLOptionElement).value,
+					label: option.textContent?.trim() ?? "",
+				})),
+			);
+			expect(sizeOptions).toEqual([
+				{ value: "normal", label: "Normal" },
+				{ value: "h1", label: "H1" },
+				{ value: "h2", label: "H2" },
+				{ value: "h3", label: "H3" },
+				{ value: "h4", label: "H4" },
+				{ value: "h5", label: "H5" },
+				{ value: "h6", label: "H6" },
+			]);
 			await page.locator(".ProseMirror").click();
 			await page.keyboard.type("Preview check");
 			await expect(boldButton).toHaveAttribute("aria-pressed", "false");
+			await expect(sizeSelect).toHaveValue("normal");
 			await expect(page.locator("[data-editor-preview]")).toBeHidden();
+
+			await sizeSelect.selectOption("h1");
+			await expect(sizeSelect).toHaveValue("h1");
+			await expect(
+				page.locator(".ProseMirror h1").filter({ hasText: "Preview check" }),
+			).toBeVisible();
+
+			await sizeSelect.selectOption("h2");
+			await expect(sizeSelect).toHaveValue("h2");
+			await expect(
+				page.locator(".ProseMirror h2").filter({ hasText: "Preview check" }),
+			).toBeVisible();
+
+			await sizeSelect.selectOption("h3");
+			await expect(sizeSelect).toHaveValue("h3");
+			await expect(
+				page.locator(".ProseMirror h3").filter({ hasText: "Preview check" }),
+			).toBeVisible();
+
+			await sizeSelect.selectOption("h6");
+			await expect(sizeSelect).toHaveValue("h6");
+			await expect(
+				page.locator(".ProseMirror h6").filter({ hasText: "Preview check" }),
+			).toBeVisible();
+
+			await sizeSelect.selectOption("normal");
+			await expect(sizeSelect).toHaveValue("normal");
+			await expect(
+				page.locator(".ProseMirror p").filter({ hasText: "Preview check" }),
+			).toBeVisible();
 
 			// TODO not currently tested as it's being removed/reworked
 			// await page.getByRole("button", { name: "Preview" }).click();
@@ -135,17 +181,41 @@ test.describe("content new editor", () => {
 			await page
 				.locator("#page_content")
 				.fill(
-					"Plain intro\n\n**Bold source**\n\n## Raw heading\n\n### Nested heading\n\n- Bullet line\n\n1. Numbered line\n\n> Quoted line",
+					"Plain intro\n\n# Hero heading\n\n## Raw heading\n\n### Nested heading\n\n#### Minor heading\n\n##### Compact heading\n\n###### Tiny heading\n\n- Bullet line\n\n1. Numbered line\n\n> Quoted line",
 				);
+			await page.locator(".ProseMirror p").first().click();
+			await page.keyboard.type("!");
+			const markdownRoundTrip = await page.locator("#page_content").inputValue();
+			expect(markdownRoundTrip).toContain("# Hero heading");
+			expect(markdownRoundTrip).toContain("## Raw heading");
+			expect(markdownRoundTrip).toContain("### Nested heading");
+			expect(markdownRoundTrip).toContain("#### Minor heading");
+			expect(markdownRoundTrip).toContain("##### Compact heading");
+			expect(markdownRoundTrip).toContain("###### Tiny heading");
+			await expect(page.locator("[data-editor-preview-body]")).toContainText(
+				"Hero heading",
+			);
 			await expect(page.locator("[data-editor-preview-body]")).toContainText(
 				"Raw heading",
 			);
 			await expect(page.locator("[data-editor-preview-body]")).toContainText(
 				"Nested heading",
 			);
-			await expect(page.locator(".ProseMirror")).toContainText("Bold source");
+			await expect(page.locator("[data-editor-preview-body]")).toContainText(
+				"Minor heading",
+			);
+			await expect(page.locator("[data-editor-preview-body]")).toContainText(
+				"Compact heading",
+			);
+			await expect(page.locator("[data-editor-preview-body]")).toContainText(
+				"Tiny heading",
+			);
 			await expect(page.locator(".ProseMirror")).toContainText("Raw heading");
 			await expect(page.locator(".ProseMirror")).toContainText("Nested heading");
+			await expect(page.locator(".ProseMirror")).toContainText("Hero heading");
+			await expect(page.locator(".ProseMirror")).toContainText("Minor heading");
+			await expect(page.locator(".ProseMirror")).toContainText("Compact heading");
+			await expect(page.locator(".ProseMirror")).toContainText("Tiny heading");
 			await expect(page.locator(".ProseMirror")).toContainText("Bullet line");
 			await expect(page.locator(".ProseMirror")).toContainText("Numbered line");
 			await expect(page.locator(".ProseMirror")).toContainText("Quoted line");
@@ -156,20 +226,24 @@ test.describe("content new editor", () => {
 					throw new Error("Editor surface missing");
 				}
 
-				const h2 = prose.querySelector("h2");
-				const h3 = prose.querySelector("h3");
-				if (!(h2 instanceof HTMLElement) || !(h3 instanceof HTMLElement)) {
+				const headings = Array.from({ length: 6 }, (_, index) =>
+					prose.querySelector(`h${index + 1}`),
+				);
+				if (headings.some((heading) => !(heading instanceof HTMLElement))) {
 					throw new Error("Editor headings missing");
 				}
 
-				return {
-					h2FontSize: Number.parseFloat(window.getComputedStyle(h2).fontSize),
-					h3FontSize: Number.parseFloat(window.getComputedStyle(h3).fontSize),
-				};
+				return headings.map((heading) =>
+					Number.parseFloat(
+						window.getComputedStyle(heading as HTMLElement).fontSize,
+					),
+				);
 			});
-			expect(editorHeadingSizes.h2FontSize).toBeGreaterThan(
-				editorHeadingSizes.h3FontSize,
-			);
+			expect(editorHeadingSizes[0]).toBeGreaterThan(editorHeadingSizes[1]);
+			expect(editorHeadingSizes[1]).toBeGreaterThan(editorHeadingSizes[2]);
+			expect(editorHeadingSizes[2]).toBeGreaterThan(editorHeadingSizes[3]);
+			expect(editorHeadingSizes[3]).toBeGreaterThan(editorHeadingSizes[4]);
+			expect(editorHeadingSizes[4]).toBeGreaterThan(editorHeadingSizes[5]);
 
 			const previewHeadingSizes = await page.evaluate(() => {
 				const preview = document.querySelector("[data-editor-preview-body]");
@@ -177,28 +251,33 @@ test.describe("content new editor", () => {
 					throw new Error("Preview surface missing");
 				}
 
-				const h2 = preview.querySelector("h2");
-				const h3 = preview.querySelector("h3");
-				if (!(h2 instanceof HTMLElement) || !(h3 instanceof HTMLElement)) {
+				const headings = Array.from({ length: 6 }, (_, index) =>
+					preview.querySelector(`h${index + 1}`),
+				);
+				if (headings.some((heading) => !(heading instanceof HTMLElement))) {
 					throw new Error("Preview headings missing");
 				}
 
-				return {
-					h2FontSize: Number.parseFloat(window.getComputedStyle(h2).fontSize),
-					h3FontSize: Number.parseFloat(window.getComputedStyle(h3).fontSize),
-				};
+				return headings.map((heading) =>
+					Number.parseFloat(
+						window.getComputedStyle(heading as HTMLElement).fontSize,
+					),
+				);
 			});
-			expect(previewHeadingSizes.h2FontSize).toBeGreaterThan(
-				previewHeadingSizes.h3FontSize,
-			);
+			expect(previewHeadingSizes[0]).toBeGreaterThan(previewHeadingSizes[1]);
+			expect(previewHeadingSizes[1]).toBeGreaterThan(previewHeadingSizes[2]);
+			expect(previewHeadingSizes[2]).toBeGreaterThan(previewHeadingSizes[3]);
+			expect(previewHeadingSizes[3]).toBeGreaterThan(previewHeadingSizes[4]);
+			expect(previewHeadingSizes[4]).toBeGreaterThan(previewHeadingSizes[5]);
 
 			await page.locator(".ProseMirror p").first().click();
+			await expect(sizeSelect).toHaveValue("normal");
 			await page.keyboard.press("End");
 			await boldButton.click();
 			await expect(boldButton).toHaveAttribute("aria-pressed", "true");
 			await page.keyboard.type(" tail");
 			await expect(page.locator(".ProseMirror p").first()).toContainText(
-				"Plain intro tail",
+				"Plain intro! tail",
 			);
 			await expect(page.locator(".ProseMirror p").first().locator("strong")).toContainText(
 				"tail",
@@ -211,27 +290,35 @@ test.describe("content new editor", () => {
 			await page.keyboard.press("Shift+ArrowLeft");
 			await page.keyboard.press("Shift+ArrowLeft");
 			await italicButton.click();
-			await expect(page.locator(".ProseMirror p").first().locator("em")).toContainText(
-				"tail",
-			);
+			await expect(
+				page
+					.locator(".ProseMirror p")
+					.first()
+					.locator("strong em")
+					.filter({ hasText: "tail" }),
+			).toBeVisible();
 			await expect(page.locator(".ProseMirror p").first()).toContainText(
-				"Plain intro tail",
+				"Plain intro! tail",
 			);
 
 			await page.locator(".ProseMirror p").first().locator("strong").click();
 			await expect(boldButton).toHaveAttribute("aria-pressed", "true");
-			await expect(h2Button).toHaveAttribute("aria-pressed", "false");
-			await expect(h3Button).toHaveAttribute("aria-pressed", "false");
+			await expect(sizeSelect).toHaveValue("normal");
+
+			await page.locator(".ProseMirror h1").click();
+			await expect(sizeSelect).toHaveValue("h1");
 
 			await page.locator(".ProseMirror h2").click();
-			await expect(h2Button).toHaveAttribute("aria-pressed", "true");
-			await expect(h3Button).toHaveAttribute("aria-pressed", "false");
+			await expect(sizeSelect).toHaveValue("h2");
 
 			await page.locator(".ProseMirror h3").click();
-			await expect(h2Button).toHaveAttribute("aria-pressed", "false");
-			await expect(h3Button).toHaveAttribute("aria-pressed", "true");
+			await expect(sizeSelect).toHaveValue("h3");
+
+			await page.locator(".ProseMirror h6").click();
+			await expect(sizeSelect).toHaveValue("h6");
 
 			await page.locator(".ProseMirror ul li").click();
+			await expect(sizeSelect).toHaveValue("normal");
 			await expect(bulletButton).toHaveAttribute("aria-pressed", "true");
 			await expect(numberedButton).toHaveAttribute("aria-pressed", "false");
 			await expect(quoteButton).toHaveAttribute("aria-pressed", "false");
