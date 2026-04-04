@@ -251,6 +251,35 @@ test.describe("content new editor", () => {
 			expect(listStyles.editorNumbered).toBe("decimal");
 			expect(listStyles.previewBullet).toBe("disc");
 			expect(listStyles.previewNumbered).toBe("decimal");
+			const blockquoteStyles = await page.evaluate(() => {
+				const prose = document.querySelector(".ProseMirror");
+				const preview = document.querySelector("[data-editor-preview-body]");
+				if (!(prose instanceof HTMLElement) || !(preview instanceof HTMLElement)) {
+					throw new Error("Editor surfaces missing");
+				}
+
+				const editorQuote = prose.querySelector("blockquote");
+				const previewQuote = preview.querySelector("blockquote");
+				if (
+					!(editorQuote instanceof HTMLElement) ||
+					!(previewQuote instanceof HTMLElement)
+				) {
+					throw new Error("Rendered blockquotes missing");
+				}
+
+				return {
+					editorBorderLeftWidth:
+						window.getComputedStyle(editorQuote).borderLeftWidth,
+					editorFontStyle: window.getComputedStyle(editorQuote).fontStyle,
+					previewBorderLeftWidth:
+						window.getComputedStyle(previewQuote).borderLeftWidth,
+					previewFontStyle: window.getComputedStyle(previewQuote).fontStyle,
+				};
+			});
+			expect(blockquoteStyles.editorBorderLeftWidth).toBe("4px");
+			expect(blockquoteStyles.editorFontStyle).toBe("italic");
+			expect(blockquoteStyles.previewBorderLeftWidth).toBe("4px");
+			expect(blockquoteStyles.previewFontStyle).toBe("italic");
 
 			const editorHeadingSizes = await page.evaluate(() => {
 				const prose = document.querySelector(".ProseMirror");

@@ -53,6 +53,11 @@
 		margin: 0.25rem 0;
 	}
 
+	.editor-shell .ProseMirror blockquote,
+	.editor-preview__body blockquote {
+		@apply my-4 border-l-4 border-slate-300 pl-4 italic text-slate-700;
+	}
+
 	.editor-shell .ProseMirror h1,
 	.editor-preview__body h1 {
 		@apply mt-10 mb-4 text-4xl font-bold tracking-tight text-slate-950;
