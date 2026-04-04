@@ -28,7 +28,7 @@ use crate::images::{generate_thumbnail, mime_from_extension};
 use crate::web::SiteRole;
 use crate::{entities::PageType, errors::SiteError};
 use chrono::{DateTime, Datelike, Utc};
-use markdown::{CompileOptions, Options};
+use markdown::{CompileOptions, Options, ParseOptions};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use sea_orm::{
@@ -662,11 +662,11 @@ async fn render_content_html(
     markdown::to_html_with_options(
         expanded.as_str(),
         &Options {
+            parse: ParseOptions::gfm(),
             compile: CompileOptions {
                 allow_dangerous_html: true,
-                ..CompileOptions::default()
+                ..CompileOptions::gfm()
             },
-            ..Options::default()
         },
     )
     .map_err(|err| SiteError::internal(format!("Failed to render markdown: {err:?}")))
@@ -4508,6 +4508,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn render_content_preview_renders_markdown_tables() {
+        let db = test_db_start().await;
+        let site = create_site_with_template_fixture(&db, "table-preview", "table-preview").await;
+        let templates_dir = TempDir::new().expect("failed to create templates dir");
+        let upload_root = TempDir::new().expect("failed to create upload dir");
+        let template_root = templates_dir.path().join("table-preview");
+        fs::create_dir_all(&template_root)
+            .await
+            .expect("failed to create template root");
+        fs::write(
+            template_root.join("base_template.html"),
+            r#"<!doctype html><html><body>{% block content %}{% endblock %}</body></html>"#,
+        )
+        .await
+        .expect("failed to write base template");
+        fs::write(
+            template_root.join("page.html"),
+            r#"{% extends "base_template.html" %}{% block content %}<article>{{content}}</article>{% endblock %}"#,
+        )
+        .await
+        .expect("failed to write page template");
+
+        let content = create_content(
+            &db,
+            NewContent {
+                site_id: site.id,
+                page_type: PageType::Page,
+                title: "Table Preview".to_string(),
+                slug: "table-preview".to_string(),
+                page_content: [
+                    "| Name | Score |",
+                    "| --- | ---: |",
+                    "| Alice | 10 |",
+                    "| Bob | 7 |",
+                ]
+                .join("\n"),
+                draft: true,
+                creator_sub: "creator".to_string(),
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create content");
+
+        let rendered = render_content_preview(
+            &db,
+            site.id,
+            content.id,
+            templates_dir.path().into(),
+            upload_root.path(),
+        )
+        .await
+        .expect("failed to render preview");
+
+        assert!(rendered.contains("<table>"));
+        assert!(rendered.contains("<thead>"));
+        assert!(rendered.contains("<tbody>"));
+        assert!(rendered.contains("<th>Name</th>"));
+        assert!(rendered.contains(r#"<td align="right">10</td>"#));
+    }
+
+    #[tokio::test]
     async fn render_content_preview_expands_asset_shortcode_into_figure() {
         let db = test_db_start().await;
         let site = create_site_with_template_fixture(&db, "asset-preview", "asset-preview").await;
@@ -4711,6 +4773,75 @@ mod tests {
 
         assert!(page_output.contains(r#"<span class="inline-html">inline html</span>"#));
         assert!(!page_output.contains("&lt;span"));
+    }
+
+    #[tokio::test]
+    async fn render_site_renders_markdown_tables() {
+        let db = test_db_start().await;
+        let site = create_site_with_template_fixture(&db, "table-site", "table-site").await;
+        let templates_dir = TempDir::new().expect("failed to create templates dir");
+        let rendered_dir = TempDir::new().expect("failed to create rendered dir");
+        let upload_root = TempDir::new().expect("failed to create upload dir");
+        let template_root = templates_dir.path().join("table-site");
+        fs::create_dir_all(&template_root)
+            .await
+            .expect("failed to create template root");
+        fs::write(
+            template_root.join("base_template.html"),
+            r#"<!doctype html><html><body>{% block content %}{% endblock %}</body></html>"#,
+        )
+        .await
+        .expect("failed to write base template");
+        fs::write(
+            template_root.join("post.html"),
+            r#"{% extends "base_template.html" %}{% block content %}<article>{{content}}</article>{% endblock %}"#,
+        )
+        .await
+        .expect("failed to write post template");
+
+        let content = create_content(
+            &db,
+            NewContent {
+                site_id: site.id,
+                page_type: PageType::Post,
+                title: "Table Post".to_string(),
+                slug: "table-post".to_string(),
+                page_content: [
+                    "| Name | Score |",
+                    "| --- | ---: |",
+                    "| Alice | 10 |",
+                    "| Bob | 7 |",
+                ]
+                .join("\n"),
+                draft: false,
+                creator_sub: "creator".to_string(),
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create content");
+        let content_route = content_primary_route(&content);
+
+        render_site(
+            &db,
+            site.id,
+            templates_dir.path(),
+            rendered_dir.path(),
+            upload_root.path(),
+        )
+        .await
+        .expect("failed to render site");
+
+        let rendered_root = rendered_dir.path().join(site.short_name);
+        let page_output = fs::read_to_string(rendered_root.join(content_route).join("index.html"))
+            .await
+            .expect("failed to read rendered page");
+
+        assert!(page_output.contains("<table>"));
+        assert!(page_output.contains("<thead>"));
+        assert!(page_output.contains("<tbody>"));
+        assert!(page_output.contains("<th>Name</th>"));
+        assert!(page_output.contains(r#"<td align="right">10</td>"#));
     }
 
     #[tokio::test]

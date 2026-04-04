@@ -5,6 +5,7 @@
         <button type="button" class="editor-button" data-command="code" aria-pressed="false">Code</button>
         <button type="button" class="editor-button" data-command="link" aria-pressed="false">Link</button>
         <button type="button" class="editor-button" data-command="image">Image</button>
+        <button type="button" class="editor-button" data-command="table" aria-pressed="false">Table</button>
     </div>
     <div class="editor-toolbar__group flex gap-2 border-r border-slate-200 pr-2 last:border-r-0 last:pr-0">
         <label class="editor-field" for="editor_size">
@@ -24,6 +25,20 @@
         <button type="button" class="editor-button" data-command="ul" aria-pressed="false">Bullets</button>
         <button type="button" class="editor-button" data-command="ol" aria-pressed="false">Numbered</button>
         <button type="button" class="editor-button" data-command="quote" aria-pressed="false">Quote</button>
+    </div>
+    <div class="editor-toolbar__group editor-toolbar__group--table flex flex-wrap gap-2 border-r border-slate-200 pr-2 last:border-r-0 last:pr-0" data-table-controls hidden>
+        <button type="button" class="editor-button" data-command="table-add-row-before">Row before</button>
+        <button type="button" class="editor-button" data-command="table-add-row-after">Row after</button>
+        <button type="button" class="editor-button" data-command="table-delete-row">Delete row</button>
+        <button type="button" class="editor-button" data-command="table-add-column-before">Column before</button>
+        <button type="button" class="editor-button" data-command="table-add-column-after">Column after</button>
+        <button type="button" class="editor-button" data-command="table-delete-column">Delete column</button>
+        <button type="button" class="editor-button" data-command="table-merge-cells">Merge cells</button>
+        <button type="button" class="editor-button" data-command="table-split-cell">Split cell</button>
+        <button type="button" class="editor-button" data-command="table-header-row" aria-pressed="false">Header row</button>
+        <button type="button" class="editor-button" data-command="table-header-column" aria-pressed="false">Header column</button>
+        <button type="button" class="editor-button" data-command="table-header-cell" aria-pressed="false">Header cell</button>
+        <button type="button" class="editor-button" data-command="table-delete">Delete table</button>
     </div>
     <div class="editor-toolbar__group flex gap-2 border-r border-slate-200 pr-2 last:border-r-0 last:pr-0">
         <!--

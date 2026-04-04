@@ -1,6 +1,7 @@
 import { Editor } from "@tiptap/core";
 import Image from "@tiptap/extension-image";
 import Link from "@tiptap/extension-link";
+import { TableKit } from "@tiptap/extension-table";
 import { Markdown } from "@tiptap/markdown";
 import StarterKit from "@tiptap/starter-kit";
 import "./editor.css";
@@ -12,6 +13,30 @@ let OPENAPI_CLIENT: Client<paths, `${string}/${string}`>;
 
 type AssetLibraryItem = components["schemas"]["AssetLibraryItem"];
 const HEADING_LEVELS = [1, 2, 3, 4, 5, 6] as const;
+const TABLE_INSERT_OPTIONS = { rows: 3, cols: 3, withHeaderRow: true } as const;
+const FOCUS_PRESERVING_COMMANDS = new Set([
+	"bold",
+	"italic",
+	"code",
+	"link",
+	"image",
+	"table",
+	"ul",
+	"ol",
+	"quote",
+	"table-add-row-before",
+	"table-add-row-after",
+	"table-delete-row",
+	"table-add-column-before",
+	"table-add-column-after",
+	"table-delete-column",
+	"table-merge-cells",
+	"table-split-cell",
+	"table-header-row",
+	"table-header-column",
+	"table-header-cell",
+	"table-delete",
+]);
 
 const inferAltFromFilename = (filename: string) => {
 	const trimmed = filename.replace(/\.[^/.]+$/, "");
@@ -826,6 +851,7 @@ const bindToolbar = (
 	const sizeControl = toolbar?.querySelector<HTMLSelectElement>(
 		'select[data-command="size"]',
 	);
+	const tableControls = toolbar?.querySelector<HTMLElement>("[data-table-controls]");
 	const formattingButtons = {
 		bold: toolbar?.querySelector<HTMLButtonElement>('button[data-command="bold"]'),
 		italic: toolbar?.querySelector<HTMLButtonElement>(
@@ -833,20 +859,49 @@ const bindToolbar = (
 		),
 		code: toolbar?.querySelector<HTMLButtonElement>('button[data-command="code"]'),
 		link: toolbar?.querySelector<HTMLButtonElement>('button[data-command="link"]'),
+		table: toolbar?.querySelector<HTMLButtonElement>('button[data-command="table"]'),
 		ul: toolbar?.querySelector<HTMLButtonElement>('button[data-command="ul"]'),
 		ol: toolbar?.querySelector<HTMLButtonElement>('button[data-command="ol"]'),
 		quote: toolbar?.querySelector<HTMLButtonElement>('button[data-command="quote"]'),
 	};
-	const formattingCommandNames = new Set([
-		"bold",
-		"italic",
-		"code",
-		"link",
-		"image",
-		"ul",
-		"ol",
-		"quote",
-	]);
+	const tableButtons = {
+		addRowBefore: toolbar?.querySelector<HTMLButtonElement>(
+			'button[data-command="table-add-row-before"]',
+		),
+		addRowAfter: toolbar?.querySelector<HTMLButtonElement>(
+			'button[data-command="table-add-row-after"]',
+		),
+		deleteRow: toolbar?.querySelector<HTMLButtonElement>(
+			'button[data-command="table-delete-row"]',
+		),
+		addColumnBefore: toolbar?.querySelector<HTMLButtonElement>(
+			'button[data-command="table-add-column-before"]',
+		),
+		addColumnAfter: toolbar?.querySelector<HTMLButtonElement>(
+			'button[data-command="table-add-column-after"]',
+		),
+		deleteColumn: toolbar?.querySelector<HTMLButtonElement>(
+			'button[data-command="table-delete-column"]',
+		),
+		mergeCells: toolbar?.querySelector<HTMLButtonElement>(
+			'button[data-command="table-merge-cells"]',
+		),
+		splitCell: toolbar?.querySelector<HTMLButtonElement>(
+			'button[data-command="table-split-cell"]',
+		),
+		headerRow: toolbar?.querySelector<HTMLButtonElement>(
+			'button[data-command="table-header-row"]',
+		),
+		headerColumn: toolbar?.querySelector<HTMLButtonElement>(
+			'button[data-command="table-header-column"]',
+		),
+		headerCell: toolbar?.querySelector<HTMLButtonElement>(
+			'button[data-command="table-header-cell"]',
+		),
+		deleteTable: toolbar?.querySelector<HTMLButtonElement>(
+			'button[data-command="table-delete"]',
+		),
+	};
 
 	const setButtonState = (
 		button: HTMLButtonElement | null | undefined,
@@ -879,6 +934,16 @@ const bindToolbar = (
 		return "normal";
 	};
 
+	const isTableActive = () => editor.isActive("table");
+
+	const setTableControlsVisible = (visible: boolean) => {
+		if (!tableControls) {
+			return;
+		}
+
+		tableControls.toggleAttribute("hidden", !visible);
+	};
+
 	const syncSizeControl = () => {
 		if (!sizeControl) {
 			return;
@@ -893,10 +958,13 @@ const bindToolbar = (
 		setButtonState(formattingButtons.italic, editor.isActive("italic"));
 		setButtonState(formattingButtons.code, editor.isActive("code"));
 		setButtonState(formattingButtons.link, editor.isActive("link"));
+		setButtonState(formattingButtons.table, isTableActive());
 		setButtonState(formattingButtons.ul, editor.isActive("bulletList"));
 		setButtonState(formattingButtons.ol, editor.isActive("orderedList"));
 		setButtonState(formattingButtons.quote, editor.isActive("blockquote"));
+		setButtonState(tableButtons.headerCell, editor.isActive("tableHeader"));
 		syncSizeControl();
+		setTableControlsVisible(isTableActive());
 
 		setButtonEnabled(
 			formattingButtons.bold,
@@ -916,6 +984,10 @@ const bindToolbar = (
 				editor.isActive("link"),
 		);
 		setButtonEnabled(
+			formattingButtons.table,
+			editor.can().chain().focus().insertTable(TABLE_INSERT_OPTIONS).run(),
+		);
+		setButtonEnabled(
 			formattingButtons.ul,
 			editor.can().chain().focus().toggleBulletList().run(),
 		);
@@ -926,6 +998,54 @@ const bindToolbar = (
 		setButtonEnabled(
 			formattingButtons.quote,
 			editor.can().chain().focus().toggleBlockquote().run(),
+		);
+		setButtonEnabled(
+			tableButtons.addRowBefore,
+			editor.can().chain().focus().addRowBefore().run(),
+		);
+		setButtonEnabled(
+			tableButtons.addRowAfter,
+			editor.can().chain().focus().addRowAfter().run(),
+		);
+		setButtonEnabled(
+			tableButtons.deleteRow,
+			editor.can().chain().focus().deleteRow().run(),
+		);
+		setButtonEnabled(
+			tableButtons.addColumnBefore,
+			editor.can().chain().focus().addColumnBefore().run(),
+		);
+		setButtonEnabled(
+			tableButtons.addColumnAfter,
+			editor.can().chain().focus().addColumnAfter().run(),
+		);
+		setButtonEnabled(
+			tableButtons.deleteColumn,
+			editor.can().chain().focus().deleteColumn().run(),
+		);
+		setButtonEnabled(
+			tableButtons.mergeCells,
+			editor.can().chain().focus().mergeCells().run(),
+		);
+		setButtonEnabled(
+			tableButtons.splitCell,
+			editor.can().chain().focus().splitCell().run(),
+		);
+		setButtonEnabled(
+			tableButtons.headerRow,
+			editor.can().chain().focus().toggleHeaderRow().run(),
+		);
+		setButtonEnabled(
+			tableButtons.headerColumn,
+			editor.can().chain().focus().toggleHeaderColumn().run(),
+		);
+		setButtonEnabled(
+			tableButtons.headerCell,
+			editor.can().chain().focus().toggleHeaderCell().run(),
+		);
+		setButtonEnabled(
+			tableButtons.deleteTable,
+			editor.can().chain().focus().deleteTable().run(),
 		);
 	};
 
@@ -1037,6 +1157,9 @@ const bindToolbar = (
 				openAssetModal();
 				return;
 			}
+			case "table":
+				editor.chain().focus().insertTable(TABLE_INSERT_OPTIONS).run();
+				return;
 			case "ul":
 				editor.chain().focus().toggleBulletList().run();
 				return;
@@ -1045,6 +1168,42 @@ const bindToolbar = (
 				return;
 			case "quote":
 				editor.chain().focus().toggleBlockquote().run();
+				return;
+			case "table-add-row-before":
+				editor.chain().focus().addRowBefore().run();
+				return;
+			case "table-add-row-after":
+				editor.chain().focus().addRowAfter().run();
+				return;
+			case "table-delete-row":
+				editor.chain().focus().deleteRow().run();
+				return;
+			case "table-add-column-before":
+				editor.chain().focus().addColumnBefore().run();
+				return;
+			case "table-add-column-after":
+				editor.chain().focus().addColumnAfter().run();
+				return;
+			case "table-delete-column":
+				editor.chain().focus().deleteColumn().run();
+				return;
+			case "table-merge-cells":
+				editor.chain().focus().mergeCells().run();
+				return;
+			case "table-split-cell":
+				editor.chain().focus().splitCell().run();
+				return;
+			case "table-header-row":
+				editor.chain().focus().toggleHeaderRow().run();
+				return;
+			case "table-header-column":
+				editor.chain().focus().toggleHeaderColumn().run();
+				return;
+			case "table-header-cell":
+				editor.chain().focus().toggleHeaderCell().run();
+				return;
+			case "table-delete":
+				editor.chain().focus().deleteTable().run();
 				return;
 			case "preview":
 				togglePreview();
@@ -1072,7 +1231,7 @@ const bindToolbar = (
 		}
 
 		const commandName = button.getAttribute("data-command");
-		if (!commandName || !formattingCommandNames.has(commandName)) {
+		if (!commandName || !FOCUS_PRESERVING_COMMANDS.has(commandName)) {
 			return;
 		}
 
@@ -1483,6 +1642,12 @@ const initEditor = () => {
 					link: false,
 					heading: {
 						levels: [1, 2, 3, 4, 5, 6],
+					},
+				}),
+				TableKit.configure({
+					table: {
+						resizable: false,
+						renderWrapper: true,
 					},
 				}),
 				Image.configure({ inline: true }),
