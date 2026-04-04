@@ -908,6 +908,18 @@ test.describe("content new editor", () => {
 			const betaCard = modal.locator(".asset-card", {
 				hasText: secondAsset.originalFilename,
 			});
+			const alphaResultCard = modal.locator(
+				"[data-asset-results] .asset-card",
+				{
+					hasText: firstAsset.originalFilename,
+				},
+			);
+			const betaResultCard = modal.locator(
+				"[data-asset-results] .asset-card",
+				{
+					hasText: secondAsset.originalFilename,
+				},
+			);
 			const altInput = modal.getByLabel("Alt text");
 			const searchInput = modal.getByPlaceholder("Search by filename");
 			const externalInput = modal.getByLabel("External image URL");
@@ -923,23 +935,25 @@ test.describe("content new editor", () => {
 			).toBeEnabled();
 
 			await searchInput.fill("batch-image");
-			await expect(alphaCard).toHaveAttribute("aria-pressed", "true");
-			await expect(betaCard).toHaveAttribute("aria-pressed", "true");
+			await expect(alphaResultCard).toBeVisible();
+			await expect(betaResultCard).toBeVisible();
+			await expect(alphaResultCard).toHaveAttribute("aria-pressed", "true");
+			await expect(betaResultCard).toHaveAttribute("aria-pressed", "true");
 
-			await alphaCard.click();
+			await alphaResultCard.click();
 			await expect(modal.getByText("1 image selected.")).toBeVisible();
 			await expect(altInput).toBeEnabled();
 			await expect(altInput).toHaveValue("batch image beta");
-			await expect(alphaCard).toHaveAttribute("aria-pressed", "false");
-			await expect(betaCard).toHaveAttribute("aria-pressed", "true");
+			await expect(alphaResultCard).toHaveAttribute("aria-pressed", "false");
+			await expect(betaResultCard).toHaveAttribute("aria-pressed", "true");
 
 			await altInput.fill("Shared alt text");
-			await alphaCard.click();
+			await alphaResultCard.click();
 			await expect(modal.getByText("2 images selected.")).toBeVisible();
 			await expect(altInput).toBeDisabled();
 			await expect(altInput).toHaveValue("Shared alt text");
 
-			await alphaCard.click();
+			await alphaResultCard.click();
 			await expect(modal.getByText("1 image selected.")).toBeVisible();
 			await expect(altInput).toBeEnabled();
 			await expect(altInput).toHaveValue("Shared alt text");
@@ -948,20 +962,20 @@ test.describe("content new editor", () => {
 			await expect(
 				modal.getByText("External image URL ready to insert."),
 			).toBeVisible();
-			await expect(alphaCard).toHaveAttribute("aria-pressed", "false");
-			await expect(betaCard).toHaveAttribute("aria-pressed", "false");
+			await expect(alphaResultCard).toHaveAttribute("aria-pressed", "false");
+			await expect(betaResultCard).toHaveAttribute("aria-pressed", "false");
 			await expect(altInput).toHaveValue("Shared alt text");
 			await expect(
 				modal.getByRole("button", { name: "Insert image" }),
 			).toBeEnabled();
 
-			await betaCard.click();
+			await betaResultCard.click();
 			await expect(externalInput).toHaveValue("");
 			await expect(modal.getByText("1 image selected.")).toBeVisible();
 			await expect(altInput).toHaveValue("Shared alt text");
-			await expect(betaCard).toHaveAttribute("aria-pressed", "true");
+			await expect(betaResultCard).toHaveAttribute("aria-pressed", "true");
 
-			await alphaCard.click();
+			await alphaResultCard.click();
 			await expect(modal.getByText("2 images selected.")).toBeVisible();
 			await modal.getByRole("button", { name: "Insert 2 images" }).click();
 			await expect(modal).toBeHidden();
