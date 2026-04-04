@@ -8,8 +8,9 @@ use crate::constants::SESSION_USER;
 use crate::db::test_db_start;
 use axum::Router;
 use axum::body::{Body, to_bytes};
-use axum::http::{Request, StatusCode};
+use axum::http::{Request, StatusCode, header};
 use axum::routing::get;
+use sea_orm::{ActiveModelTrait, Set};
 use serde::de::value::{Error as ValueError, StrDeserializer};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -122,6 +123,163 @@ fn sort_content_items_orders_titles_descending_case_insensitively() {
     assert_eq!(titles, vec!["Zulu post", "Beta page", "alpha page"]);
 }
 
+fn test_asset(
+    original_filename: &str,
+    byte_length: i32,
+    created_at: &str,
+) -> entities::asset::Model {
+    entities::asset::Model {
+        id: Uuid::now_v7(),
+        site_id: Uuid::now_v7(),
+        uploader_sub: "tester".to_string(),
+        original_filename: original_filename.to_string(),
+        storage_basename: format!("{}-stored", original_filename.to_lowercase()),
+        mime_type: "image/png".to_string(),
+        byte_length,
+        width: Some(100),
+        height: Some(80),
+        created_at: DateTime::parse_from_rfc3339(created_at)
+            .expect("invalid asset created_at")
+            .with_timezone(&Utc),
+    }
+}
+
+#[test]
+fn asset_sort_parsing_defaults_and_fallbacks() {
+    assert_eq!(AssetSortBy::from_query(None), AssetSortBy::Uploaded);
+    assert_eq!(
+        AssetSortDirection::from_query(None),
+        AssetSortDirection::Desc
+    );
+    assert_eq!(
+        AssetSortBy::from_query(Some("invalid")),
+        AssetSortBy::Uploaded
+    );
+    assert_eq!(
+        AssetSortDirection::from_query(Some("invalid")),
+        AssetSortDirection::Desc
+    );
+}
+
+#[test]
+fn asset_sort_parsing_maps_supported_values() {
+    assert_eq!(
+        AssetSortBy::from_query(Some("uploaded")),
+        AssetSortBy::Uploaded
+    );
+    assert_eq!(AssetSortBy::from_query(Some("size")), AssetSortBy::Size);
+    assert_eq!(AssetSortBy::from_query(Some("name")), AssetSortBy::Name);
+    assert_eq!(
+        AssetSortDirection::from_query(Some("asc")),
+        AssetSortDirection::Asc
+    );
+    assert_eq!(
+        AssetSortDirection::from_query(Some("desc")),
+        AssetSortDirection::Desc
+    );
+}
+
+#[test]
+fn sort_assets_orders_by_uploaded_in_both_directions() {
+    let mut descending = vec![
+        test_asset("charlie.png", 30, "2026-03-10T00:00:00Z"),
+        test_asset("alpha.png", 10, "2026-03-11T00:00:00Z"),
+        test_asset("bravo.png", 20, "2026-03-11T00:00:00Z"),
+    ];
+    sort_assets(
+        &mut descending,
+        AssetSortBy::Uploaded,
+        AssetSortDirection::Desc,
+    );
+    assert_eq!(
+        descending
+            .iter()
+            .map(|asset| asset.original_filename.as_str())
+            .collect::<Vec<_>>(),
+        vec!["alpha.png", "bravo.png", "charlie.png"]
+    );
+
+    let mut ascending = vec![
+        test_asset("charlie.png", 30, "2026-03-10T00:00:00Z"),
+        test_asset("alpha.png", 10, "2026-03-11T00:00:00Z"),
+        test_asset("bravo.png", 20, "2026-03-11T00:00:00Z"),
+    ];
+    sort_assets(
+        &mut ascending,
+        AssetSortBy::Uploaded,
+        AssetSortDirection::Asc,
+    );
+    assert_eq!(
+        ascending
+            .iter()
+            .map(|asset| asset.original_filename.as_str())
+            .collect::<Vec<_>>(),
+        vec!["charlie.png", "alpha.png", "bravo.png"]
+    );
+}
+
+#[test]
+fn sort_assets_orders_by_size_in_both_directions() {
+    let mut ascending = vec![
+        test_asset("bravo.png", 40, "2026-03-11T00:00:00Z"),
+        test_asset("alpha.png", 40, "2026-03-10T00:00:00Z"),
+        test_asset("charlie.png", 10, "2026-03-12T00:00:00Z"),
+    ];
+    sort_assets(&mut ascending, AssetSortBy::Size, AssetSortDirection::Asc);
+    assert_eq!(
+        ascending
+            .iter()
+            .map(|asset| asset.original_filename.as_str())
+            .collect::<Vec<_>>(),
+        vec!["charlie.png", "alpha.png", "bravo.png"]
+    );
+
+    let mut descending = vec![
+        test_asset("bravo.png", 40, "2026-03-11T00:00:00Z"),
+        test_asset("alpha.png", 40, "2026-03-10T00:00:00Z"),
+        test_asset("charlie.png", 10, "2026-03-12T00:00:00Z"),
+    ];
+    sort_assets(&mut descending, AssetSortBy::Size, AssetSortDirection::Desc);
+    assert_eq!(
+        descending
+            .iter()
+            .map(|asset| asset.original_filename.as_str())
+            .collect::<Vec<_>>(),
+        vec!["alpha.png", "bravo.png", "charlie.png"]
+    );
+}
+
+#[test]
+fn sort_assets_orders_by_name_case_insensitively() {
+    let mut ascending = vec![
+        test_asset("bravo.png", 20, "2026-03-10T00:00:00Z"),
+        test_asset("Alpha.png", 10, "2026-03-11T00:00:00Z"),
+        test_asset("alpha.png", 30, "2026-03-12T00:00:00Z"),
+    ];
+    sort_assets(&mut ascending, AssetSortBy::Name, AssetSortDirection::Asc);
+    assert_eq!(
+        ascending
+            .iter()
+            .map(|asset| asset.original_filename.as_str())
+            .collect::<Vec<_>>(),
+        vec!["alpha.png", "Alpha.png", "bravo.png"]
+    );
+
+    let mut descending = vec![
+        test_asset("bravo.png", 20, "2026-03-10T00:00:00Z"),
+        test_asset("Alpha.png", 10, "2026-03-11T00:00:00Z"),
+        test_asset("alpha.png", 30, "2026-03-12T00:00:00Z"),
+    ];
+    sort_assets(&mut descending, AssetSortBy::Name, AssetSortDirection::Desc);
+    assert_eq!(
+        descending
+            .iter()
+            .map(|asset| asset.original_filename.as_str())
+            .collect::<Vec<_>>(),
+        vec!["bravo.png", "alpha.png", "Alpha.png"]
+    );
+}
+
 #[test]
 fn build_search_rows_links_to_editor() {
     let site_id = Uuid::now_v7();
@@ -198,6 +356,181 @@ fn content_list_href_omits_default_status_filter() {
         href,
         "/admin/site/00000000-0000-0000-0000-000000000000/content?sort_by=created_desc"
     );
+}
+
+#[tokio::test]
+async fn admin_assets_page_sorts_by_name_and_renders_selected_controls() {
+    let db = Arc::new(test_db_start().await);
+    let site = crate::create_site(
+        db.as_ref(),
+        "asset-sort-page".to_string(),
+        "Asset Sort Page".to_string(),
+        DEFAULT_TEMPLATE_NAME.to_string(),
+    )
+    .await
+    .expect("failed to create site");
+    let viewer = crate::entities::user::create_user(
+        db.as_ref(),
+        "asset-sort-viewer",
+        Some("viewer@example.com"),
+        Some("Viewer"),
+        false,
+    )
+    .await
+    .expect("failed to create viewer");
+    crate::create_membership(
+        db.as_ref(),
+        crate::NewMembership {
+            site_id: site.id,
+            user_id: viewer.id,
+            role: SiteRole::Viewer,
+        },
+    )
+    .await
+    .expect("failed to create viewer membership");
+    insert_test_asset(
+        db.as_ref(),
+        site.id,
+        "charlie.png",
+        300,
+        "2026-03-10T00:00:00Z",
+    )
+    .await;
+    insert_test_asset(
+        db.as_ref(),
+        site.id,
+        "alpha.png",
+        100,
+        "2026-03-11T00:00:00Z",
+    )
+    .await;
+    insert_test_asset(
+        db.as_ref(),
+        site.id,
+        "bravo.png",
+        200,
+        "2026-03-12T00:00:00Z",
+    )
+    .await;
+
+    let session_store = MemoryStore::default();
+    let router = test_app_router(test_admin_state(db.clone()), session_store.clone()).router;
+    let cookie = seed_session_cookie(test_admin_state(db.clone()), session_store, viewer.id).await;
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/admin/site/{}/assets?sort_by=name&sort_dir=asc",
+                    site.id
+                ))
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .expect("failed to build assets page request"),
+        )
+        .await
+        .expect("failed to call assets page");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read assets page body");
+    let body = String::from_utf8(body.to_vec()).expect("invalid assets page body");
+    assert!(body.contains(r#"<option value="name" selected>"#));
+    assert!(body.contains(r#"<option value="asc" selected>"#));
+
+    let alpha_index = body.find("alpha.png").expect("missing alpha asset");
+    let bravo_index = body.find("bravo.png").expect("missing bravo asset");
+    let charlie_index = body.find("charlie.png").expect("missing charlie asset");
+    assert!(alpha_index < bravo_index);
+    assert!(bravo_index < charlie_index);
+}
+
+#[tokio::test]
+async fn admin_asset_upload_page_sorts_by_size_and_renders_selected_controls() {
+    let db = Arc::new(test_db_start().await);
+    let site = crate::create_site(
+        db.as_ref(),
+        "asset-sort-upload".to_string(),
+        "Asset Sort Upload".to_string(),
+        DEFAULT_TEMPLATE_NAME.to_string(),
+    )
+    .await
+    .expect("failed to create site");
+    let author = crate::entities::user::create_user(
+        db.as_ref(),
+        "asset-sort-author",
+        Some("author@example.com"),
+        Some("Author"),
+        false,
+    )
+    .await
+    .expect("failed to create author");
+    crate::create_membership(
+        db.as_ref(),
+        crate::NewMembership {
+            site_id: site.id,
+            user_id: author.id,
+            role: SiteRole::Author,
+        },
+    )
+    .await
+    .expect("failed to create author membership");
+    insert_test_asset(
+        db.as_ref(),
+        site.id,
+        "large.png",
+        300,
+        "2026-03-10T00:00:00Z",
+    )
+    .await;
+    insert_test_asset(
+        db.as_ref(),
+        site.id,
+        "small.png",
+        100,
+        "2026-03-11T00:00:00Z",
+    )
+    .await;
+    insert_test_asset(
+        db.as_ref(),
+        site.id,
+        "medium.png",
+        200,
+        "2026-03-12T00:00:00Z",
+    )
+    .await;
+
+    let session_store = MemoryStore::default();
+    let router = test_app_router(test_admin_state(db.clone()), session_store.clone()).router;
+    let cookie = seed_session_cookie(test_admin_state(db.clone()), session_store, author.id).await;
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/admin/site/{}/assets/new?sort_by=size&sort_dir=asc",
+                    site.id
+                ))
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .expect("failed to build asset upload page request"),
+        )
+        .await
+        .expect("failed to call asset upload page");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read asset upload page body");
+    let body = String::from_utf8(body.to_vec()).expect("invalid asset upload page body");
+    assert!(body.contains("Browse Assets"));
+    assert!(body.contains(r#"<option value="size" selected>"#));
+    assert!(body.contains(r#"<option value="asc" selected>"#));
+
+    let small_index = body.find("small.png").expect("missing small asset");
+    let medium_index = body.find("medium.png").expect("missing medium asset");
+    let large_index = body.find("large.png").expect("missing large asset");
+    assert!(small_index < medium_index);
+    assert!(medium_index < large_index);
 }
 
 #[tokio::test]
@@ -395,6 +728,32 @@ fn write_test_log_file(log_path: &StdPath, contents: &str) {
     std::fs::create_dir_all(log_path.parent().expect("test log path missing parent"))
         .expect("failed to create test log root");
     std::fs::write(log_path, contents).expect("failed to write test log file");
+}
+
+async fn insert_test_asset(
+    db: &DatabaseConnection,
+    site_id: Uuid,
+    original_filename: &str,
+    byte_length: i32,
+    created_at: &str,
+) -> entities::asset::Model {
+    entities::asset::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        site_id: Set(site_id),
+        uploader_sub: Set("tester".to_string()),
+        original_filename: Set(original_filename.to_string()),
+        storage_basename: Set(format!("{}-{}", Uuid::now_v7(), original_filename)),
+        mime_type: Set("image/png".to_string()),
+        byte_length: Set(byte_length),
+        width: Set(Some(100)),
+        height: Set(Some(80)),
+        created_at: Set(DateTime::parse_from_rfc3339(created_at)
+            .expect("invalid asset created_at")
+            .with_timezone(&Utc)),
+    }
+    .insert(db)
+    .await
+    .expect("failed to insert test asset")
 }
 
 async fn insert_test_publish_run(

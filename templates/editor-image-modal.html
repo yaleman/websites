@@ -14,7 +14,7 @@
             </div>
         </header>
         <div class="editor-modal__body grid gap-4 overflow-auto p-4">
-            <div class="asset-controls grid gap-3 md:grid-cols-2">
+            <div class="asset-controls grid gap-3 md:grid-cols-4">
                 <div class="form-field">
                     <label for="asset_search">Search images</label>
                     <input id="asset_search" type="search" placeholder="Search by filename" data-asset-search />
@@ -28,6 +28,21 @@
                         <option value="gif">GIF</option>
                         <option value="svg">SVG</option>
                         <option value="webp">WebP</option>
+                    </select>
+                </div>
+                <div class="form-field">
+                    <label for="asset_sort_by">Sort by</label>
+                    <select id="asset_sort_by" data-asset-sort-by>
+                        <option value="uploaded">Date uploaded</option>
+                        <option value="size">File size</option>
+                        <option value="name">File name</option>
+                    </select>
+                </div>
+                <div class="form-field">
+                    <label for="asset_sort_dir">Direction</label>
+                    <select id="asset_sort_dir" data-asset-sort-dir>
+                        <option value="desc">Descending</option>
+                        <option value="asc">Ascending</option>
                     </select>
                 </div>
             </div>

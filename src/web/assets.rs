@@ -294,9 +294,13 @@ pub(crate) async fn admin_site_assets(
     State(state): State<AdminState>,
     session: Session,
     Path(site_id): Path<Uuid>,
+    Query(query): Query<AdminAssetListQuery>,
 ) -> Result<AdminAssetsTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Viewer).await?;
-    let assets = list_assets(state.db.as_ref(), site_id).await?;
+    let sort_by = AssetSortBy::from_query(query.sort_by.as_deref());
+    let sort_dir = AssetSortDirection::from_query(query.sort_dir.as_deref());
+    let mut assets = list_assets(state.db.as_ref(), site_id).await?;
+    sort_assets(&mut assets, sort_by, sort_dir);
     let site = entities::site::Entity::find_by_id(site_id)
         .one(state.db.as_ref())
         .await
@@ -318,6 +322,8 @@ pub(crate) async fn admin_site_assets(
             ]),
         site_id,
         site_full_title: site.full_title,
+        sort_by_options: sort_by.options(),
+        sort_dir_options: sort_dir.options(),
         assets: asset_rows,
     })
 }
@@ -326,16 +332,17 @@ pub(crate) async fn admin_site_assets_new(
     State(state): State<AdminState>,
     session: Session,
     Path(site_id): Path<Uuid>,
+    Query(query): Query<AdminAssetListQuery>,
 ) -> Result<AdminAssetsNewTemplate, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let sort_by = AssetSortBy::from_query(query.sort_by.as_deref());
+    let sort_dir = AssetSortDirection::from_query(query.sort_dir.as_deref());
     match get_by_id(state.db.as_ref(), site_id).await {
         Ok(site) => {
-            let mut recent_assets = list_assets(state.db.as_ref(), site_id).await?;
-            recent_assets.sort_by(|left, right| right.created_at.cmp(&left.created_at));
-            let recent_assets = recent_assets.into_iter().take(10).collect::<Vec<_>>();
-            let recent_assets =
-                build_admin_asset_rows(state.db.as_ref(), &state.upload_root, recent_assets)
-                    .await?;
+            let mut assets = list_assets(state.db.as_ref(), site_id).await?;
+            sort_assets(&mut assets, sort_by, sort_dir);
+            let assets =
+                build_admin_asset_rows(state.db.as_ref(), &state.upload_root, assets).await?;
             let site_publish_configured =
                 site_has_publish_config(state.db.as_ref(), site_id).await?;
 
@@ -352,7 +359,9 @@ pub(crate) async fn admin_site_assets_new(
                     ]),
                 site_id: site.id,
                 site_full_title: site.full_title,
-                recent_assets,
+                sort_by_options: sort_by.options(),
+                sort_dir_options: sort_dir.options(),
+                assets,
             })
         }
         Err(error) => Err(SiteError::internal(format!(

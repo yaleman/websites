@@ -2,6 +2,7 @@ use crate::entities::audit_event::log_audit_event;
 use crate::entities::{self, PageType};
 use crate::errors::SiteError;
 use crate::token_auth::{self, authenticate_api_request};
+use crate::web::state::{AssetSortBy, AssetSortDirection, sort_assets};
 use crate::web::{AdminState, SiteRole};
 use crate::{
     NewContent, UpdateContent, collect_asset_filenames, create_content, delete_asset,
@@ -15,7 +16,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
@@ -242,6 +243,8 @@ pub(crate) struct AssetLibraryQuery {
     q: Option<String>,
     limit: Option<u64>,
     r#type: Option<String>,
+    sort_by: Option<String>,
+    sort_dir: Option<String>,
 }
 
 #[derive(Debug, ToSchema)]
@@ -301,6 +304,7 @@ pub(crate) struct AssetLibraryItem {
     id: Uuid,
     original_filename: String,
     mime_type: String,
+    byte_length: i32,
     width: Option<i32>,
     height: Option<i32>,
     created_at: String,
@@ -1151,6 +1155,8 @@ pub(crate) async fn api_site_assets_library(
     let has_query = !query_text.is_empty();
     let default_limit = if has_query { 50 } else { 12 };
     let limit = query.limit.unwrap_or(default_limit).clamp(1, 200) as usize;
+    let sort_by = AssetSortBy::from_query(query.sort_by.as_deref());
+    let sort_dir = AssetSortDirection::from_query(query.sort_dir.as_deref());
 
     let mut asset_query = entities::asset::Entity::find()
         .filter(entities::asset::Column::SiteId.eq(site_id))
@@ -1171,12 +1177,12 @@ pub(crate) async fn api_site_assets_library(
         asset_query = asset_query.filter(condition);
     }
 
-    let assets = asset_query
-        .order_by_desc(entities::asset::Column::CreatedAt)
-        .limit(limit as u64)
+    let mut assets = asset_query
         .all(state.db.as_ref())
         .await
         .map_err(SiteError::from)?;
+    sort_assets(&mut assets, sort_by, sort_dir);
+    assets.truncate(limit);
 
     let asset_ids = assets.iter().map(|asset| asset.id).collect::<Vec<_>>();
     let thumbnails = load_thumbnail_urls(state.db.as_ref(), &asset_ids).await?;
@@ -1188,6 +1194,7 @@ pub(crate) async fn api_site_assets_library(
                 id: asset.id,
                 original_filename: asset.original_filename,
                 mime_type: asset.mime_type,
+                byte_length: asset.byte_length,
                 width: asset.width,
                 height: asset.height,
                 created_at: asset.created_at.to_rfc3339(),
@@ -1216,7 +1223,7 @@ mod tests {
     use axum::routing::get;
     use openidconnect::{ClientId, IssuerUrl};
     use reqwest::Url;
-    use sea_orm::{EntityTrait, PaginatorTrait, QueryFilter};
+    use sea_orm::{ActiveModelTrait, EntityTrait, PaginatorTrait, QueryFilter, Set};
     use std::sync::Arc;
     use tempfile::TempDir;
     use tower::ServiceExt;
@@ -1338,6 +1345,32 @@ mod tests {
             "expected path to be absent: {}",
             path.display()
         );
+    }
+
+    async fn insert_test_asset(
+        db: &DatabaseConnection,
+        site_id: Uuid,
+        original_filename: &str,
+        byte_length: i32,
+        created_at: &str,
+    ) -> entities::asset::Model {
+        entities::asset::ActiveModel {
+            id: Set(Uuid::now_v7()),
+            site_id: Set(site_id),
+            uploader_sub: Set("tester".to_string()),
+            original_filename: Set(original_filename.to_string()),
+            storage_basename: Set(format!("{}-{}", Uuid::now_v7(), original_filename)),
+            mime_type: Set("image/png".to_string()),
+            byte_length: Set(byte_length),
+            width: Set(Some(100)),
+            height: Set(Some(80)),
+            created_at: Set(DateTime::parse_from_rfc3339(created_at)
+                .expect("invalid asset created_at")
+                .with_timezone(&Utc)),
+        }
+        .insert(db)
+        .await
+        .expect("failed to insert test asset")
     }
 
     #[tokio::test]
@@ -1771,5 +1804,154 @@ mod tests {
         for filename in &stored_filenames {
             assert_missing(&upload_root.path().join(filename));
         }
+    }
+
+    #[tokio::test]
+    async fn asset_library_api_supports_explicit_sorting() {
+        let db = Arc::new(test_db_start().await);
+        let upload_root = TempDir::new().expect("failed to create upload root");
+        let site_templates_root = TempDir::new().expect("failed to create template root");
+        let router = test_router(test_admin_state(
+            db.clone(),
+            upload_root.path(),
+            site_templates_root.path(),
+        ));
+
+        let site = crate::create_site(
+            db.as_ref(),
+            "asset-library-sort".to_string(),
+            "Asset Library Sort".to_string(),
+            "default".to_string(),
+        )
+        .await
+        .expect("failed to create site");
+        let viewer = create_user(db.as_ref(), "asset-library-viewer", None, None, false)
+            .await
+            .expect("failed to create viewer");
+        crate::create_membership(
+            db.as_ref(),
+            crate::NewMembership {
+                site_id: site.id,
+                user_id: viewer.id,
+                role: SiteRole::Viewer,
+            },
+        )
+        .await
+        .expect("failed to create viewer membership");
+        insert_test_asset(
+            db.as_ref(),
+            site.id,
+            "charlie.png",
+            300,
+            "2026-03-10T00:00:00Z",
+        )
+        .await;
+        insert_test_asset(
+            db.as_ref(),
+            site.id,
+            "alpha.png",
+            100,
+            "2026-03-12T00:00:00Z",
+        )
+        .await;
+        insert_test_asset(
+            db.as_ref(),
+            site.id,
+            "bravo.png",
+            200,
+            "2026-03-11T00:00:00Z",
+        )
+        .await;
+
+        let viewer_cookie = seed_session_cookie(router.clone(), viewer.id).await;
+
+        let uploaded_desc_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/site/{}/assets/library?sort_by=uploaded&sort_dir=desc",
+                        site.id
+                    ))
+                    .header(header::COOKIE, &viewer_cookie)
+                    .body(Body::empty())
+                    .expect("failed to build uploaded-desc library request"),
+            )
+            .await
+            .expect("failed to call uploaded-desc library route");
+        assert_eq!(uploaded_desc_response.status(), StatusCode::OK);
+        let uploaded_desc_body = json_body(uploaded_desc_response).await;
+        assert_eq!(
+            uploaded_desc_body["assets"]
+                .as_array()
+                .expect("assets should be array")
+                .iter()
+                .map(|item| item["original_filename"]
+                    .as_str()
+                    .expect("missing filename"))
+                .collect::<Vec<_>>(),
+            vec!["alpha.png", "bravo.png", "charlie.png"]
+        );
+        assert_eq!(
+            uploaded_desc_body["assets"][0]["byte_length"]
+                .as_i64()
+                .expect("missing byte length"),
+            100
+        );
+
+        let size_asc_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/site/{}/assets/library?sort_by=size&sort_dir=asc",
+                        site.id
+                    ))
+                    .header(header::COOKIE, &viewer_cookie)
+                    .body(Body::empty())
+                    .expect("failed to build size-asc library request"),
+            )
+            .await
+            .expect("failed to call size-asc library route");
+        assert_eq!(size_asc_response.status(), StatusCode::OK);
+        let size_asc_body = json_body(size_asc_response).await;
+        assert_eq!(
+            size_asc_body["assets"]
+                .as_array()
+                .expect("assets should be array")
+                .iter()
+                .map(|item| item["original_filename"]
+                    .as_str()
+                    .expect("missing filename"))
+                .collect::<Vec<_>>(),
+            vec!["alpha.png", "bravo.png", "charlie.png"]
+        );
+
+        let name_asc_response = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/site/{}/assets/library?sort_by=name&sort_dir=asc",
+                        site.id
+                    ))
+                    .header(header::COOKIE, &viewer_cookie)
+                    .body(Body::empty())
+                    .expect("failed to build name-asc library request"),
+            )
+            .await
+            .expect("failed to call name-asc library route");
+        assert_eq!(name_asc_response.status(), StatusCode::OK);
+        let name_asc_body = json_body(name_asc_response).await;
+        assert_eq!(
+            name_asc_body["assets"]
+                .as_array()
+                .expect("assets should be array")
+                .iter()
+                .map(|item| item["original_filename"]
+                    .as_str()
+                    .expect("missing filename"))
+                .collect::<Vec<_>>(),
+            vec!["alpha.png", "bravo.png", "charlie.png"]
+        );
     }
 }

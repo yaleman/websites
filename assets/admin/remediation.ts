@@ -11,6 +11,27 @@ type ManualAssetSelection = {
 	asset_label: string;
 };
 
+const formatAssetSize = (byteLength: number) => {
+	if (byteLength < 1024) {
+		return `${byteLength} B`;
+	}
+	if (byteLength < 1024 * 1024) {
+		return `${(byteLength / 1024).toFixed(1)} KB`;
+	}
+	return `${(byteLength / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const formatAssetDate = (value: string) => {
+	const parsed = new Date(value);
+	if (Number.isNaN(parsed.getTime())) {
+		return value;
+	}
+	return new Intl.DateTimeFormat(undefined, {
+		dateStyle: "medium",
+		timeStyle: "short",
+	}).format(parsed);
+};
+
 const createAssetCard = (asset: components["schemas"]["AssetLibraryItem"]) => {
 	const button = document.createElement("button");
 	button.type = "button";
@@ -33,7 +54,9 @@ const createAssetCard = (asset: components["schemas"]["AssetLibraryItem"]) => {
 
 	const meta = document.createElement("div");
 	meta.className = "text-xs text-slate-500";
-	meta.textContent = asset.mime_type;
+	const dimensions =
+		asset.width && asset.height ? `${asset.width}×${asset.height}` : "size n/a";
+	meta.textContent = `${asset.mime_type} • ${dimensions} • ${formatAssetSize(asset.byte_length)} • ${formatAssetDate(asset.created_at)}`;
 
 	button.appendChild(thumb);
 	button.appendChild(name);
@@ -85,6 +108,12 @@ const initRemediation = () => {
 	const typeSelect = modal?.querySelector<HTMLSelectElement>(
 		"[data-scan-asset-type]",
 	);
+	const sortBySelect = modal?.querySelector<HTMLSelectElement>(
+		"[data-scan-asset-sort-by]",
+	);
+	const sortDirSelect = modal?.querySelector<HTMLSelectElement>(
+		"[data-scan-asset-sort-dir]",
+	);
 	const variantSelect = modal?.querySelector<HTMLSelectElement>(
 		"[data-scan-asset-variant]",
 	);
@@ -114,6 +143,8 @@ const initRemediation = () => {
 		!modal ||
 		!searchInput ||
 		!typeSelect ||
+		!sortBySelect ||
+		!sortDirSelect ||
 		!variantSelect ||
 		!recentSection ||
 		!resultsSection ||
@@ -162,6 +193,8 @@ const initRemediation = () => {
 						q: query || "",
 						limit: query ? 50 : 12,
 						type: typeSelect.value || "",
+						sort_by: sortBySelect.value || "uploaded",
+						sort_dir: sortDirSelect.value || "desc",
 					},
 				},
 			},
@@ -212,6 +245,8 @@ const initRemediation = () => {
 		currentIssue = issue;
 		selectedAsset = null;
 		searchInput.value = "";
+		sortBySelect.value = "uploaded";
+		sortDirSelect.value = "desc";
 		recentSection.removeAttribute("hidden");
 		resultsSection.setAttribute("hidden", "");
 		void loadRecent();
@@ -356,6 +391,8 @@ const initRemediation = () => {
 
 	searchInput.addEventListener("input", scheduleSearch);
 	typeSelect.addEventListener("change", scheduleSearch);
+	sortBySelect.addEventListener("change", scheduleSearch);
+	sortDirSelect.addEventListener("change", scheduleSearch);
 	closeButtons?.forEach((button) => {
 		button.addEventListener("click", () => setModalOpen(false));
 	});
