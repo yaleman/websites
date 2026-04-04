@@ -47,6 +47,13 @@
                 </div>
             </div>
 
+            <div class="asset-selection">
+                <p class="asset-selection__summary" data-asset-selection-summary>No images selected.</p>
+                <p class="asset-selection__hint" data-asset-selection-hint>
+                    Shared alt text applies to a single selected image or an external image URL.
+                </p>
+            </div>
+
             <section class="asset-section grid gap-2" data-asset-recent-section>
                 <h3>Recent uploads</h3>
                 <div class="asset-grid grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4" data-asset-recent></div>
@@ -61,6 +68,9 @@
                 <div class="form-field">
                     <label for="asset_alt">Alt text</label>
                     <input id="asset_alt" type="text" placeholder="Describe the image" data-asset-alt />
+                    <p class="asset-field-help" data-asset-alt-help>
+                        Used for a single selected image or an external image URL.
+                    </p>
                 </div>
                 {% if allow_external_image %}
                 <div class="form-field">

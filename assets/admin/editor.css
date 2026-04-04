@@ -227,6 +227,19 @@
 		@apply grid gap-2;
 	}
 
+	.asset-selection {
+		@apply grid gap-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-2;
+	}
+
+	.asset-selection__summary {
+		@apply m-0 text-sm font-medium text-slate-900;
+	}
+
+	.asset-selection__hint,
+	.asset-field-help {
+		@apply m-0 text-xs text-slate-500;
+	}
+
 	.asset-section h3 {
 		@apply m-0 text-sm font-semibold text-slate-900;
 	}
@@ -262,6 +275,10 @@
 
 	.asset-fields {
 		@apply grid gap-3;
+	}
+
+	.asset-fields input:disabled {
+		@apply cursor-not-allowed bg-slate-100 text-slate-500;
 	}
 
 	.scan-modal__variant {

@@ -9,6 +9,8 @@ import createClient from "openapi-fetch";
 import { ApiPaths, type components, type paths } from "./openapi";
 
 let OPENAPI_CLIENT: Client<paths, `${string}/${string}`>;
+
+type AssetLibraryItem = components["schemas"]["AssetLibraryItem"];
 const HEADING_LEVELS = [1, 2, 3, 4, 5, 6] as const;
 
 const inferAltFromFilename = (filename: string) => {
@@ -37,7 +39,7 @@ const formatAssetDate = (value: string) => {
 	}).format(parsed);
 };
 
-const formatAssetMeta = (asset: components["schemas"]["AssetLibraryItem"]) => {
+const formatAssetMeta = (asset: AssetLibraryItem) => {
 	const dimensions =
 		asset.width && asset.height ? `${asset.width}×${asset.height}` : "size n/a";
 	return `${asset.mime_type} • ${dimensions} • ${formatAssetSize(asset.byte_length)} • ${formatAssetDate(asset.created_at)}`;
@@ -217,7 +219,7 @@ const bindNewContentSlugController = () => {
 	syncSlugFromTitle();
 };
 
-const createAssetCard = (asset: components["schemas"]["AssetLibraryItem"]) => {
+const createAssetCard = (asset: AssetLibraryItem, selected: boolean) => {
 	const button = document.createElement("button");
 	button.type = "button";
 	button.className =
@@ -225,6 +227,8 @@ const createAssetCard = (asset: components["schemas"]["AssetLibraryItem"]) => {
 	button.dataset.assetId = asset.id;
 	button.dataset.assetPayload = JSON.stringify(asset);
 	button.dataset.assetCard = "true";
+	button.classList.toggle("is-selected", selected);
+	button.setAttribute("aria-pressed", selected ? "true" : "false");
 
 	const thumb = document.createElement("div");
 	thumb.className = "aspect-[4/3] overflow-hidden rounded-md bg-slate-100";
@@ -250,8 +254,9 @@ const createAssetCard = (asset: components["schemas"]["AssetLibraryItem"]) => {
 
 const renderAssetGrid = (
 	container: HTMLElement,
-	assets: components["schemas"]["AssetLibraryItem"][],
+	assets: AssetLibraryItem[],
 	message: string,
+	selectedAssetIds: Set<string>,
 ) => {
 	container.innerHTML = "";
 	if (assets.length === 0) {
@@ -262,7 +267,9 @@ const renderAssetGrid = (
 		return;
 	}
 	for (const asset of assets) {
-		container.appendChild(createAssetCard(asset));
+		container.appendChild(
+			createAssetCard(asset, selectedAssetIds.has(asset.id)),
+		);
 	}
 };
 
@@ -303,14 +310,35 @@ const createAssetModal = (editor: Editor) => {
 	const externalInput = modal.querySelector<HTMLInputElement>(
 		"[data-asset-external]",
 	);
+	const selectionSummary = modal.querySelector<HTMLElement>(
+		"[data-asset-selection-summary]",
+	);
+	const selectionHint = modal.querySelector<HTMLElement>(
+		"[data-asset-selection-hint]",
+	);
+	const altHelp = modal.querySelector<HTMLElement>("[data-asset-alt-help]");
 	const insertButton = modal.querySelector<HTMLButtonElement>(
 		"[data-asset-insert]",
 	);
 
-	let selectedAsset: components["schemas"]["AssetLibraryItem"] | null = null;
+	let selectedAssets: AssetLibraryItem[] = [];
+	let sharedAltText = "";
+	let hasExplicitSharedAlt = false;
 	let searchTimeout: number | null = null;
 	let isModalOpen = false;
 	let refreshPromise: Promise<void> | null = null;
+
+	const selectedAssetIds = () =>
+		new Set(selectedAssets.map((asset) => asset.id));
+
+	const syncCardSelection = () => {
+		const ids = selectedAssetIds();
+		modal.querySelectorAll<HTMLElement>("[data-asset-card]").forEach((card) => {
+			const selected = ids.has(card.getAttribute("data-asset-id") ?? "");
+			card.classList.toggle("is-selected", selected);
+			card.setAttribute("aria-pressed", selected ? "true" : "false");
+		});
+	};
 
 	const setModalOpen = (open: boolean) => {
 		isModalOpen = open;
@@ -326,36 +354,94 @@ const createAssetModal = (editor: Editor) => {
 		}
 	};
 
-	const setInsertEnabled = () => {
+	const updateSelectionUi = () => {
+		const externalUrl = externalInput?.value.trim() ?? "";
+		const selectionCount = selectedAssets.length;
+		const singleSelectedAsset =
+			selectionCount === 1 ? selectedAssets[0] : null;
+		const displayedAltText = hasExplicitSharedAlt
+			? sharedAltText
+			: externalUrl
+				? ""
+				: singleSelectedAsset
+					? inferAltFromFilename(singleSelectedAsset.original_filename)
+					: "";
+
+		if (selectionSummary) {
+			if (externalUrl) {
+				selectionSummary.textContent = "External image URL ready to insert.";
+			} else if (selectionCount === 0) {
+				selectionSummary.textContent = "No images selected.";
+			} else if (selectionCount === 1) {
+				selectionSummary.textContent = "1 image selected.";
+			} else {
+				selectionSummary.textContent = `${selectionCount} images selected.`;
+			}
+		}
+
+		if (selectionHint) {
+			if (externalUrl) {
+				selectionHint.textContent =
+					"Selecting a library image clears the external URL.";
+			} else if (selectionCount > 1) {
+				selectionHint.textContent =
+					"Batch insert uses alt text inferred from each filename.";
+			} else {
+				selectionHint.textContent =
+					"Shared alt text applies to a single selected image or an external image URL.";
+			}
+		}
+
+		if (altInput) {
+			const usesSharedAlt = Boolean(externalUrl) || selectionCount <= 1;
+			altInput.disabled = !usesSharedAlt;
+			altInput.value = usesSharedAlt
+				? displayedAltText
+				: hasExplicitSharedAlt
+					? sharedAltText
+					: "";
+		}
+
+		if (altHelp) {
+			altHelp.textContent =
+				externalUrl || selectionCount <= 1
+					? "Used for a single selected image or an external image URL."
+					: "Ignored for batch insert. Each image uses alt text inferred from its filename.";
+		}
+
 		if (!insertButton) {
 			return;
 		}
-		const externalUrl = externalInput?.value.trim();
-		insertButton.disabled = !selectedAsset && !externalUrl;
+		insertButton.disabled = selectionCount === 0 && !externalUrl;
+		insertButton.textContent =
+			externalUrl || selectionCount <= 1
+				? "Insert image"
+				: `Insert ${selectionCount} images`;
 	};
 
-	const clearSelection = () => {
-		selectedAsset = null;
-		modal.querySelectorAll<HTMLElement>("[data-asset-card]").forEach((card) => {
-			card.classList.remove("border-slate-900", "ring-2", "ring-slate-300");
-		});
-		setInsertEnabled();
+	const clearSelectedAssets = () => {
+		selectedAssets = [];
+		syncCardSelection();
+		updateSelectionUi();
 	};
 
-	const setSelectedAsset = (
-		asset: components["schemas"]["AssetLibraryItem"] | null,
-	) => {
-		selectedAsset = asset;
-		modal.querySelectorAll<HTMLElement>("[data-asset-card]").forEach((card) => {
-			const selected = card.getAttribute("data-asset-id") === asset?.id;
-			card.classList.toggle("border-slate-900", selected);
-			card.classList.toggle("ring-2", selected);
-			card.classList.toggle("ring-slate-300", selected);
-		});
-		if (asset && altInput && !altInput.value.trim()) {
-			altInput.value = inferAltFromFilename(asset.original_filename);
+	const toggleSelectedAsset = (asset: AssetLibraryItem) => {
+		const existingIndex = selectedAssets.findIndex(
+			(selectedAsset) => selectedAsset.id === asset.id,
+		);
+		if (existingIndex >= 0) {
+			selectedAssets.splice(existingIndex, 1);
+			syncCardSelection();
+			updateSelectionUi();
+			return;
 		}
-		setInsertEnabled();
+
+		if (externalInput?.value.trim()) {
+			externalInput.value = "";
+		}
+		selectedAssets = [...selectedAssets, asset];
+		syncCardSelection();
+		updateSelectionUi();
 	};
 
 	const setSectionVisibility = (showResults: boolean) => {
@@ -398,20 +484,18 @@ const createAssetModal = (editor: Editor) => {
 		return payload.assets ?? [];
 	};
 
-	const restoreSelection = (
-		assets: components["schemas"]["AssetLibraryItem"][],
-	) => {
-		if (!selectedAsset) {
-			clearSelection();
+	const restoreSelection = (assets: AssetLibraryItem[]) => {
+		if (selectedAssets.length === 0) {
+			syncCardSelection();
+			updateSelectionUi();
 			return;
 		}
-		const matchingAsset =
-			assets.find((asset) => asset.id === selectedAsset?.id) ?? null;
-		if (matchingAsset) {
-			setSelectedAsset(matchingAsset);
-			return;
-		}
-		clearSelection();
+		const assetsById = new Map(assets.map((asset) => [asset.id, asset]));
+		selectedAssets = selectedAssets.map(
+			(asset) => assetsById.get(asset.id) ?? asset,
+		);
+		syncCardSelection();
+		updateSelectionUi();
 	};
 
 	const refreshVisibleAssets = async () => {
@@ -433,7 +517,7 @@ const createAssetModal = (editor: Editor) => {
 				if (!resultsGrid) {
 					return;
 				}
-				renderAssetGrid(resultsGrid, [], "Searching...");
+				renderAssetGrid(resultsGrid, [], "Searching...", selectedAssetIds());
 				try {
 					const assets = await fetchAssets({
 						query,
@@ -442,11 +526,22 @@ const createAssetModal = (editor: Editor) => {
 						sortBy: selectedSortBy,
 						sortDir: selectedSortDir,
 					});
-					renderAssetGrid(resultsGrid, assets, "No matches found.");
+					renderAssetGrid(
+						resultsGrid,
+						assets,
+						"No matches found.",
+						selectedAssetIds(),
+					);
 					restoreSelection(assets);
 				} catch {
-					renderAssetGrid(resultsGrid, [], "Unable to load search results.");
-					clearSelection();
+					renderAssetGrid(
+						resultsGrid,
+						[],
+						"Unable to load search results.",
+						selectedAssetIds(),
+					);
+					syncCardSelection();
+					updateSelectionUi();
 				}
 				return;
 			}
@@ -454,7 +549,12 @@ const createAssetModal = (editor: Editor) => {
 			if (!recentGrid) {
 				return;
 			}
-			renderAssetGrid(recentGrid, [], "Loading recent images...");
+			renderAssetGrid(
+				recentGrid,
+				[],
+				"Loading recent images...",
+				selectedAssetIds(),
+			);
 			try {
 				const assets = await fetchAssets({
 					limit: 12,
@@ -462,11 +562,22 @@ const createAssetModal = (editor: Editor) => {
 					sortBy: selectedSortBy,
 					sortDir: selectedSortDir,
 				});
-				renderAssetGrid(recentGrid, assets, "No images uploaded yet.");
+				renderAssetGrid(
+					recentGrid,
+					assets,
+					"No images uploaded yet.",
+					selectedAssetIds(),
+				);
 				restoreSelection(assets);
 			} catch {
-				renderAssetGrid(recentGrid, [], "Unable to load recent images.");
-				clearSelection();
+				renderAssetGrid(
+					recentGrid,
+					[],
+					"Unable to load recent images.",
+					selectedAssetIds(),
+				);
+				syncCardSelection();
+				updateSelectionUi();
 			}
 		})();
 
@@ -501,16 +612,16 @@ const createAssetModal = (editor: Editor) => {
 		}
 		const asset = JSON.parse(
 			payload,
-		) as components["schemas"]["AssetLibraryItem"];
-		setSelectedAsset(asset);
+		) as AssetLibraryItem;
+		toggleSelectedAsset(asset);
 	};
 
-	const insertImageMarkup = (options: {
+	const buildInlineImageNode = (options: {
 		src: string;
 		alt?: string;
 		href?: string;
 	}) => {
-		const imageNode = {
+		return {
 			type: "image",
 			attrs: {
 				src: options.src,
@@ -529,33 +640,45 @@ const createAssetModal = (editor: Editor) => {
 					}
 				: {}),
 		};
-		editor.chain().focus().insertContent(imageNode).run();
 	};
 
 	const insertSelection = () => {
-		const altText = altInput?.value.trim();
+		const altText = hasExplicitSharedAlt ? sharedAltText.trim() : undefined;
 		const externalUrl = externalInput?.value.trim();
 		if (externalUrl) {
-			insertImageMarkup({ src: externalUrl, alt: altText });
+			editor
+				.chain()
+				.focus()
+				.insertContent([buildInlineImageNode({ src: externalUrl, alt: altText })])
+				.run();
 			close();
 			return;
 		}
 
-		if (!selectedAsset) {
+		if (selectedAssets.length === 0) {
 			return;
 		}
-		if (selectedAsset.has_thumbnail && selectedAsset.thumbnail_url) {
-			insertImageMarkup({
-				src: selectedAsset.thumbnail_url,
-				alt: altText,
-				href: selectedAsset.original_url,
-			});
-		} else {
-			insertImageMarkup({
-				src: selectedAsset.original_url,
-				alt: altText,
-			});
-		}
+		editor
+			.chain()
+			.focus()
+			.insertContent(
+				selectedAssets.map((selectedAsset) =>
+					buildInlineImageNode({
+						src:
+							selectedAsset.has_thumbnail && selectedAsset.thumbnail_url
+								? selectedAsset.thumbnail_url
+								: selectedAsset.original_url,
+						alt:
+							selectedAssets.length === 1
+								? altText
+								: inferAltFromFilename(selectedAsset.original_filename),
+						...(selectedAsset.has_thumbnail && selectedAsset.thumbnail_url
+							? { href: selectedAsset.original_url }
+							: {}),
+					}),
+				),
+			)
+			.run();
 		close();
 	};
 
@@ -576,11 +699,13 @@ const createAssetModal = (editor: Editor) => {
 		if (altInput) {
 			altInput.value = "";
 		}
+		sharedAltText = "";
+		hasExplicitSharedAlt = false;
 		if (externalInput) {
 			externalInput.value = "";
 		}
 		setSectionVisibility(false);
-		clearSelection();
+		clearSelectedAssets();
 	};
 
 	const open = () => {
@@ -642,12 +767,23 @@ const createAssetModal = (editor: Editor) => {
 	sortDirSelect?.addEventListener("change", () => {
 		void refreshVisibleAssets();
 	});
-	externalInput?.addEventListener("input", setInsertEnabled);
+	externalInput?.addEventListener("input", () => {
+		if (externalInput.value.trim()) {
+			clearSelectedAssets();
+			return;
+		}
+		updateSelectionUi();
+	});
 	externalInput?.addEventListener("keydown", (event) => {
 		if (event.key === "Enter") {
 			event.preventDefault();
 			insertSelection();
 		}
+	});
+	altInput?.addEventListener("input", () => {
+		sharedAltText = altInput.value;
+		hasExplicitSharedAlt = true;
+		updateSelectionUi();
 	});
 	insertButton?.addEventListener("click", (event) => {
 		event.preventDefault();
@@ -660,6 +796,8 @@ const createAssetModal = (editor: Editor) => {
 	if (resultsGrid) {
 		resultsGrid.addEventListener("click", handleAssetClick);
 	}
+
+	updateSelectionUi();
 
 	return { open };
 };
