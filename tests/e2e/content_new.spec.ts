@@ -376,18 +376,30 @@ test.describe("content new editor", () => {
 
 			await page.locator(".ProseMirror p").first().click();
 			await page.keyboard.press("End");
-			await page.keyboard.press("Shift+ArrowLeft");
-			await page.keyboard.press("Shift+ArrowLeft");
-			await page.keyboard.press("Shift+ArrowLeft");
-			await page.keyboard.press("Shift+ArrowLeft");
+			await selectTextInEditor(page, "#editor .ProseMirror > p:first-of-type", "tail");
 			await italicButton.click();
-			await expect(
-				page
-					.locator(".ProseMirror p")
-					.first()
-					.locator("strong em")
-					.filter({ hasText: "tail" }),
-			).toBeVisible();
+			const tailFormatting = await page.locator(".ProseMirror p").first().evaluate(
+				(paragraph) => {
+					const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+					let currentNode: Node | null = walker.nextNode();
+					while (currentNode) {
+						if ((currentNode.textContent ?? "").includes("tail")) {
+							let currentElement = currentNode.parentElement;
+							let hasStrong = false;
+							let hasEmphasis = false;
+							while (currentElement && currentElement !== paragraph) {
+								hasStrong ||= currentElement.tagName === "STRONG";
+								hasEmphasis ||= currentElement.tagName === "EM";
+								currentElement = currentElement.parentElement;
+							}
+							return { hasStrong, hasEmphasis };
+						}
+						currentNode = walker.nextNode();
+					}
+					return { hasStrong: false, hasEmphasis: false };
+				},
+			);
+			expect(tailFormatting).toEqual({ hasStrong: true, hasEmphasis: true });
 			await expect(page.locator(".ProseMirror p").first()).toContainText(
 				"Plain intro! tail",
 			);
@@ -742,6 +754,120 @@ test.describe("content new editor", () => {
 					hasText: "modal-refresh-image.png",
 				}),
 			).toBeVisible();
+
+			await context.close();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
+	test("inserts multiple selected images and clears selection when switching to an external URL", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const subject = "batch-image-insert";
+			const userId = await createUser(harness, subject);
+			await addMembership(harness, userId, "owner");
+			const contentId = await createContent(harness, {
+				pageType: "page",
+				title: "Batch image edit",
+				slug: "batch-image-edit",
+				pageContent: "Initial body",
+				creatorSub: subject,
+			});
+			const firstAsset = {
+				originalFilename: "batch-image-alpha.png",
+				storageBasename: "batch-image-alpha.png",
+				thumbnailFilename: "batch-image-alpha_thumb.png",
+			};
+			const secondAsset = {
+				originalFilename: "batch-image-beta.png",
+				storageBasename: "batch-image-beta.png",
+				thumbnailFilename: "batch-image-beta_thumb.png",
+			};
+			await createAssetWithThumbnail(harness, firstAsset);
+			await createAssetWithThumbnail(harness, secondAsset);
+
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				subject,
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/edit`,
+				{ waitUntil: "domcontentloaded" },
+			);
+
+			await page.getByRole("button", { name: "Image" }).click();
+			const modal = page.getByRole("dialog", { name: "Insert image" });
+			await expect(modal).toBeVisible();
+
+			const alphaCard = modal.locator(".asset-card", {
+				hasText: firstAsset.originalFilename,
+			});
+			const betaCard = modal.locator(".asset-card", {
+				hasText: secondAsset.originalFilename,
+			});
+			const altInput = modal.getByLabel("Alt text");
+			const searchInput = modal.getByPlaceholder("Search by filename");
+			const externalInput = modal.getByLabel("External image URL");
+
+			await alphaCard.click();
+			await betaCard.click();
+			await expect(modal.getByText("2 images selected.")).toBeVisible();
+			await expect(altInput).toBeDisabled();
+			await expect(
+				modal.getByRole("button", { name: "Insert 2 images" }),
+			).toBeEnabled();
+
+			await searchInput.fill("batch-image");
+			await expect(alphaCard).toHaveAttribute("aria-pressed", "true");
+			await expect(betaCard).toHaveAttribute("aria-pressed", "true");
+
+			await alphaCard.click();
+			await expect(modal.getByText("1 image selected.")).toBeVisible();
+			await expect(altInput).toBeEnabled();
+			await expect(alphaCard).toHaveAttribute("aria-pressed", "false");
+			await expect(betaCard).toHaveAttribute("aria-pressed", "true");
+
+			await externalInput.fill("https://example.com/remote-image.png");
+			await expect(modal.getByText("External image URL ready to insert.")).toBeVisible();
+			await expect(alphaCard).toHaveAttribute("aria-pressed", "false");
+			await expect(betaCard).toHaveAttribute("aria-pressed", "false");
+			await expect(
+				modal.getByRole("button", { name: "Insert image" }),
+			).toBeEnabled();
+
+			await betaCard.click();
+			await expect(externalInput).toHaveValue("");
+			await expect(modal.getByText("1 image selected.")).toBeVisible();
+			await expect(betaCard).toHaveAttribute("aria-pressed", "true");
+
+			await alphaCard.click();
+			await expect(modal.getByText("2 images selected.")).toBeVisible();
+			await modal.getByRole("button", { name: "Insert 2 images" }).click();
+			await expect(modal).toBeHidden();
+
+			const insertedImageLinks = await page
+				.locator("#editor .ProseMirror a")
+				.evaluateAll((elements) =>
+					elements.map((element) => element.getAttribute("href") ?? ""),
+				);
+			expect(insertedImageLinks).toEqual([
+				`/media/images/${secondAsset.storageBasename}`,
+				`/media/images/${firstAsset.storageBasename}`,
+			]);
+
+			await page.getByRole("button", { name: "Markdown" }).click();
+			const markdown = await page.locator("#page_content").inputValue();
+			expect(markdown).toContain(secondAsset.thumbnailFilename);
+			expect(markdown).toContain(firstAsset.thumbnailFilename);
+			expect(markdown.indexOf(secondAsset.thumbnailFilename)).toBeLessThan(
+				markdown.indexOf(firstAsset.thumbnailFilename),
+			);
 
 			await context.close();
 		} finally {
