@@ -322,6 +322,8 @@ const createAssetModal = (editor: Editor) => {
 	);
 
 	let selectedAssets: AssetLibraryItem[] = [];
+	let sharedAltText = "";
+	let hasExplicitSharedAlt = false;
 	let searchTimeout: number | null = null;
 	let isModalOpen = false;
 	let refreshPromise: Promise<void> | null = null;
@@ -355,10 +357,15 @@ const createAssetModal = (editor: Editor) => {
 	const updateSelectionUi = () => {
 		const externalUrl = externalInput?.value.trim() ?? "";
 		const selectionCount = selectedAssets.length;
-
-		if (!externalUrl && selectionCount === 1 && altInput && !altInput.value.trim()) {
-			altInput.value = inferAltFromFilename(selectedAssets[0].original_filename);
-		}
+		const singleSelectedAsset =
+			selectionCount === 1 ? selectedAssets[0] : null;
+		const displayedAltText = hasExplicitSharedAlt
+			? sharedAltText
+			: externalUrl
+				? ""
+				: singleSelectedAsset
+					? inferAltFromFilename(singleSelectedAsset.original_filename)
+					: "";
 
 		if (selectionSummary) {
 			if (externalUrl) {
@@ -388,9 +395,11 @@ const createAssetModal = (editor: Editor) => {
 		if (altInput) {
 			const usesSharedAlt = Boolean(externalUrl) || selectionCount <= 1;
 			altInput.disabled = !usesSharedAlt;
-			if (!usesSharedAlt) {
-				altInput.value = "";
-			}
+			altInput.value = usesSharedAlt
+				? displayedAltText
+				: hasExplicitSharedAlt
+					? sharedAltText
+					: "";
 		}
 
 		if (altHelp) {
@@ -607,12 +616,12 @@ const createAssetModal = (editor: Editor) => {
 		toggleSelectedAsset(asset);
 	};
 
-	const buildImageContentBlock = (options: {
+	const buildInlineImageNode = (options: {
 		src: string;
 		alt?: string;
 		href?: string;
 	}) => {
-		const imageNode = {
+		return {
 			type: "image",
 			attrs: {
 				src: options.src,
@@ -631,22 +640,16 @@ const createAssetModal = (editor: Editor) => {
 					}
 				: {}),
 		};
-		return {
-			type: "paragraph",
-			content: [imageNode],
-		};
 	};
 
 	const insertSelection = () => {
-		const altText = altInput?.value.trim();
+		const altText = hasExplicitSharedAlt ? sharedAltText.trim() : undefined;
 		const externalUrl = externalInput?.value.trim();
 		if (externalUrl) {
 			editor
 				.chain()
 				.focus()
-				.insertContent([
-					buildImageContentBlock({ src: externalUrl, alt: altText }),
-				])
+				.insertContent([buildInlineImageNode({ src: externalUrl, alt: altText })])
 				.run();
 			close();
 			return;
@@ -660,7 +663,7 @@ const createAssetModal = (editor: Editor) => {
 			.focus()
 			.insertContent(
 				selectedAssets.map((selectedAsset) =>
-					buildImageContentBlock({
+					buildInlineImageNode({
 						src:
 							selectedAsset.has_thumbnail && selectedAsset.thumbnail_url
 								? selectedAsset.thumbnail_url
@@ -696,6 +699,8 @@ const createAssetModal = (editor: Editor) => {
 		if (altInput) {
 			altInput.value = "";
 		}
+		sharedAltText = "";
+		hasExplicitSharedAlt = false;
 		if (externalInput) {
 			externalInput.value = "";
 		}
@@ -774,6 +779,11 @@ const createAssetModal = (editor: Editor) => {
 			event.preventDefault();
 			insertSelection();
 		}
+	});
+	altInput?.addEventListener("input", () => {
+		sharedAltText = altInput.value;
+		hasExplicitSharedAlt = true;
+		updateSelectionUi();
 	});
 	insertButton?.addEventListener("click", (event) => {
 		event.preventDefault();

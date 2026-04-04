@@ -66,6 +66,36 @@ async function selectTextInEditor(
 	}, targetText);
 }
 
+async function placeCaretInEditor(
+	page: import("@playwright/test").Page,
+	selector: string,
+	targetText: string,
+) {
+	await page.locator(selector).evaluate((element, expectedText) => {
+		const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+		let currentNode: Node | null = walker.nextNode();
+		while (currentNode) {
+			const text = currentNode.textContent ?? "";
+			const offset = text.indexOf(expectedText);
+			if (offset >= 0) {
+				const range = document.createRange();
+				range.setStart(currentNode, offset + expectedText.length);
+				range.collapse(true);
+				const selection = window.getSelection();
+				if (!selection) {
+					throw new Error("Selection unavailable");
+				}
+				selection.removeAllRanges();
+				selection.addRange(range);
+				return;
+			}
+			currentNode = walker.nextNode();
+		}
+
+		throw new Error(`Could not place caret after "${expectedText}" in ${selector}`);
+	}, targetText);
+}
+
 test.describe("content new editor", () => {
 	test.setTimeout(defaultTimeout);
 
@@ -761,6 +791,73 @@ test.describe("content new editor", () => {
 		}
 	});
 
+	test("inserts an image inline at the current cursor position", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const subject = "inline-image-insert";
+			const userId = await createUser(harness, subject);
+			await addMembership(harness, userId, "owner");
+			const asset = {
+				originalFilename: "inline-image.png",
+				storageBasename: "inline-image.png",
+				thumbnailFilename: "inline-image_thumb.png",
+			};
+			await createAssetWithThumbnail(harness, asset);
+
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				subject,
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/new`,
+				{ waitUntil: "domcontentloaded" },
+			);
+
+			await page.locator(".ProseMirror").click();
+			await page.keyboard.type("Alpha omega");
+			await placeCaretInEditor(
+				page,
+				"#editor .ProseMirror > p:first-of-type",
+				"Alpha ",
+			);
+
+			await page.getByRole("button", { name: "Image" }).click();
+			const modal = page.getByRole("dialog", { name: "Insert image" });
+			await expect(modal).toBeVisible();
+			await modal
+				.locator(".asset-card", { hasText: asset.originalFilename })
+				.click();
+			await modal.getByLabel("Alt text").fill("Inline image");
+			await modal.getByRole("button", { name: "Insert image" }).click();
+			await expect(modal).toBeHidden();
+
+			const paragraphs = page.locator("#editor .ProseMirror > p");
+			await expect(paragraphs).toHaveCount(1);
+			await expect(
+				page.locator(
+					`#editor .ProseMirror p a[href="/media/images/${asset.storageBasename}"] img[src="/media/images/${asset.thumbnailFilename}"]`,
+				),
+			).toBeVisible();
+			await expect(paragraphs.first()).toContainText("Alpha omega");
+
+			await page.getByRole("button", { name: "Markdown" }).click();
+			const markdown = await page.locator("#page_content").inputValue();
+			expect(markdown).toContain("Alpha ");
+			expect(markdown).toContain("omega");
+			expect(markdown).toContain(asset.thumbnailFilename);
+			expect(markdown).not.toContain("\n\n");
+
+			await context.close();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
 	test("inserts multiple selected images and clears selection when switching to an external URL", async ({
 		browser,
 	}) => {
@@ -816,9 +913,11 @@ test.describe("content new editor", () => {
 			const externalInput = modal.getByLabel("External image URL");
 
 			await alphaCard.click();
+			await expect(altInput).toHaveValue("batch image alpha");
 			await betaCard.click();
 			await expect(modal.getByText("2 images selected.")).toBeVisible();
 			await expect(altInput).toBeDisabled();
+			await expect(altInput).toHaveValue("");
 			await expect(
 				modal.getByRole("button", { name: "Insert 2 images" }),
 			).toBeEnabled();
@@ -830,13 +929,28 @@ test.describe("content new editor", () => {
 			await alphaCard.click();
 			await expect(modal.getByText("1 image selected.")).toBeVisible();
 			await expect(altInput).toBeEnabled();
+			await expect(altInput).toHaveValue("batch image beta");
 			await expect(alphaCard).toHaveAttribute("aria-pressed", "false");
 			await expect(betaCard).toHaveAttribute("aria-pressed", "true");
 
+			await altInput.fill("Shared alt text");
+			await alphaCard.click();
+			await expect(modal.getByText("2 images selected.")).toBeVisible();
+			await expect(altInput).toBeDisabled();
+			await expect(altInput).toHaveValue("Shared alt text");
+
+			await alphaCard.click();
+			await expect(modal.getByText("1 image selected.")).toBeVisible();
+			await expect(altInput).toBeEnabled();
+			await expect(altInput).toHaveValue("Shared alt text");
+
 			await externalInput.fill("https://example.com/remote-image.png");
-			await expect(modal.getByText("External image URL ready to insert.")).toBeVisible();
+			await expect(
+				modal.getByText("External image URL ready to insert."),
+			).toBeVisible();
 			await expect(alphaCard).toHaveAttribute("aria-pressed", "false");
 			await expect(betaCard).toHaveAttribute("aria-pressed", "false");
+			await expect(altInput).toHaveValue("Shared alt text");
 			await expect(
 				modal.getByRole("button", { name: "Insert image" }),
 			).toBeEnabled();
@@ -844,6 +958,7 @@ test.describe("content new editor", () => {
 			await betaCard.click();
 			await expect(externalInput).toHaveValue("");
 			await expect(modal.getByText("1 image selected.")).toBeVisible();
+			await expect(altInput).toHaveValue("Shared alt text");
 			await expect(betaCard).toHaveAttribute("aria-pressed", "true");
 
 			await alphaCard.click();
