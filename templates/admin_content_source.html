@@ -3,15 +3,15 @@
 <form method="post" action class="editor-form" data-editor-config data-site-id="{{ site_id }}" data-allow-external-image="{{ allow_external_image }}">
   <div class="form-grid">
     <div class="form-field">
+      <label for="title">Title</label>
+      <input id="title" name="title" value="{{ title }}" required />
+    </div>
+    <div class="form-field">
       <label for="page_type">Page Type</label>
       <select id="page_type" name="page_type" required>
         <option value="post" {% if page_type == "post" %}selected{% endif %}>Post</option>
         <option value="page" {% if page_type == "page" %}selected{% endif %}>Page</option>
       </select>
-    </div>
-    <div class="form-field">
-      <label for="title">Title</label>
-      <input id="title" name="title" value="{{ title }}" required />
     </div>
     <div class="form-field">
       <label for="slug">Slug</label>
@@ -25,7 +25,7 @@
       </select>
     </div>
     <div class="form-field">
-      <label for="published_at">Published At (RFC3339)</label>
+      <label for="published_at">Published At</label>
       <input id="published_at" name="published_at" value="{{ published_at }}" />
     </div>
   </div>
