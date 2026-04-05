@@ -4,8 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "build:admin": "rspack build && rsync -av assets/images/* admin-ui-assets/images/",
-    "dev:admin": "rsync -av assets/images/* admin-ui-assets/images/ && rspack watch",
+    "update-admin-images": "rm -rf admin-ui-assets/images/* && cp -R assets/images/* admin-ui-assets/images/",
+    "build:admin": "rspack build && pnpm run update-admin-images",
+    "dev:admin": "pnpm run update-admin-images && rspack watch",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
