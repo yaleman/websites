@@ -13,7 +13,7 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml /app/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile
-RUN curl https://mise.run | sh
+
 COPY rspack.config.ts tsconfig.json /app/
 COPY assets /app/assets
 COPY templates /app/templates

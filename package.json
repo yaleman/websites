@@ -4,8 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "build:admin": "rspack build && mise copy-admin-images",
-    "dev:admin": "mise copy-admin-images && rspack watch",
+    "build:admin": "rspack build && rsync -av assets/images/* admin-ui-assets/images/",
+    "dev:admin": "rsync -av assets/images/* admin-ui-assets/images/ && rspack watch",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
