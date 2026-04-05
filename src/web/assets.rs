@@ -544,47 +544,34 @@ pub(crate) async fn admin_site_assets_create(
             )));
         }
     };
-    let upload = parse_asset_create_upload(multipart).await?;
+    let uploaded_files = match parse_asset_create_upload(multipart).await? {
+        ParsedAssetCreateUpload::Files(uploaded_files) => uploaded_files,
+        ParsedAssetCreateUpload::SourceUrl(source_url) => {
+            let (bytes, original_filename, mime_type) =
+                fetch_remote_asset(state.oidc_client.as_ref(), source_url).await?;
+            vec![UploadedAssetFile {
+                bytes,
+                original_filename,
+                mime_type,
+            }]
+        }
+    };
     let db_txn = state.db.begin().await?;
     let mut cleanup_filenames = HashSet::new();
     let upload_result: Result<(), SiteError> = async {
-        match upload {
-            ParsedAssetCreateUpload::Files(uploaded_files) => {
-                for uploaded_file in uploaded_files {
-                    store_uploaded_asset_with_audit(
-                        &db_txn,
-                        AssetUploadAuditContext {
-                            upload_root: &state.upload_root,
-                            site_id: site.id,
-                            actor_sub: &actor.subject,
-                            event_type: "create_asset",
-                        },
-                        uploaded_file,
-                        &mut cleanup_filenames,
-                    )
-                    .await?;
-                }
-            }
-            ParsedAssetCreateUpload::SourceUrl(source_url) => {
-                let (bytes, original_filename, mime_type) =
-                    fetch_remote_asset(state.oidc_client.as_ref(), source_url).await?;
-                store_uploaded_asset_with_audit(
-                    &db_txn,
-                    AssetUploadAuditContext {
-                        upload_root: &state.upload_root,
-                        site_id: site.id,
-                        actor_sub: &actor.subject,
-                        event_type: "create_asset",
-                    },
-                    UploadedAssetFile {
-                        bytes,
-                        original_filename,
-                        mime_type,
-                    },
-                    &mut cleanup_filenames,
-                )
-                .await?;
-            }
+        for uploaded_file in uploaded_files {
+            store_uploaded_asset_with_audit(
+                &db_txn,
+                AssetUploadAuditContext {
+                    upload_root: &state.upload_root,
+                    site_id: site.id,
+                    actor_sub: &actor.subject,
+                    event_type: "create_asset",
+                },
+                uploaded_file,
+                &mut cleanup_filenames,
+            )
+            .await?;
         }
 
         db_txn.commit().await.map_err(|error| {

@@ -2617,6 +2617,18 @@ pub(crate) struct PersistedAssetFiles {
     pub thumbnail_filename: Option<String>,
 }
 
+async fn cleanup_asset_files(upload_root: &Path, filenames: &[String]) -> Result<(), SiteError> {
+    for filename in filenames {
+        match fs::remove_file(upload_root.join(filename)).await {
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(SiteError::from(error)),
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) async fn persist_asset_files(
     upload_root: &Path,
     storage_basename: &str,
@@ -2642,9 +2654,19 @@ pub(crate) async fn persist_asset_files(
     let mut file = fs::File::create(&storage_path)
         .await
         .map_err(|error| SiteError::internal(format!("failed to create upload file: {error}")))?;
-    file.write_all(&bytes)
-        .await
-        .map_err(|error| SiteError::internal(format!("failed to write upload file: {error}")))?;
+    let mut cleanup_filenames = vec![storage_basename.to_string()];
+    if let Err(error) = file.write_all(&bytes).await {
+        cleanup_asset_files(upload_root, &cleanup_filenames)
+            .await
+            .map_err(|cleanup_error| {
+                SiteError::internal(format!(
+                    "failed to write upload file: {error}; cleanup failed: {cleanup_error}"
+                ))
+            })?;
+        return Err(SiteError::internal(format!(
+            "failed to write upload file: {error}"
+        )));
+    }
     let (width, height) = dimensions.unwrap_or((0, 0));
     let width_i32 = if width > 0 {
         i32::try_from(width).ok()
@@ -2665,9 +2687,19 @@ pub(crate) async fn persist_asset_files(
             .unwrap_or("asset");
         let filename = format!("{stem}_thumb.{}", thumbnail.extension);
         let thumb_path = upload_root.join(&filename);
-        fs::write(&thumb_path, &thumbnail.bytes)
-            .await
-            .map_err(|error| SiteError::internal(format!("failed to write thumbnail: {error}")))?;
+        cleanup_filenames.push(filename.clone());
+        if let Err(error) = fs::write(&thumb_path, &thumbnail.bytes).await {
+            cleanup_asset_files(upload_root, &cleanup_filenames)
+                .await
+                .map_err(|cleanup_error| {
+                    SiteError::internal(format!(
+                        "failed to write thumbnail: {error}; cleanup failed: {cleanup_error}"
+                    ))
+                })?;
+            return Err(SiteError::internal(format!(
+                "failed to write thumbnail: {error}"
+            )));
+        }
         Some(filename)
     } else {
         None
@@ -2705,45 +2737,19 @@ pub async fn store_uploaded_asset<C: ConnectionTrait>(
         mime_type,
     )
     .await?;
+    let mut cleanup_filenames = vec![storage_basename.clone()];
+    if let Some(filename) = file_details.thumbnail_filename.clone() {
+        cleanup_filenames.push(filename);
+    }
 
-    let asset = create_asset(
-        db,
-        NewAsset {
-            site_id,
-            uploader_sub: uploader_sub.to_string(),
-            original_filename,
-            storage_basename: storage_basename.clone(),
-            mime_type: file_details.mime_type.clone(),
-            byte_length: file_details.byte_length,
-            width: file_details.width,
-            height: file_details.height,
-        },
-    )
-    .await
-    .map_err(|error| SiteError::internal(format!("failed to create asset: {error}")))?;
-
-    create_asset_variant(
-        db,
-        NewAssetVariant {
-            asset_id: asset.id,
-            variant_kind: "original".to_string(),
-            filename: storage_basename,
-            mime_type: file_details.mime_type.clone(),
-            byte_length: file_details.byte_length,
-            width: file_details.width,
-            height: file_details.height,
-        },
-    )
-    .await
-    .map_err(|error| SiteError::internal(format!("failed to create asset variant: {error}")))?;
-
-    if let Some(filename) = file_details.thumbnail_filename {
-        create_asset_variant(
+    let store_result: Result<entities::asset::Model, SiteError> = async {
+        let asset = create_asset(
             db,
-            NewAssetVariant {
-                asset_id: asset.id,
-                variant_kind: "thumbnail".to_string(),
-                filename,
+            NewAsset {
+                site_id,
+                uploader_sub: uploader_sub.to_string(),
+                original_filename,
+                storage_basename: storage_basename.clone(),
                 mime_type: file_details.mime_type.clone(),
                 byte_length: file_details.byte_length,
                 width: file_details.width,
@@ -2751,12 +2757,59 @@ pub async fn store_uploaded_asset<C: ConnectionTrait>(
             },
         )
         .await
-        .map_err(|error| {
-            SiteError::internal(format!("failed to create asset thumbnail: {error}"))
-        })?;
-    }
+        .map_err(|error| SiteError::internal(format!("failed to create asset: {error}")))?;
 
-    Ok(asset)
+        create_asset_variant(
+            db,
+            NewAssetVariant {
+                asset_id: asset.id,
+                variant_kind: "original".to_string(),
+                filename: storage_basename,
+                mime_type: file_details.mime_type.clone(),
+                byte_length: file_details.byte_length,
+                width: file_details.width,
+                height: file_details.height,
+            },
+        )
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to create asset variant: {error}")))?;
+
+        if let Some(filename) = file_details.thumbnail_filename {
+            create_asset_variant(
+                db,
+                NewAssetVariant {
+                    asset_id: asset.id,
+                    variant_kind: "thumbnail".to_string(),
+                    filename,
+                    mime_type: file_details.mime_type.clone(),
+                    byte_length: file_details.byte_length,
+                    width: file_details.width,
+                    height: file_details.height,
+                },
+            )
+            .await
+            .map_err(|error| {
+                SiteError::internal(format!("failed to create asset thumbnail: {error}"))
+            })?;
+        }
+
+        Ok(asset)
+    }
+    .await;
+
+    match store_result {
+        Ok(asset) => Ok(asset),
+        Err(error) => {
+            cleanup_asset_files(upload_root, &cleanup_filenames)
+                .await
+                .map_err(|cleanup_error| {
+                    SiteError::internal(format!(
+                        "failed to store asset: {error}; cleanup failed: {cleanup_error}"
+                    ))
+                })?;
+            Err(error)
+        }
+    }
 }
 
 /// Returns every stored filename used by an asset and its variants.
@@ -2849,6 +2902,14 @@ mod tests {
     use tempfile::TempDir;
     use tokio::fs;
 
+    const TINY_PNG_BYTES: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8,
+        0xff, 0xff, 0xff, 0x7f, 0x00, 0x09, 0xfb, 0x03, 0xfd, 0x28, 0xa6, 0xe3, 0x8a, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
     /// test function to create a site with default values for testing
     async fn create_site_fixture(db: &DatabaseConnection) -> entities::site::Model {
         create_site(
@@ -2934,6 +2995,36 @@ mod tests {
 
         let fetched = get_by_id(&db, site.id).await.expect("failed to get site");
         assert_eq!(fetched.id, site.id);
+    }
+
+    #[tokio::test]
+    async fn store_uploaded_asset_cleans_up_files_after_database_failure() {
+        let db = test_db_start().await;
+        let upload_root = TempDir::new().expect("failed to create upload root");
+
+        let result = store_uploaded_asset(
+            &db,
+            upload_root.path(),
+            Uuid::now_v7(),
+            "uploader",
+            TINY_PNG_BYTES.to_vec(),
+            "broken.png".to_string(),
+            Some("image/png".to_string()),
+        )
+        .await;
+
+        assert!(result.is_err());
+
+        let mut entries = fs::read_dir(upload_root.path())
+            .await
+            .expect("failed to read upload root");
+        assert!(
+            entries
+                .next_entry()
+                .await
+                .expect("failed to iterate upload root")
+                .is_none()
+        );
     }
 
     #[tokio::test]
