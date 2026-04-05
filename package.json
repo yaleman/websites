@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "update-admin-images": "rm -rf admin-ui-assets/images/* && cp -R assets/images/* admin-ui-assets/images/",
+    "update-admin-images": "mkdir -p admin-ui-assets/images && rm -rf admin-ui-assets/images/* && cp -R assets/images/* admin-ui-assets/images/",
     "build:admin": "rspack build && pnpm run update-admin-images",
     "dev:admin": "pnpm run update-admin-images && rspack watch",
     "test": "echo \"Error: no test specified\" && exit 1"

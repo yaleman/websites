@@ -162,4 +162,7 @@ run = ["cp assets/images/editor-128.png assets/images/editor.png"]
 
 [tasks.copy-admin-images]
 description = "Copy admin images to the output directory for the frontend build"
-run = "rsync -av assets/images/* admin-ui-assets/images/"
+run = [
+    "mkdir -p admin-ui-assets/images",
+    "rsync -av assets/images/* admin-ui-assets/images/",
+]
