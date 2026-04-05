@@ -1,5 +1,6 @@
 use super::state::*;
 use super::*;
+use crate::collect_asset_filenames;
 
 pub(crate) fn display_route_path(route: &str) -> String {
     format!("/{}", route.trim_matches('/'))
@@ -145,6 +146,163 @@ pub(crate) fn format_asset_dimensions(width: Option<i32>, height: Option<i32>) -
         (None, Some(height)) if height > 0 => format!("{height}h"),
         _ => "n/a".to_string(),
     }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct UploadedAssetFile {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) original_filename: String,
+    pub(crate) mime_type: Option<String>,
+}
+
+pub(crate) struct AssetUploadAuditContext<'a> {
+    pub(crate) upload_root: &'a StdPath,
+    pub(crate) site_id: Uuid,
+    pub(crate) actor_sub: &'a str,
+    pub(crate) event_type: &'a str,
+}
+
+pub(crate) enum ParsedAssetCreateUpload {
+    Files(Vec<UploadedAssetFile>),
+    SourceUrl(Url),
+}
+
+pub(crate) async fn parse_asset_create_upload(
+    mut multipart: Multipart,
+) -> Result<ParsedAssetCreateUpload, SiteError> {
+    let mut uploaded_files = Vec::new();
+    let mut source_url: Option<Url> = None;
+
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(field) => field,
+            Err(error) => {
+                return Err(SiteError::internal(format!(
+                    "failed to parse upload: {error}"
+                )));
+            }
+        };
+
+        let Some(field) = field else { break };
+        match field.name() {
+            Some("file") => {
+                let original_filename = field
+                    .file_name()
+                    .map(|value| value.to_string())
+                    .ok_or_else(|| {
+                        SiteError::BadRequest(
+                            "uploaded file is missing its original filename".to_string(),
+                        )
+                    })?;
+                let mime_type = field.content_type().map(|value| value.to_string());
+                let bytes = match field.bytes().await {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        return Err(SiteError::internal(format!(
+                            "failed to read upload: {error}"
+                        )));
+                    }
+                };
+                if bytes.is_empty() {
+                    continue;
+                }
+
+                uploaded_files.push(UploadedAssetFile {
+                    bytes: bytes.to_vec(),
+                    original_filename,
+                    mime_type,
+                });
+            }
+            Some("source_url") => {
+                let value = match field.text().await {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return Err(SiteError::internal(format!(
+                            "failed to read asset import url: {error}"
+                        )));
+                    }
+                };
+                let parsed = normalize_remote_asset_url(&value)?;
+                if let Some(parsed) = parsed {
+                    if source_url.is_some() {
+                        return Err(SiteError::BadRequest(
+                            "provide only one image url per upload".to_string(),
+                        ));
+                    }
+                    source_url = Some(parsed);
+                }
+            }
+            _ => continue,
+        }
+    }
+
+    if !uploaded_files.is_empty() && source_url.is_some() {
+        return Err(SiteError::BadRequest(
+            "provide uploaded files or an image url, not both".to_string(),
+        ));
+    }
+
+    if !uploaded_files.is_empty() {
+        return Ok(ParsedAssetCreateUpload::Files(uploaded_files));
+    }
+
+    if let Some(source_url) = source_url {
+        return Ok(ParsedAssetCreateUpload::SourceUrl(source_url));
+    }
+
+    Err(SiteError::BadRequest(
+        "provide at least one uploaded file or an image url".to_string(),
+    ))
+}
+
+pub(crate) async fn cleanup_uploaded_files(
+    upload_root: &StdPath,
+    filenames: &HashSet<String>,
+) -> Result<(), SiteError> {
+    for filename in filenames {
+        remove_file_if_exists(&upload_root.join(filename)).await?;
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn store_uploaded_asset_with_audit<C: ConnectionTrait>(
+    db: &C,
+    context: AssetUploadAuditContext<'_>,
+    upload: UploadedAssetFile,
+    cleanup_filenames: &mut HashSet<String>,
+) -> Result<entities::asset::Model, SiteError> {
+    let asset = store_uploaded_asset(
+        db,
+        context.upload_root,
+        context.site_id,
+        context.actor_sub,
+        upload.bytes,
+        upload.original_filename,
+        upload.mime_type,
+    )
+    .await?;
+
+    cleanup_filenames.insert(asset.storage_basename.clone());
+    cleanup_filenames.extend(collect_asset_filenames(db, asset.id).await?);
+
+    log_audit_event(
+        db,
+        context.actor_sub,
+        context.event_type,
+        "asset",
+        &asset.id.to_string(),
+        Some(asset.site_id),
+        Some(json!({
+            "original_filename": &asset.original_filename,
+            "storage_basename": &asset.storage_basename,
+            "mime_type": &asset.mime_type
+        })),
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to log asset audit: {error}")))?;
+
+    Ok(asset)
 }
 
 #[allow(dead_code)]
@@ -374,7 +532,7 @@ pub(crate) async fn admin_site_assets_create(
     State(state): State<AdminState>,
     session: Session,
     Path(site_id): Path<Uuid>,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> Result<Redirect, SiteError> {
     require_site_role(&state, &session, site_id, SiteRole::Author).await?;
     let actor = current_user(&session).await?;
@@ -386,103 +544,55 @@ pub(crate) async fn admin_site_assets_create(
             )));
         }
     };
-
-    let mut upload_bytes: Option<Vec<u8>> = None;
-    let mut original_filename: Option<String> = None;
-    let mut mime_type: Option<String> = None;
-    let mut source_url: Option<Url> = None;
-
-    loop {
-        let field = match multipart.next_field().await {
-            Ok(field) => field,
-            Err(error) => {
-                return Err(SiteError::internal(format!(
-                    "failed to parse upload: {error}"
-                )));
-            }
-        };
-
-        let Some(field) = field else { break };
-        match field.name() {
-            Some("file") => {
-                let field_filename = field.file_name().map(|value| value.to_string());
-                let field_mime_type = field.content_type().map(|value| value.to_string());
-                let bytes = match field.bytes().await {
-                    Ok(bytes) => bytes,
-                    Err(error) => {
-                        return Err(SiteError::internal(format!(
-                            "failed to read upload: {error}"
-                        )));
-                    }
-                };
-                if bytes.is_empty() {
-                    continue;
-                }
-
-                original_filename = field_filename;
-                mime_type = field_mime_type;
-                upload_bytes = Some(bytes.to_vec());
-            }
-            Some("source_url") => {
-                let value = match field.text().await {
-                    Ok(value) => value,
-                    Err(error) => {
-                        return Err(SiteError::internal(format!(
-                            "failed to read asset import url: {error}"
-                        )));
-                    }
-                };
-                source_url = normalize_remote_asset_url(&value)?;
-            }
-            _ => continue,
+    let uploaded_files = match parse_asset_create_upload(multipart).await? {
+        ParsedAssetCreateUpload::Files(uploaded_files) => uploaded_files,
+        ParsedAssetCreateUpload::SourceUrl(source_url) => {
+            let (bytes, original_filename, mime_type) =
+                fetch_remote_asset(state.oidc_client.as_ref(), source_url).await?;
+            vec![UploadedAssetFile {
+                bytes,
+                original_filename,
+                mime_type,
+            }]
         }
-    }
-
-    let (bytes, original_filename, mime_type) = if let Some(bytes) = upload_bytes {
-        let Some(original_filename) = original_filename else {
-            return Err(SiteError::internal("missing original filename".to_string()));
-        };
-        (bytes, original_filename, mime_type)
-    } else if let Some(source_url) = source_url {
-        fetch_remote_asset(state.oidc_client.as_ref(), source_url).await?
-    } else {
-        return Err(SiteError::internal(
-            "provide a file upload or an image url".to_string(),
-        ));
     };
-
     let db_txn = state.db.begin().await?;
-    let asset = store_uploaded_asset(
-        &db_txn,
-        &state.upload_root,
-        site.id,
-        &actor.subject,
-        bytes,
-        original_filename,
-        mime_type,
-    )
-    .await?;
+    let mut cleanup_filenames = HashSet::new();
+    let upload_result: Result<(), SiteError> = async {
+        for uploaded_file in uploaded_files {
+            store_uploaded_asset_with_audit(
+                &db_txn,
+                AssetUploadAuditContext {
+                    upload_root: &state.upload_root,
+                    site_id: site.id,
+                    actor_sub: &actor.subject,
+                    event_type: "create_asset",
+                },
+                uploaded_file,
+                &mut cleanup_filenames,
+            )
+            .await?;
+        }
 
-    log_audit_event(
-        &db_txn,
-        &actor.subject,
-        "create_asset",
-        "asset",
-        &asset.id.to_string(),
-        Some(asset.site_id),
-        Some(json!({
-            "original_filename": &asset.original_filename,
-            "storage_basename": &asset.storage_basename,
-            "mime_type": &asset.mime_type
-        })),
-    )
-    .await
-    .map_err(|error| SiteError::internal(format!("failed to log asset audit: {error}")))?;
+        db_txn.commit().await.map_err(|error| {
+            SiteError::internal(format!("failed to commit asset transaction: {error}"))
+        })?;
 
-    if let Err(error) = db_txn.commit().await {
-        return Err(SiteError::internal(format!(
-            "failed to commit asset transaction: {error}"
-        )));
+        Ok(())
+    }
+    .await;
+
+    if let Err(error) = upload_result {
+        if !cleanup_filenames.is_empty() {
+            cleanup_uploaded_files(&state.upload_root, &cleanup_filenames)
+                .await
+                .map_err(|cleanup_error| {
+                    SiteError::internal(format!(
+                        "asset upload failed: {error}; cleanup failed: {cleanup_error}"
+                    ))
+                })?;
+        }
+        return Err(error);
     }
 
     Ok(Redirect::to(&format!("/admin/site/{site_id}/assets")))

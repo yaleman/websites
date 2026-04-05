@@ -1,67 +1,57 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from io import BytesIO
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
-from .. import types
-from ..types import File
+if TYPE_CHECKING:
+    from ..models.api_asset_detail import ApiAssetDetail
 
-T = TypeVar("T", bound="AssetUploadRequest")
+
+T = TypeVar("T", bound="ApiAssetBatchResponse")
 
 
 @_attrs_define
-class AssetUploadRequest:
-    file: list[File]
+class ApiAssetBatchResponse:
+    assets: list[ApiAssetDetail]
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        file = []
-        for file_item_data in self.file:
-            file_item = file_item_data.to_tuple()
-
-            file.append(file_item)
+        assets = []
+        for assets_item_data in self.assets:
+            assets_item = assets_item_data.to_dict()
+            assets.append(assets_item)
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "file": file,
+                "assets": assets,
             }
         )
 
         return field_dict
 
-    def to_multipart(self) -> types.RequestFiles:
-        files: types.RequestFiles = []
-
-        for file_item_element in self.file:
-            files.append(("file", file_item_element.to_tuple()))
-
-        for prop_name, prop in self.additional_properties.items():
-            files.append((prop_name, (None, str(prop).encode(), "text/plain")))
-
-        return files
-
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.api_asset_detail import ApiAssetDetail
+
         d = dict(src_dict)
-        file = []
-        _file = d.pop("file")
-        for file_item_data in _file:
-            file_item = File(payload=BytesIO(file_item_data))
+        assets = []
+        _assets = d.pop("assets")
+        for assets_item_data in _assets:
+            assets_item = ApiAssetDetail.from_dict(assets_item_data)
 
-            file.append(file_item)
+            assets.append(assets_item)
 
-        asset_upload_request = cls(
-            file=file,
+        api_asset_batch_response = cls(
+            assets=assets,
         )
 
-        asset_upload_request.additional_properties = d
-        return asset_upload_request
+        api_asset_batch_response.additional_properties = d
+        return api_asset_batch_response
 
     @property
     def additional_keys(self) -> list[str]:

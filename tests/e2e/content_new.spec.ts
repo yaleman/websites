@@ -1198,8 +1198,30 @@ test.describe("content new editor", () => {
 
 			await alphaCard.click();
 			await expect(altInput).toHaveValue("batch image alpha");
+			await expect
+				.poll(() =>
+					alphaCard.evaluate(
+						(element) => getComputedStyle(element).backgroundColor,
+					),
+				)
+				.toMatch(/62\.8239|76\.7419/);
 			await betaCard.click();
+			await modal.getByRole("heading", { name: "Insert image" }).hover();
 			await expect(modal.getByText("2 images selected.")).toBeVisible();
+			await expect
+				.poll(() =>
+					alphaCard.evaluate(
+						(element) => getComputedStyle(element).backgroundColor,
+					),
+				)
+				.toMatch(/62\.8239|76\.7419/);
+			await expect
+				.poll(() =>
+					betaCard.evaluate(
+						(element) => getComputedStyle(element).backgroundColor,
+					),
+				)
+				.toMatch(/62\.8239|76\.7419/);
 			await expect(altInput).toBeDisabled();
 			await expect(altInput).toHaveValue("");
 			await expect(
@@ -1213,15 +1235,45 @@ test.describe("content new editor", () => {
 			await expect(betaResultCard).toHaveAttribute("aria-pressed", "true");
 
 			await alphaResultCard.click();
+			await modal.getByRole("heading", { name: "Insert image" }).hover();
 			await expect(modal.getByText("1 image selected.")).toBeVisible();
 			await expect(altInput).toBeEnabled();
 			await expect(altInput).toHaveValue("batch image beta");
 			await expect(alphaResultCard).toHaveAttribute("aria-pressed", "false");
 			await expect(betaResultCard).toHaveAttribute("aria-pressed", "true");
+			await expect
+				.poll(() =>
+					alphaResultCard.evaluate(
+						(element) => getComputedStyle(element).backgroundColor,
+					),
+				)
+				.toMatch(/98\.1434|rgb\(255, 255, 255\)/);
+			await expect
+				.poll(() =>
+					betaResultCard.evaluate(
+						(element) => getComputedStyle(element).backgroundColor,
+					),
+				)
+				.toMatch(/62\.8239|76\.7419/);
 
 			await altInput.fill("Shared alt text");
 			await alphaResultCard.click();
+			await modal.getByRole("heading", { name: "Insert image" }).hover();
 			await expect(modal.getByText("2 images selected.")).toBeVisible();
+			await expect
+				.poll(() =>
+					alphaResultCard.evaluate(
+						(element) => getComputedStyle(element).backgroundColor,
+					),
+				)
+				.toMatch(/62\.8239|76\.7419/);
+			await expect
+				.poll(() =>
+					betaResultCard.evaluate(
+						(element) => getComputedStyle(element).backgroundColor,
+					),
+				)
+				.toMatch(/62\.8239|76\.7419/);
 			await expect(altInput).toBeDisabled();
 			await expect(altInput).toHaveValue("Shared alt text");
 

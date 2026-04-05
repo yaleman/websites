@@ -104,6 +104,9 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        ApiAssetBatchResponse: {
+            assets: components["schemas"]["ApiAssetDetail"][];
+        };
         ApiAssetDetail: components["schemas"]["crate.entities.asset.Model"] & {
             has_thumbnail: boolean;
             original_url: string;
@@ -178,8 +181,7 @@ export interface components {
             assets: components["schemas"]["AssetLibraryItem"][];
         };
         AssetUploadRequest: {
-            /** Format: binary */
-            file: string;
+            file: string[];
         };
         ContentItemWithTags: components["schemas"]["crate.entities.content_item.Model"] & {
             tags: string[];
@@ -318,13 +320,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The created asset */
+            /** @description The created assets */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiAssetResponse"];
+                    "application/json": components["schemas"]["ApiAssetBatchResponse"];
                 };
             };
             /** @description Invalid request body */

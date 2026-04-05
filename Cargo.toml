@@ -36,10 +36,7 @@ openidconnect = { version = "4.0.1", features = ["reqwest"] }
 quick-xml = "0.39.2"
 rand = "0.10.0"
 regex = "1.12.3"
-reqwest = { version = "0.12", default-features = false, features = [
-    "rustls-tls",
-    "json",
-] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart"] }
 rustls = "0.23.37"
 sea-orm = { version = "1.1.20", features = [
     "runtime-tokio-rustls",

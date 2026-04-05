@@ -92,7 +92,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
 /// Holds all the common template-shared data for admin pages.
-mod assets;
+pub(crate) mod assets;
 mod content;
 mod dashboard;
 mod router;

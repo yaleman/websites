@@ -7,7 +7,7 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
-from ...models.api_asset_response import ApiAssetResponse
+from ...models.api_asset_batch_response import ApiAssetBatchResponse
 from ...models.api_error_response import ApiErrorResponse
 from ...models.asset_upload_request import AssetUploadRequest
 from ...types import Response
@@ -35,9 +35,9 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> ApiAssetResponse | ApiErrorResponse | None:
+) -> ApiAssetBatchResponse | ApiErrorResponse | None:
     if response.status_code == 200:
-        response_200 = ApiAssetResponse.from_dict(response.json())
+        response_200 = ApiAssetBatchResponse.from_dict(response.json())
 
         return response_200
 
@@ -69,7 +69,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[ApiAssetResponse | ApiErrorResponse]:
+) -> Response[ApiAssetBatchResponse | ApiErrorResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -83,7 +83,7 @@ def sync_detailed(
     *,
     client: AuthenticatedClient,
     body: AssetUploadRequest,
-) -> Response[ApiAssetResponse | ApiErrorResponse]:
+) -> Response[ApiAssetBatchResponse | ApiErrorResponse]:
     """
     Args:
         site_id (UUID):
@@ -94,7 +94,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ApiAssetResponse | ApiErrorResponse]
+        Response[ApiAssetBatchResponse | ApiErrorResponse]
     """
 
     kwargs = _get_kwargs(
@@ -114,7 +114,7 @@ def sync(
     *,
     client: AuthenticatedClient,
     body: AssetUploadRequest,
-) -> ApiAssetResponse | ApiErrorResponse | None:
+) -> ApiAssetBatchResponse | ApiErrorResponse | None:
     """
     Args:
         site_id (UUID):
@@ -125,7 +125,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ApiAssetResponse | ApiErrorResponse
+        ApiAssetBatchResponse | ApiErrorResponse
     """
 
     return sync_detailed(
@@ -140,7 +140,7 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
     body: AssetUploadRequest,
-) -> Response[ApiAssetResponse | ApiErrorResponse]:
+) -> Response[ApiAssetBatchResponse | ApiErrorResponse]:
     """
     Args:
         site_id (UUID):
@@ -151,7 +151,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ApiAssetResponse | ApiErrorResponse]
+        Response[ApiAssetBatchResponse | ApiErrorResponse]
     """
 
     kwargs = _get_kwargs(
@@ -169,7 +169,7 @@ async def asyncio(
     *,
     client: AuthenticatedClient,
     body: AssetUploadRequest,
-) -> ApiAssetResponse | ApiErrorResponse | None:
+) -> ApiAssetBatchResponse | ApiErrorResponse | None:
     """
     Args:
         site_id (UUID):
@@ -180,7 +180,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ApiAssetResponse | ApiErrorResponse
+        ApiAssetBatchResponse | ApiErrorResponse
     """
 
     return (
