@@ -10,12 +10,20 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use axum::routing::get;
-use sea_orm::{ActiveModelTrait, Set};
+use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseBackend, Set, Statement};
 use serde::de::value::{Error as ValueError, StrDeserializer};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use tower::ServiceExt;
 use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer};
+
+const TINY_PNG_BYTES: &[u8] = &[
+    0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, b'I', b'H', b'D', b'R',
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, b'I', b'D', b'A', b'T', 0x08, 0xd7, 0x63, 0xf8, 0xff, 0xff, 0xff,
+    0x7f, 0x00, 0x09, 0xfb, 0x03, 0xfd, 0x29, 0xaa, 0xe3, 0x8a, 0x00, 0x00, 0x00, 0x00, b'I', b'E',
+    b'N', b'D', 0xae, 0x42, 0x60, 0x82,
+];
 
 #[tokio::test]
 async fn ensure_site_owner_membership_is_idempotent() {
@@ -531,6 +539,267 @@ async fn admin_asset_upload_page_sorts_by_size_and_renders_selected_controls() {
     let large_index = body.find("large.png").expect("missing large asset");
     assert!(small_index < medium_index);
     assert!(medium_index < large_index);
+}
+
+#[tokio::test]
+async fn admin_asset_upload_creates_multiple_assets_and_redirects_with_toast() {
+    let db = Arc::new(test_db_start().await);
+    let site = crate::create_site(
+        db.as_ref(),
+        "asset-batch-upload".to_string(),
+        "Asset Batch Upload".to_string(),
+        DEFAULT_TEMPLATE_NAME.to_string(),
+    )
+    .await
+    .expect("failed to create site");
+    let author = crate::entities::user::create_user(
+        db.as_ref(),
+        "asset-batch-author",
+        Some("asset-batch-author@example.com"),
+        Some("Asset Batch Author"),
+        false,
+    )
+    .await
+    .expect("failed to create author");
+    crate::create_membership(
+        db.as_ref(),
+        crate::NewMembership {
+            site_id: site.id,
+            user_id: author.id,
+            role: SiteRole::Author,
+        },
+    )
+    .await
+    .expect("failed to create author membership");
+
+    let session_store = MemoryStore::default();
+    let test_router = test_app_router(test_admin_state(db.clone()), session_store.clone());
+    let cookie = seed_session_cookie(test_admin_state(db.clone()), session_store, author.id).await;
+    let (boundary, body) = multipart_asset_upload_request_body(
+        &[
+            ("first.png", "image/png", TINY_PNG_BYTES),
+            ("second.png", "image/png", TINY_PNG_BYTES),
+        ],
+        None,
+    );
+
+    let response = test_router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/site/{}/assets/new", site.id))
+                .header(header::COOKIE, &cookie)
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .expect("failed to build batch upload request"),
+        )
+        .await
+        .expect("failed to call batch upload route");
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::LOCATION)
+            .expect("missing redirect location")
+            .to_str()
+            .expect("invalid redirect location"),
+        format!(
+            "/admin/site/{}/assets?{}=2",
+            site.id,
+            assets::ASSET_UPLOAD_TOAST_QUERY_PARAM
+        )
+    );
+
+    let assets = crate::list_assets(db.as_ref(), site.id)
+        .await
+        .expect("failed to list uploaded assets");
+    assert_eq!(assets.len(), 2);
+
+    for asset in &assets {
+        let filenames = crate::collect_asset_filenames(db.as_ref(), asset.id)
+            .await
+            .expect("failed to collect uploaded filenames");
+        for filename in filenames {
+            assert!(
+                test_router.upload_root.path().join(&filename).exists(),
+                "expected uploaded file to exist: {filename}"
+            );
+        }
+    }
+
+    let redirect_page = test_router
+        .router
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/admin/site/{}/assets?{}=2",
+                    site.id,
+                    assets::ASSET_UPLOAD_TOAST_QUERY_PARAM
+                ))
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .expect("failed to build assets page request"),
+        )
+        .await
+        .expect("failed to load assets page");
+    assert_eq!(redirect_page.status(), StatusCode::OK);
+    let redirect_body = to_bytes(redirect_page.into_body(), usize::MAX)
+        .await
+        .expect("failed to read assets page body");
+    let redirect_body =
+        String::from_utf8(redirect_body.to_vec()).expect("invalid assets page response body");
+    assert!(redirect_body.contains("Uploaded 2 assets."));
+    assert!(redirect_body.contains("first.png"));
+    assert!(redirect_body.contains("second.png"));
+}
+
+#[tokio::test]
+async fn admin_asset_upload_rejects_mixed_files_and_source_url() {
+    let db = Arc::new(test_db_start().await);
+    let site = crate::create_site(
+        db.as_ref(),
+        "asset-upload-mixed".to_string(),
+        "Asset Upload Mixed".to_string(),
+        DEFAULT_TEMPLATE_NAME.to_string(),
+    )
+    .await
+    .expect("failed to create site");
+    let author = crate::entities::user::create_user(
+        db.as_ref(),
+        "asset-mixed-author",
+        Some("asset-mixed-author@example.com"),
+        Some("Asset Mixed Author"),
+        false,
+    )
+    .await
+    .expect("failed to create author");
+    crate::create_membership(
+        db.as_ref(),
+        crate::NewMembership {
+            site_id: site.id,
+            user_id: author.id,
+            role: SiteRole::Author,
+        },
+    )
+    .await
+    .expect("failed to create author membership");
+
+    let session_store = MemoryStore::default();
+    let test_router = test_app_router(test_admin_state(db.clone()), session_store.clone());
+    let cookie = seed_session_cookie(test_admin_state(db.clone()), session_store, author.id).await;
+    let (boundary, body) = multipart_asset_upload_request_body(
+        &[("first.png", "image/png", TINY_PNG_BYTES)],
+        Some("https://example.com/image.png"),
+    );
+
+    let response = test_router
+        .router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/site/{}/assets/new", site.id))
+                .header(header::COOKIE, cookie)
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .expect("failed to build mixed upload request"),
+        )
+        .await
+        .expect("failed to call mixed upload route");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let assets = crate::list_assets(db.as_ref(), site.id)
+        .await
+        .expect("failed to list assets after mixed upload");
+    assert!(assets.is_empty());
+}
+
+#[tokio::test]
+async fn admin_asset_upload_batch_failure_rolls_back_files_and_rows() {
+    let db = Arc::new(test_db_start().await);
+    let site = crate::create_site(
+        db.as_ref(),
+        "asset-upload-failure".to_string(),
+        "Asset Upload Failure".to_string(),
+        DEFAULT_TEMPLATE_NAME.to_string(),
+    )
+    .await
+    .expect("failed to create site");
+    let author = crate::entities::user::create_user(
+        db.as_ref(),
+        "asset-failure-author",
+        Some("asset-failure-author@example.com"),
+        Some("Asset Failure Author"),
+        false,
+    )
+    .await
+    .expect("failed to create author");
+    crate::create_membership(
+        db.as_ref(),
+        crate::NewMembership {
+            site_id: site.id,
+            user_id: author.id,
+            role: SiteRole::Author,
+        },
+    )
+    .await
+    .expect("failed to create author membership");
+    db.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "CREATE UNIQUE INDEX idx_asset_site_original_filename ON asset(site_id, original_filename)"
+            .to_string(),
+    ))
+    .await
+    .expect("failed to create unique asset filename index");
+
+    let session_store = MemoryStore::default();
+    let test_router = test_app_router(test_admin_state(db.clone()), session_store.clone());
+    let cookie = seed_session_cookie(test_admin_state(db.clone()), session_store, author.id).await;
+    let (boundary, body) = multipart_asset_upload_request_body(
+        &[
+            ("duplicate.png", "image/png", TINY_PNG_BYTES),
+            ("duplicate.png", "image/png", TINY_PNG_BYTES),
+        ],
+        None,
+    );
+
+    let response = test_router
+        .router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/site/{}/assets/new", site.id))
+                .header(header::COOKIE, cookie)
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .expect("failed to build broken batch upload request"),
+        )
+        .await
+        .expect("failed to call broken batch upload route");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let assets = crate::list_assets(db.as_ref(), site.id)
+        .await
+        .expect("failed to list assets after failed batch upload");
+    assert!(assets.is_empty());
+    assert!(
+        std::fs::read_dir(test_router.upload_root.path())
+            .expect("failed to read upload root")
+            .next()
+            .is_none(),
+        "expected upload root to be empty after rollback"
+    );
 }
 
 #[tokio::test]
@@ -1491,6 +1760,37 @@ fn multipart_wordpress_xml_request_body(xml: &str) -> (String, Vec<u8>) {
         "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"wordpress.xml\"\r\nContent-Type: application/xml\r\n\r\n{xml}\r\n--{boundary}--\r\n"
     );
     (boundary.to_string(), body.into_bytes())
+}
+
+fn multipart_asset_upload_request_body(
+    files: &[(&str, &str, &[u8])],
+    source_url: Option<&str>,
+) -> (String, Vec<u8>) {
+    let boundary = "asset-upload-boundary";
+    let mut body = Vec::new();
+
+    for (filename, mime_type, bytes) in files {
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"{filename}\"\r\nContent-Type: {mime_type}\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    }
+
+    if let Some(source_url) = source_url {
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"source_url\"\r\n\r\n{source_url}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    (boundary.to_string(), body)
 }
 
 fn git_command(dir: &StdPath, args: &[&str]) {

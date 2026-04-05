@@ -136,11 +136,11 @@
         },
         "responses": {
           "200": {
-            "description": "The created asset",
+            "description": "The created assets",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiAssetResponse"
+                  "$ref": "#/components/schemas/ApiAssetCreateResponse"
                 }
               }
             }
@@ -1015,6 +1015,20 @@
   },
   "components": {
     "schemas": {
+      "ApiAssetCreateResponse": {
+        "type": "object",
+        "required": [
+          "assets"
+        ],
+        "properties": {
+          "assets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiAssetDetail"
+            }
+          }
+        }
+      },
       "ApiAssetDetail": {
         "allOf": [
           {
@@ -1339,12 +1353,15 @@
       "AssetUploadRequest": {
         "type": "object",
         "required": [
-          "file"
+          "files"
         ],
         "properties": {
-          "file": {
-            "type": "string",
-            "format": "binary"
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            }
           }
         }
       },

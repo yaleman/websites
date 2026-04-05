@@ -422,17 +422,26 @@ def test_generated_client_crud_and_search():
                 site_id=harness.site_id,
                 client=client,
                 body=asset_upload_model.AssetUploadRequest(
-                    file=types_module.File(
-                        payload=io.BytesIO(TINY_PNG_BYTES),
-                        file_name="tiny.png",
-                        mime_type="image/png",
-                    )
+                    files=[
+                        types_module.File(
+                            payload=io.BytesIO(TINY_PNG_BYTES),
+                            file_name="tiny.png",
+                            mime_type="image/png",
+                        ),
+                        types_module.File(
+                            payload=io.BytesIO(TINY_PNG_BYTES),
+                            file_name="tiny-second.png",
+                            mime_type="image/png",
+                        ),
+                    ]
                 ),
             )
             assert uploaded_asset is not None
             assert not isinstance(uploaded_asset, error_response_model.ApiErrorResponse)
-            asset_id = uploaded_asset.asset.id
-            assert uploaded_asset.asset.original_filename == "tiny.png"
+            assert len(uploaded_asset.assets) == 2
+            asset_id = uploaded_asset.assets[0].id
+            assert uploaded_asset.assets[0].original_filename == "tiny.png"
+            assert uploaded_asset.assets[1].original_filename == "tiny-second.png"
 
             stored_files = sorted(path.name for path in harness.upload_root.iterdir())
             assert stored_files
@@ -441,6 +450,7 @@ def test_generated_client_crud_and_search():
             assert listed_assets is not None
             assert not isinstance(listed_assets, error_response_model.ApiErrorResponse)
             assert any(asset.id == asset_id for asset in listed_assets.assets)
+            assert len(listed_assets.assets) == 2
 
             library_assets = asset_library_module.sync(site_id=harness.site_id, client=client)
             assert library_assets is not None
@@ -463,7 +473,11 @@ def test_generated_client_crud_and_search():
                 client=client,
             )
             assert delete_asset_response.status_code == 204
-            assert list(harness.upload_root.iterdir()) == []
+            remaining_assets = asset_list_module.sync(site_id=harness.site_id, client=client)
+            assert remaining_assets is not None
+            assert not isinstance(remaining_assets, error_response_model.ApiErrorResponse)
+            assert len(remaining_assets.assets) == 1
+            assert list(harness.upload_root.iterdir())
 
             delete_content_response = content_delete_module.sync_detailed(
                 site_id=harness.site_id,

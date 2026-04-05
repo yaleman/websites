@@ -1,19 +1,19 @@
 {% extends "base_template.html" %}
 {% block body %}
 <p class="inline-body">
-  Upload a new image for <strong>{{ site_full_title }}</strong>.
+  Upload new images for <strong>{{ site_full_title }}</strong>.
 </p>
 
 <form method="post" action enctype="multipart/form-data" class="stack-form">
   <div class="form-field">
-    <label for="file">Upload File</label>
-    <input id="file" name="file" type="file" />
-    <p class="inline-body">Choose an image file. A thumbnail will be generated automagically.</p>
+    <label for="files">Upload Files</label>
+    <input id="files" name="files" type="file" multiple accept="image/*" />
+    <p class="inline-body">Choose one or more image files. A thumbnail will be generated for each upload.</p>
   </div>
   <div class="form-field">
     <label for="source_url">Import From URL</label>
     <input id="source_url" name="source_url" type="url" placeholder="https://example.com/image.png" />
-    <p class="inline-body">Copy an image from a URL into the site asset library.</p>
+    <p class="inline-body">Copy one remote image into the site asset library. Leave this blank when uploading files.</p>
   </div>
 
   <div class="form-actions">

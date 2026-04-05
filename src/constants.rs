@@ -1,5 +1,6 @@
 pub(crate) static DEFAULT_TEMPLATE_NAME: &str = "default";
 pub(crate) static THUMBNAIL_MAX_SIZE: u32 = 320;
+pub(crate) const ASSET_UPLOAD_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 pub static SITE_TEMPLATES_DIR: &str = "./site_templates/";
 pub static RENDERED_DIR: &str = "./rendered/";

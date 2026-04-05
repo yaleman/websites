@@ -804,6 +804,7 @@ pub(crate) struct AdminContentListQuery {
 pub(crate) struct AdminAssetListQuery {
     pub(crate) sort_by: Option<String>,
     pub(crate) sort_dir: Option<String>,
+    pub(crate) uploaded: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]

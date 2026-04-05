@@ -1,15 +1,20 @@
+use crate::constants::ASSET_UPLOAD_MAX_BYTES;
 use crate::entities::audit_event::log_audit_event;
 use crate::entities::{self, PageType};
 use crate::errors::SiteError;
 use crate::token_auth::{self, authenticate_api_request};
+use crate::web::assets::{
+    create_uploaded_asset_batch, log_asset_create_events, parse_asset_create_request,
+};
 use crate::web::state::{AssetSortBy, AssetSortDirection, sort_assets};
 use crate::web::{AdminState, SiteRole};
 use crate::{
-    NewContent, UpdateContent, collect_asset_filenames, create_content, delete_asset,
-    delete_content, get_asset_for_site, get_content_for_site, list_asset_variants, list_assets,
-    list_content, list_content_tags, search_content, store_uploaded_asset, sync_tags_to_content,
+    NewContent, UpdateContent, cleanup_uploaded_asset_files, collect_asset_filenames,
+    create_content, delete_asset, delete_content, get_asset_for_site, get_content_for_site,
+    list_asset_variants, list_assets, list_content, list_content_tags, search_content,
+    sync_tags_to_content,
 };
-use axum::extract::{Multipart, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -47,7 +52,9 @@ pub(crate) fn routes() -> Router<AdminState> {
         )
         .route(
             "/api/site/{site_id}/assets",
-            get(api_site_assets_list).post(api_site_asset_create),
+            get(api_site_assets_list)
+                .post(api_site_asset_create)
+                .layer(DefaultBodyLimit::max(ASSET_UPLOAD_MAX_BYTES)),
         )
         .route(
             "/api/site/{site_id}/assets/{asset_id}",
@@ -250,13 +257,18 @@ pub(crate) struct AssetLibraryQuery {
 #[derive(Debug, ToSchema)]
 #[allow(dead_code)]
 pub(crate) struct AssetUploadRequest {
-    #[schema(value_type = String, format = Binary)]
-    file: Vec<u8>,
+    #[schema(value_type = Vec<String>, format = Binary)]
+    files: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct ApiAssetListResponse {
     assets: Vec<ApiAssetSummary>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct ApiAssetCreateResponse {
+    assets: Vec<ApiAssetDetail>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -951,7 +963,7 @@ pub(crate) async fn api_site_assets_list(
         ("bearer_auth" = [])
     ),
     responses(
-        (status = 200, description = "The created asset", body = ApiAssetResponse),
+        (status = 200, description = "The created assets", body = ApiAssetCreateResponse),
         (status = 400, description = "Invalid request body", body = ApiErrorResponse),
         (status = 401, description = "Unauthorized access", body = ApiErrorResponse),
         (status = 403, description = "Forbidden - insufficient permissions", body = ApiErrorResponse),
@@ -963,74 +975,38 @@ pub(crate) async fn api_site_asset_create(
     headers: HeaderMap,
     session: Session,
     Path(site_id): Path<Uuid>,
-    mut multipart: Multipart,
-) -> Result<Json<ApiAssetResponse>, ApiError> {
+    multipart: Multipart,
+) -> Result<Json<ApiAssetCreateResponse>, ApiError> {
     let principal =
         authenticate_and_require(&state, &headers, &session, site_id, SiteRole::Author).await?;
     let actor = principal.user.subject.clone();
-    let mut upload_bytes: Option<Vec<u8>> = None;
-    let mut original_filename: Option<String> = None;
-    let mut mime_type: Option<String> = None;
-
-    loop {
-        let field = multipart.next_field().await.map_err(|error| {
-            ApiError::BadRequest(format!("failed to parse multipart body: {error}"))
-        })?;
-        let Some(field) = field else { break };
-        if field.name() != Some("file") {
-            continue;
-        }
-        original_filename = field.file_name().map(|value| value.to_string());
-        mime_type = field.content_type().map(|value| value.to_string());
-        let bytes = field.bytes().await.map_err(|error| {
-            ApiError::BadRequest(format!("failed to read uploaded file: {error}"))
-        })?;
-        if bytes.is_empty() {
-            continue;
-        }
-        upload_bytes = Some(bytes.to_vec());
-        break;
+    let parsed_request = parse_asset_create_request(multipart).await?;
+    if parsed_request.source_url.is_some() {
+        return Err(ApiError::BadRequest(
+            "remote image urls are not supported for this endpoint".to_string(),
+        ));
+    }
+    let uploads = parsed_request.uploads;
+    if uploads.is_empty() {
+        return Err(ApiError::BadRequest("missing file uploads".to_string()));
     }
 
-    let bytes =
-        upload_bytes.ok_or_else(|| ApiError::BadRequest("missing file upload".to_string()))?;
-    let original_filename = original_filename
-        .ok_or_else(|| ApiError::BadRequest("missing original filename".to_string()))?;
-
     let txn = state.db.begin().await.map_err(SiteError::from)?;
-    let asset = store_uploaded_asset(
-        &txn,
-        &state.upload_root,
-        site_id,
-        &actor,
-        bytes,
-        original_filename,
-        mime_type,
-    )
-    .await?;
-    log_audit_event(
-        &txn,
-        &actor,
-        "create_asset_api",
-        "asset",
-        &asset.id.to_string(),
-        Some(asset.site_id),
-        Some(json!({
-            "original_filename": asset.original_filename,
-            "storage_basename": asset.storage_basename,
-            "mime_type": asset.mime_type
-        })),
-    )
-    .await
-    .map_err(|error| ApiError::Internal(format!("failed to log asset audit: {error}")))?;
-    txn.commit().await.map_err(SiteError::from)?;
+    let batch =
+        create_uploaded_asset_batch(&txn, &state.upload_root, site_id, &actor, uploads).await?;
+    log_asset_create_events(&txn, &actor, "create_asset_api", &batch.assets).await?;
+    if let Err(error) = txn.commit().await.map_err(SiteError::from) {
+        cleanup_uploaded_asset_files(&state.upload_root, &batch.stored_filenames).await?;
+        return Err(ApiError::from(error));
+    }
 
-    let asset = get_asset_for_site(state.db.as_ref(), site_id, asset.id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("asset not found after create: {}", asset.id)))?;
+    let mut response_assets = Vec::with_capacity(batch.assets.len());
+    for asset in batch.assets {
+        response_assets.push(to_asset_detail(state.db.as_ref(), asset).await?);
+    }
     principal.record_successful_use(state.db.as_ref()).await?;
-    Ok(Json(ApiAssetResponse {
-        asset: to_asset_detail(state.db.as_ref(), asset).await?,
+    Ok(Json(ApiAssetCreateResponse {
+        assets: response_assets,
     }))
 }
 
@@ -1321,17 +1297,20 @@ mod tests {
         serde_json::from_slice(&body).expect("failed to parse json body")
     }
 
-    fn multipart_body(filename: &str, mime_type: &str, bytes: &[u8]) -> (String, Vec<u8>) {
+    fn multipart_body(files: &[(&str, &str, &[u8])]) -> (String, Vec<u8>) {
         let boundary = "api-test-boundary";
         let mut body = Vec::new();
-        body.extend_from_slice(
-            format!(
-                "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: {mime_type}\r\n\r\n"
-            )
-            .as_bytes(),
-        );
-        body.extend_from_slice(bytes);
-        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        for (filename, mime_type, bytes) in files {
+            body.extend_from_slice(
+                format!(
+                    "--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"{filename}\"\r\nContent-Type: {mime_type}\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+            body.extend_from_slice(bytes);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
         (boundary.to_string(), body)
     }
 
@@ -1694,7 +1673,10 @@ mod tests {
 
         let author_cookie = seed_session_cookie(router.clone(), author.id).await;
         let viewer_cookie = seed_session_cookie(router.clone(), viewer.id).await;
-        let (boundary, body) = multipart_body("tiny.png", "image/png", TINY_PNG_BYTES);
+        let (boundary, body) = multipart_body(&[
+            ("tiny.png", "image/png", TINY_PNG_BYTES),
+            ("tiny-second.png", "image/png", TINY_PNG_BYTES),
+        ]);
 
         let create_response = router
             .clone()
@@ -1714,16 +1696,37 @@ mod tests {
             .expect("failed to call asset upload");
         assert_eq!(create_response.status(), StatusCode::OK);
         let create_body = json_body(create_response).await;
-        let asset_id = create_body["asset"]["id"]
+        let created_assets = create_body["assets"]
+            .as_array()
+            .expect("created assets should be array");
+        assert_eq!(created_assets.len(), 2);
+        let asset_id = created_assets[0]["id"]
             .as_str()
-            .expect("missing asset id");
-        let asset_uuid = Uuid::parse_str(asset_id).expect("invalid asset id");
-
-        let stored_filenames = collect_asset_filenames(db.as_ref(), asset_uuid)
+            .expect("missing first asset id");
+        let asset_uuid = Uuid::parse_str(asset_id).expect("invalid first asset id");
+        let first_asset_filenames = collect_asset_filenames(db.as_ref(), asset_uuid)
             .await
-            .expect("failed to collect filenames");
-        for filename in &stored_filenames {
-            assert_exists(&upload_root.path().join(filename));
+            .expect("failed to collect first asset filenames");
+        let second_asset_id = created_assets[1]["id"]
+            .as_str()
+            .expect("missing second asset id");
+        let second_asset_uuid = Uuid::parse_str(second_asset_id).expect("invalid second asset id");
+        let second_asset_filenames = collect_asset_filenames(db.as_ref(), second_asset_uuid)
+            .await
+            .expect("failed to collect second asset filenames");
+
+        for created_asset in created_assets {
+            let created_asset_id = created_asset["id"]
+                .as_str()
+                .expect("missing created asset id");
+            let created_asset_uuid =
+                Uuid::parse_str(created_asset_id).expect("invalid created asset id");
+            let stored_filenames = collect_asset_filenames(db.as_ref(), created_asset_uuid)
+                .await
+                .expect("failed to collect filenames");
+            for filename in &stored_filenames {
+                assert_exists(&upload_root.path().join(filename));
+            }
         }
 
         let list_response = router
@@ -1744,7 +1747,7 @@ mod tests {
                 .as_array()
                 .expect("assets should be array")
                 .len(),
-            1
+            2
         );
 
         let detail_response = router
@@ -1801,7 +1804,10 @@ mod tests {
                 .expect("failed to reload asset")
                 .is_none()
         );
-        for filename in &stored_filenames {
+        for filename in &second_asset_filenames {
+            assert_exists(&upload_root.path().join(filename));
+        }
+        for filename in &first_asset_filenames {
             assert_missing(&upload_root.path().join(filename));
         }
     }

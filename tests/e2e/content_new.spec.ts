@@ -17,20 +17,23 @@ import { defaultTimeout } from "./global_setup";
 async function uploadAssetFromPage(
 	page: import("@playwright/test").Page,
 	harness: { port: number; siteId: string },
-	filename: string,
+	filename: string | string[],
 ) {
+	const files = (Array.isArray(filename) ? filename : [filename]).map((name) => ({
+		name,
+		mimeType: "image/png",
+		buffer: Buffer.from(tinyPngBytes),
+	}));
 	await page.goto(
 		`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/assets/new`,
 		{ waitUntil: "domcontentloaded" },
 	);
-	await page.locator('input[type="file"]').setInputFiles({
-		name: filename,
-		mimeType: "image/png",
-		buffer: Buffer.from(tinyPngBytes),
-	});
+	await page.locator('input[type="file"]').setInputFiles(files);
 	await Promise.all([
 		page.waitForURL(
-			`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/assets`,
+			new RegExp(
+				`https://127\\.0\\.0\\.1:${harness.port}/admin/site/${harness.siteId}/assets\\?uploaded=${files.length}`,
+			),
 		),
 		page.getByRole("button", { name: "Upload", exact: true }).click(),
 	]);
@@ -1027,7 +1030,7 @@ test.describe("content new editor", () => {
 			const modal = page.getByRole("dialog", { name: "Insert image" });
 			await expect(modal).toBeVisible();
 
-			const uploadLink = modal.getByRole("link", { name: "Upload image" });
+			const uploadLink = modal.getByRole("link", { name: "Upload images" });
 			await expect(uploadLink).toHaveAttribute(
 				"href",
 				`/admin/site/${harness.siteId}/assets/new`,

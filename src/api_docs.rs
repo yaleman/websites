@@ -28,6 +28,7 @@ use utoipa::openapi::security::{Http, HttpAuthScheme, SecurityScheme};
             ApiContentListResponse,
             ContentItemWithTags,
             AssetUploadRequest,
+            ApiAssetCreateResponse,
             ApiAssetListResponse,
             ApiAssetResponse,
             ApiAssetSummary,

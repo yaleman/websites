@@ -353,7 +353,7 @@ const routeCases: RouteCase[] = [
 		prepare: async (harness) => ({
 			path: `/admin/site/${harness.siteId}/assets/new`,
 			assertSuccess: async (response) => {
-				expect(await response.text()).toContain("Upload File");
+				expect(await response.text()).toContain("Upload Files");
 			},
 		}),
 	},
@@ -366,7 +366,7 @@ const routeCases: RouteCase[] = [
 		prepare: async (harness, _fixtures, scenario) => ({
 			path: `/admin/site/${harness.siteId}/assets/new`,
 			multipart: {
-				file: {
+				files: {
 					name: `upload-${scenario}.png`,
 					mimeType: "image/png",
 					buffer: tinyPngBytes,
@@ -374,7 +374,7 @@ const routeCases: RouteCase[] = [
 			},
 			assertSuccess: async (response) => {
 				expect(response.headers()["location"]).toBe(
-					`/admin/site/${harness.siteId}/assets`,
+					`/admin/site/${harness.siteId}/assets?uploaded=1`,
 				);
 			},
 		}),

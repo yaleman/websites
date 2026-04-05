@@ -348,7 +348,7 @@ test.describe("web audit attribution", () => {
 					{
 						method: "POST",
 						multipart: {
-							file: {
+							files: {
 								name: "audit-upload.png",
 								mimeType: "image/png",
 								buffer: tinyPngBytes,

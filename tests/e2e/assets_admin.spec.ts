@@ -60,7 +60,7 @@ test.describe("assets admin", () => {
 				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/assets/new`,
 				{ waitUntil: "domcontentloaded" },
 			);
-			await expect(page).toHaveTitle("Upload Asset - Test Site");
+			await expect(page).toHaveTitle("Upload Assets - Test Site");
 			await expect(
 				page.getByRole("button", { name: "Upload", exact: true }),
 			).toBeVisible();
@@ -69,6 +69,54 @@ test.describe("assets admin", () => {
 			).toBeVisible();
 			await expect(page.locator("body")).toContainText("banner.png");
 			await expect(page.getByRole("img", { name: "banner.png" })).toBeVisible();
+
+			await context.close();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
+	test("uploads multiple assets in one submission", async ({ browser }) => {
+		const harness = await setupHarness();
+
+		try {
+			const userId = await createUser(harness, "asset-batch-uploader");
+			await addMembership(harness, userId, "owner");
+
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				"asset-batch-uploader",
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/assets/new`,
+				{ waitUntil: "domcontentloaded" },
+			);
+			await page.locator('input[type="file"]').setInputFiles([
+				{
+					name: "first-batch.png",
+					mimeType: "image/png",
+					buffer: tinyPngBytes,
+				},
+				{
+					name: "second-batch.png",
+					mimeType: "image/png",
+					buffer: tinyPngBytes,
+				},
+			]);
+			await Promise.all([
+				page.waitForURL(
+					new RegExp(
+						`https://127\\.0\\.0\\.1:${harness.port}/admin/site/${harness.siteId}/assets\\?uploaded=2`,
+					),
+				),
+				page.getByRole("button", { name: "Upload", exact: true }).click(),
+			]);
+
+			await expect(page.locator("body")).toContainText("Uploaded 2 assets.");
+			await expect(page.locator("body")).toContainText("first-batch.png");
+			await expect(page.locator("body")).toContainText("second-batch.png");
 
 			await context.close();
 		} finally {
@@ -186,7 +234,9 @@ test.describe("assets admin", () => {
 			await page.getByRole("button", { name: "Upload", exact: true }).click();
 
 			await expect(page).toHaveURL(
-				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/assets`,
+				new RegExp(
+					`https://127\\.0\\.0\\.1:${harness.port}/admin/site/${harness.siteId}/assets\\?uploaded=1`,
+				),
 			);
 			await expect(page.locator("body")).toContainText("remote-banner.png");
 			await expect(page.locator("body")).toContainText("image/png");
