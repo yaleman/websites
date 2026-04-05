@@ -76,6 +76,51 @@ test.describe("assets admin", () => {
 		}
 	});
 
+	test("uploads multiple assets from the admin upload page", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const userId = await createUser(harness, "asset-batch-uploader");
+			await addMembership(harness, userId, "owner");
+
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				"asset-batch-uploader",
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/assets/new`,
+				{ waitUntil: "domcontentloaded" },
+			);
+			await page.locator('input[type="file"]').setInputFiles([
+				{
+					name: "batch-first.png",
+					mimeType: "image/png",
+					buffer: tinyPngBytes,
+				},
+				{
+					name: "batch-second.png",
+					mimeType: "image/png",
+					buffer: tinyPngBytes,
+				},
+			]);
+			await page.getByRole("button", { name: "Upload", exact: true }).click();
+
+			await expect(page).toHaveURL(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/assets`,
+			);
+			await expect(page.locator("body")).toContainText("batch-first.png");
+			await expect(page.locator("body")).toContainText("batch-second.png");
+
+			await context.close();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
 	test("flags missing assets and supports in-place replacement", async ({
 		browser,
 	}) => {

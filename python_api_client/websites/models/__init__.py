@@ -1,5 +1,6 @@
 """Contains all the data models used in inputs/outputs"""
 
+from .api_asset_batch_response import ApiAssetBatchResponse
 from .api_asset_detail import ApiAssetDetail
 from .api_asset_list_response import ApiAssetListResponse
 from .api_asset_response import ApiAssetResponse
@@ -18,6 +19,7 @@ from .content_item_with_tags import ContentItemWithTags
 from .page_type import PageType
 
 __all__ = (
+    "ApiAssetBatchResponse",
     "ApiAssetDetail",
     "ApiAssetListResponse",
     "ApiAssetResponse",

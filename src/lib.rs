@@ -2631,6 +2631,11 @@ pub(crate) async fn persist_asset_files(
         .to_lowercase();
     let storage_path = upload_root.join(storage_basename);
 
+    let byte_length = i32::try_from(bytes.len()).unwrap_or(i32::MAX);
+    let (dimensions, thumbnail) = generate_thumbnail(bytes.clone(), &extension)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to process image: {error}")))?;
+
     fs::create_dir_all(upload_root).await.map_err(|error| {
         SiteError::internal(format!("failed to create upload directory: {error}"))
     })?;
@@ -2640,11 +2645,6 @@ pub(crate) async fn persist_asset_files(
     file.write_all(&bytes)
         .await
         .map_err(|error| SiteError::internal(format!("failed to write upload file: {error}")))?;
-
-    let byte_length = i32::try_from(bytes.len()).unwrap_or(i32::MAX);
-    let (dimensions, thumbnail) = generate_thumbnail(bytes, &extension)
-        .await
-        .map_err(|error| SiteError::internal(format!("failed to process image: {error}")))?;
     let (width, height) = dimensions.unwrap_or((0, 0));
     let width_i32 = if width > 0 {
         i32::try_from(width).ok()

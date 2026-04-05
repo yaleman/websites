@@ -2,12 +2,16 @@ use crate::entities::audit_event::log_audit_event;
 use crate::entities::{self, PageType};
 use crate::errors::SiteError;
 use crate::token_auth::{self, authenticate_api_request};
+use crate::web::assets::{
+    AssetUploadAuditContext, ParsedAssetCreateUpload, cleanup_uploaded_files,
+    parse_asset_create_upload, store_uploaded_asset_with_audit,
+};
 use crate::web::state::{AssetSortBy, AssetSortDirection, sort_assets};
 use crate::web::{AdminState, SiteRole};
 use crate::{
     NewContent, UpdateContent, collect_asset_filenames, create_content, delete_asset,
     delete_content, get_asset_for_site, get_content_for_site, list_asset_variants, list_assets,
-    list_content, list_content_tags, search_content, store_uploaded_asset, sync_tags_to_content,
+    list_content, list_content_tags, search_content, sync_tags_to_content,
 };
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
@@ -21,7 +25,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path as StdPath;
 use std::str::FromStr;
 use tokio::fs;
@@ -250,8 +254,8 @@ pub(crate) struct AssetLibraryQuery {
 #[derive(Debug, ToSchema)]
 #[allow(dead_code)]
 pub(crate) struct AssetUploadRequest {
-    #[schema(value_type = String, format = Binary)]
-    file: Vec<u8>,
+    #[schema(value_type = Vec<String>, format = Binary)]
+    file: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -262,6 +266,11 @@ pub(crate) struct ApiAssetListResponse {
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct ApiAssetResponse {
     asset: ApiAssetDetail,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct ApiAssetBatchResponse {
+    assets: Vec<ApiAssetDetail>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -951,7 +960,7 @@ pub(crate) async fn api_site_assets_list(
         ("bearer_auth" = [])
     ),
     responses(
-        (status = 200, description = "The created asset", body = ApiAssetResponse),
+        (status = 200, description = "The created assets", body = ApiAssetBatchResponse),
         (status = 400, description = "Invalid request body", body = ApiErrorResponse),
         (status = 401, description = "Unauthorized access", body = ApiErrorResponse),
         (status = 403, description = "Forbidden - insufficient permissions", body = ApiErrorResponse),
@@ -963,74 +972,77 @@ pub(crate) async fn api_site_asset_create(
     headers: HeaderMap,
     session: Session,
     Path(site_id): Path<Uuid>,
-    mut multipart: Multipart,
-) -> Result<Json<ApiAssetResponse>, ApiError> {
+    multipart: Multipart,
+) -> Result<Json<ApiAssetBatchResponse>, ApiError> {
     let principal =
         authenticate_and_require(&state, &headers, &session, site_id, SiteRole::Author).await?;
     let actor = principal.user.subject.clone();
-    let mut upload_bytes: Option<Vec<u8>> = None;
-    let mut original_filename: Option<String> = None;
-    let mut mime_type: Option<String> = None;
-
-    loop {
-        let field = multipart.next_field().await.map_err(|error| {
-            ApiError::BadRequest(format!("failed to parse multipart body: {error}"))
-        })?;
-        let Some(field) = field else { break };
-        if field.name() != Some("file") {
-            continue;
-        }
-        original_filename = field.file_name().map(|value| value.to_string());
-        mime_type = field.content_type().map(|value| value.to_string());
-        let bytes = field.bytes().await.map_err(|error| {
-            ApiError::BadRequest(format!("failed to read uploaded file: {error}"))
-        })?;
-        if bytes.is_empty() {
-            continue;
-        }
-        upload_bytes = Some(bytes.to_vec());
-        break;
-    }
-
-    let bytes =
-        upload_bytes.ok_or_else(|| ApiError::BadRequest("missing file upload".to_string()))?;
-    let original_filename = original_filename
-        .ok_or_else(|| ApiError::BadRequest("missing original filename".to_string()))?;
+    let upload = parse_asset_create_upload(multipart).await?;
 
     let txn = state.db.begin().await.map_err(SiteError::from)?;
-    let asset = store_uploaded_asset(
-        &txn,
-        &state.upload_root,
-        site_id,
-        &actor,
-        bytes,
-        original_filename,
-        mime_type,
-    )
-    .await?;
-    log_audit_event(
-        &txn,
-        &actor,
-        "create_asset_api",
-        "asset",
-        &asset.id.to_string(),
-        Some(asset.site_id),
-        Some(json!({
-            "original_filename": asset.original_filename,
-            "storage_basename": asset.storage_basename,
-            "mime_type": asset.mime_type
-        })),
-    )
-    .await
-    .map_err(|error| ApiError::Internal(format!("failed to log asset audit: {error}")))?;
-    txn.commit().await.map_err(SiteError::from)?;
+    let mut cleanup_filenames = HashSet::new();
+    let upload_result: Result<Vec<entities::asset::Model>, ApiError> = async {
+        let mut created_assets = Vec::new();
 
-    let asset = get_asset_for_site(state.db.as_ref(), site_id, asset.id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("asset not found after create: {}", asset.id)))?;
+        match upload {
+            ParsedAssetCreateUpload::Files(uploaded_files) => {
+                for uploaded_file in uploaded_files {
+                    let asset = store_uploaded_asset_with_audit(
+                        &txn,
+                        AssetUploadAuditContext {
+                            upload_root: &state.upload_root,
+                            site_id,
+                            actor_sub: &actor,
+                            event_type: "create_asset_api",
+                        },
+                        uploaded_file,
+                        &mut cleanup_filenames,
+                    )
+                    .await?;
+                    created_assets.push(asset);
+                }
+            }
+            ParsedAssetCreateUpload::SourceUrl(_) => {
+                return Err(ApiError::BadRequest(
+                    "remote asset import is not supported for this endpoint".to_string(),
+                ));
+            }
+        }
+
+        txn.commit().await.map_err(SiteError::from)?;
+
+        Ok(created_assets)
+    }
+    .await;
+
+    let created_assets = match upload_result {
+        Ok(created_assets) => created_assets,
+        Err(error) => {
+            if !cleanup_filenames.is_empty() {
+                cleanup_uploaded_files(&state.upload_root, &cleanup_filenames)
+                    .await
+                    .map_err(|cleanup_error| {
+                        ApiError::Internal(format!(
+                            "asset upload failed: {error:?}; cleanup failed: {cleanup_error}"
+                        ))
+                    })?;
+            }
+            return Err(error);
+        }
+    };
+
+    let mut response_assets = Vec::with_capacity(created_assets.len());
+    for asset in created_assets {
+        let asset = get_asset_for_site(state.db.as_ref(), site_id, asset.id)
+            .await?
+            .ok_or_else(|| {
+                ApiError::NotFound(format!("asset not found after create: {}", asset.id))
+            })?;
+        response_assets.push(to_asset_detail(state.db.as_ref(), asset).await?);
+    }
     principal.record_successful_use(state.db.as_ref()).await?;
-    Ok(Json(ApiAssetResponse {
-        asset: to_asset_detail(state.db.as_ref(), asset).await?,
+    Ok(Json(ApiAssetBatchResponse {
+        assets: response_assets,
     }))
 }
 
@@ -1226,6 +1238,8 @@ mod tests {
     use sea_orm::{ActiveModelTrait, EntityTrait, PaginatorTrait, QueryFilter, Set};
     use std::sync::Arc;
     use tempfile::TempDir;
+    use tokio::net::TcpListener;
+    use tokio::task::JoinHandle;
     use tower::ServiceExt;
     use tower_sessions::{Expiry, MemoryStore, Session, SessionManagerLayer};
 
@@ -1321,18 +1335,34 @@ mod tests {
         serde_json::from_slice(&body).expect("failed to parse json body")
     }
 
-    fn multipart_body(filename: &str, mime_type: &str, bytes: &[u8]) -> (String, Vec<u8>) {
-        let boundary = "api-test-boundary";
-        let mut body = Vec::new();
-        body.extend_from_slice(
-            format!(
-                "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: {mime_type}\r\n\r\n"
-            )
-            .as_bytes(),
-        );
-        body.extend_from_slice(bytes);
-        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-        (boundary.to_string(), body)
+    async fn spawn_test_server(router: Router) -> (String, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("failed to bind test listener");
+        let address = listener
+            .local_addr()
+            .expect("failed to read test listener address");
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, router)
+                .await
+                .expect("test api server should run");
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    fn multipart_form(files: &[(&str, &str, &[u8])]) -> reqwest::multipart::Form {
+        files.iter().fold(
+            reqwest::multipart::Form::new(),
+            |form, (filename, mime_type, bytes)| {
+                form.part(
+                    "file",
+                    reqwest::multipart::Part::bytes(bytes.to_vec())
+                        .file_name((*filename).to_string())
+                        .mime_str(mime_type)
+                        .expect("invalid multipart mime type"),
+                )
+            },
+        )
     }
 
     fn assert_exists(path: &StdPath) {
@@ -1430,8 +1460,14 @@ mod tests {
             )
             .await
             .expect("failed to call create route");
-        assert_eq!(create_response.status(), StatusCode::OK);
+        let create_status = create_response.status();
         let create_body = json_body(create_response).await;
+        assert_eq!(
+            create_status,
+            StatusCode::OK,
+            "unexpected create response: {:?}",
+            create_body
+        );
         let content_id = create_body["id"].as_str().expect("missing content id");
 
         let get_response = router
@@ -1694,27 +1730,34 @@ mod tests {
 
         let author_cookie = seed_session_cookie(router.clone(), author.id).await;
         let viewer_cookie = seed_session_cookie(router.clone(), viewer.id).await;
-        let (boundary, body) = multipart_body("tiny.png", "image/png", TINY_PNG_BYTES);
+        let (base_url, server_handle) = spawn_test_server(router.clone()).await;
 
-        let create_response = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/api/site/{}/assets", site.id))
-                    .header(header::COOKIE, &author_cookie)
-                    .header(
-                        header::CONTENT_TYPE,
-                        format!("multipart/form-data; boundary={boundary}"),
-                    )
-                    .body(Body::from(body))
-                    .expect("failed to build asset upload request"),
-            )
+        let create_response = reqwest::Client::new()
+            .post(format!("{base_url}/api/site/{}/assets", site.id))
+            .header(reqwest::header::COOKIE, &author_cookie)
+            .multipart(multipart_form(&[("tiny.png", "image/png", TINY_PNG_BYTES)]))
+            .send()
             .await
             .expect("failed to call asset upload");
-        assert_eq!(create_response.status(), StatusCode::OK);
-        let create_body = json_body(create_response).await;
-        let asset_id = create_body["asset"]["id"]
+        let create_status = create_response.status();
+        let create_body: serde_json::Value = create_response
+            .json()
+            .await
+            .expect("failed to parse asset upload response");
+        assert_eq!(
+            create_status,
+            StatusCode::OK,
+            "unexpected create response: {:?}",
+            create_body
+        );
+        assert_eq!(
+            create_body["assets"]
+                .as_array()
+                .expect("assets should be array")
+                .len(),
+            1
+        );
+        let asset_id = create_body["assets"][0]["id"]
             .as_str()
             .expect("missing asset id");
         let asset_uuid = Uuid::parse_str(asset_id).expect("invalid asset id");
@@ -1804,6 +1847,75 @@ mod tests {
         for filename in &stored_filenames {
             assert_missing(&upload_root.path().join(filename));
         }
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn asset_api_accepts_multiple_files_and_returns_batch_response() {
+        let db = Arc::new(test_db_start().await);
+        let upload_root = TempDir::new().expect("failed to create upload root");
+        let site_templates_root = TempDir::new().expect("failed to create template root");
+        let router = test_router(test_admin_state(
+            db.clone(),
+            upload_root.path(),
+            site_templates_root.path(),
+        ));
+
+        let site = crate::create_site(
+            db.as_ref(),
+            "asset-api-batch".to_string(),
+            "Asset API Batch".to_string(),
+            "default".to_string(),
+        )
+        .await
+        .expect("failed to create site");
+        let author = create_user(db.as_ref(), "asset-batch-author", None, None, false)
+            .await
+            .expect("failed to create author");
+        crate::create_membership(
+            db.as_ref(),
+            crate::NewMembership {
+                site_id: site.id,
+                user_id: author.id,
+                role: SiteRole::Author,
+            },
+        )
+        .await
+        .expect("failed to create author membership");
+
+        let author_cookie = seed_session_cookie(router.clone(), author.id).await;
+        let (base_url, server_handle) = spawn_test_server(router.clone()).await;
+
+        let create_response = reqwest::Client::new()
+            .post(format!("{base_url}/api/site/{}/assets", site.id))
+            .header(reqwest::header::COOKIE, &author_cookie)
+            .multipart(multipart_form(&[
+                ("first.png", "image/png", TINY_PNG_BYTES),
+                ("second.png", "image/png", TINY_PNG_BYTES),
+            ]))
+            .send()
+            .await
+            .expect("failed to call asset batch upload");
+
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let create_body: serde_json::Value = create_response
+            .json()
+            .await
+            .expect("failed to parse asset batch upload response");
+        let assets = create_body["assets"]
+            .as_array()
+            .expect("assets should be array");
+        assert_eq!(assets.len(), 2);
+        assert_eq!(assets[0]["original_filename"], "first.png");
+        assert_eq!(assets[1]["original_filename"], "second.png");
+
+        let stored_assets = crate::list_assets(db.as_ref(), site.id)
+            .await
+            .expect("failed to list stored assets");
+        assert_eq!(stored_assets.len(), 2);
+
+        server_handle.abort();
     }
 
     #[tokio::test]
