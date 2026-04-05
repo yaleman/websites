@@ -287,10 +287,6 @@
 		@apply grid gap-2 rounded-md border border-slate-200 bg-white p-2 text-left shadow-sm transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200;
 	}
 
-	.asset-card.is-selected {
-		@apply border-slate-900 ring-2 ring-slate-300;
-	}
-
 	.asset-card__thumb {
 		@apply aspect-[4/3] overflow-hidden rounded-md bg-slate-100;
 	}
@@ -319,4 +315,12 @@
 	.scan-modal__variant {
 		@apply mt-3;
 	}
+}
+
+.asset-card.is-selected {
+	@apply border-violet-700 bg-violet-300 ring-2 ring-violet-400;
+}
+
+.asset-card.is-selected:hover {
+	@apply border-violet-900 bg-violet-400 ring-violet-700;
 }
