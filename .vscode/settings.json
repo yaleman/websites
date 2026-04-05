@@ -1,0 +1,6 @@
+{
+    "biome.configurationPath": "${workspaceFolder}/biome.json",
+    "css.lint.unknownAtRules": "ignore",
+    "python.testing.cwd": "${workspaceFolder}/python_api_client/",
+    "python.defaultInterpreterPath": "${workspaceFolder}/python_api_client/.venv/bin/python"
+}

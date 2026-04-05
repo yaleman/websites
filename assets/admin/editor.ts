@@ -13,7 +13,7 @@ let OPENAPI_CLIENT: Client<paths, `${string}/${string}`>;
 
 type AssetLibraryItem = components["schemas"]["AssetLibraryItem"];
 const HEADING_LEVELS = [1, 2, 3, 4, 5, 6] as const;
-const TABLE_INSERT_OPTIONS = { rows: 3, cols: 3, withHeaderRow: true } as const;
+const TABLE_INSERT_OPTIONS = { rows: 2, cols: 2, withHeaderRow: true } as const;
 const FOCUS_PRESERVING_COMMANDS = new Set([
 	"bold",
 	"italic",
@@ -86,7 +86,8 @@ const bindConfirmingForms = () => {
 		});
 };
 
-const assetLibraryRefreshKey = (siteId: string) => `site-assets-updated:${siteId}`;
+const assetLibraryRefreshKey = (siteId: string) =>
+	`site-assets-updated:${siteId}`;
 
 const announceAssetLibraryUpdate = () => {
 	const currentPath = window.location.pathname;
@@ -153,7 +154,8 @@ const bindNewContentSlugController = () => {
 
 	const titleInput = form.querySelector<HTMLInputElement>("#title");
 	const slugInput = form.querySelector<HTMLInputElement>("#slug");
-	const resetButton = form.querySelector<HTMLButtonElement>("[data-slug-reset]");
+	const resetButton =
+		form.querySelector<HTMLButtonElement>("[data-slug-reset]");
 
 	if (!titleInput || !slugInput || !resetButton) {
 		return;
@@ -382,8 +384,7 @@ const createAssetModal = (editor: Editor) => {
 	const updateSelectionUi = () => {
 		const externalUrl = externalInput?.value.trim() ?? "";
 		const selectionCount = selectedAssets.length;
-		const singleSelectedAsset =
-			selectionCount === 1 ? selectedAssets[0] : null;
+		const singleSelectedAsset = selectionCount === 1 ? selectedAssets[0] : null;
 		const displayedAltText = hasExplicitSharedAlt
 			? sharedAltText
 			: externalUrl
@@ -635,9 +636,7 @@ const createAssetModal = (editor: Editor) => {
 		if (!payload) {
 			return;
 		}
-		const asset = JSON.parse(
-			payload,
-		) as AssetLibraryItem;
+		const asset = JSON.parse(payload) as AssetLibraryItem;
 		toggleSelectedAsset(asset);
 	};
 
@@ -674,7 +673,9 @@ const createAssetModal = (editor: Editor) => {
 			editor
 				.chain()
 				.focus()
-				.insertContent([buildInlineImageNode({ src: externalUrl, alt: altText })])
+				.insertContent([
+					buildInlineImageNode({ src: externalUrl, alt: altText }),
+				])
 				.run();
 			close();
 			return;
@@ -851,18 +852,30 @@ const bindToolbar = (
 	const sizeControl = toolbar?.querySelector<HTMLSelectElement>(
 		'select[data-command="size"]',
 	);
-	const tableControls = toolbar?.querySelector<HTMLElement>("[data-table-controls]");
+	const tableControls = toolbar?.querySelector<HTMLElement>(
+		"[data-table-controls]",
+	);
 	const formattingButtons = {
-		bold: toolbar?.querySelector<HTMLButtonElement>('button[data-command="bold"]'),
+		bold: toolbar?.querySelector<HTMLButtonElement>(
+			'button[data-command="bold"]',
+		),
 		italic: toolbar?.querySelector<HTMLButtonElement>(
 			'button[data-command="italic"]',
 		),
-		code: toolbar?.querySelector<HTMLButtonElement>('button[data-command="code"]'),
-		link: toolbar?.querySelector<HTMLButtonElement>('button[data-command="link"]'),
-		table: toolbar?.querySelector<HTMLButtonElement>('button[data-command="table"]'),
+		code: toolbar?.querySelector<HTMLButtonElement>(
+			'button[data-command="code"]',
+		),
+		link: toolbar?.querySelector<HTMLButtonElement>(
+			'button[data-command="link"]',
+		),
+		table: toolbar?.querySelector<HTMLButtonElement>(
+			'button[data-command="table"]',
+		),
 		ul: toolbar?.querySelector<HTMLButtonElement>('button[data-command="ul"]'),
 		ol: toolbar?.querySelector<HTMLButtonElement>('button[data-command="ol"]'),
-		quote: toolbar?.querySelector<HTMLButtonElement>('button[data-command="quote"]'),
+		quote: toolbar?.querySelector<HTMLButtonElement>(
+			'button[data-command="quote"]',
+		),
 	};
 	const tableButtons = {
 		addRowBefore: toolbar?.querySelector<HTMLButtonElement>(
@@ -980,8 +993,12 @@ const bindToolbar = (
 		);
 		setButtonEnabled(
 			formattingButtons.link,
-			editor.can().chain().focus().setLink({ href: "https://example.com" }).run() ||
-				editor.isActive("link"),
+			editor
+				.can()
+				.chain()
+				.focus()
+				.setLink({ href: "https://example.com" })
+				.run() || editor.isActive("link"),
 		);
 		setButtonEnabled(
 			formattingButtons.table,
