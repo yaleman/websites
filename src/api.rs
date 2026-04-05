@@ -1314,6 +1314,33 @@ mod tests {
         (boundary.to_string(), body)
     }
 
+    fn multipart_body_without_filename(bytes: &[u8]) -> (String, Vec<u8>) {
+        let boundary = "api-test-boundary-no-filename";
+        let mut body = Vec::new();
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"files\"\r\nContent-Type: image/png\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        (boundary.to_string(), body)
+    }
+
+    fn multipart_body_with_source_url(source_url: &str) -> (String, Vec<u8>) {
+        let boundary = "api-test-boundary-source-url";
+        let mut body = Vec::new();
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"source_url\"\r\n\r\n{source_url}\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+        (boundary.to_string(), body)
+    }
+
     fn assert_exists(path: &StdPath) {
         assert!(path.exists(), "expected path to exist: {}", path.display());
     }
@@ -1810,6 +1837,127 @@ mod tests {
         for filename in &first_asset_filenames {
             assert_missing(&upload_root.path().join(filename));
         }
+    }
+
+    #[tokio::test]
+    async fn asset_api_rejects_file_parts_without_filename_as_bad_request() {
+        let db = Arc::new(test_db_start().await);
+        let upload_root = TempDir::new().expect("failed to create upload root");
+        let site_templates_root = TempDir::new().expect("failed to create template root");
+        let router = test_router(test_admin_state(
+            db.clone(),
+            upload_root.path(),
+            site_templates_root.path(),
+        ));
+
+        let site = crate::create_site(
+            db.as_ref(),
+            "asset-api-bad-request".to_string(),
+            "Asset API Bad Request".to_string(),
+            "default".to_string(),
+        )
+        .await
+        .expect("failed to create site");
+        let author = create_user(db.as_ref(), "asset-author-bad-request", None, None, false)
+            .await
+            .expect("failed to create author");
+        crate::create_membership(
+            db.as_ref(),
+            crate::NewMembership {
+                site_id: site.id,
+                user_id: author.id,
+                role: SiteRole::Author,
+            },
+        )
+        .await
+        .expect("failed to create author membership");
+
+        let author_cookie = seed_session_cookie(router.clone(), author.id).await;
+        let (boundary, body) = multipart_body_without_filename(TINY_PNG_BYTES);
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/site/{}/assets", site.id))
+                    .header(header::COOKIE, &author_cookie)
+                    .header(
+                        header::CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .expect("failed to build malformed asset upload request"),
+            )
+            .await
+            .expect("failed to call malformed asset upload");
+
+        assert_eq!(create_response.status(), StatusCode::BAD_REQUEST);
+        let create_body = json_body(create_response).await;
+        assert_eq!(create_body["message"], "Invalid Input");
+        assert_eq!(create_body["details"], "missing original filename");
+    }
+
+    #[tokio::test]
+    async fn asset_api_rejects_source_url_without_validating_it() {
+        let db = Arc::new(test_db_start().await);
+        let upload_root = TempDir::new().expect("failed to create upload root");
+        let site_templates_root = TempDir::new().expect("failed to create template root");
+        let router = test_router(test_admin_state(
+            db.clone(),
+            upload_root.path(),
+            site_templates_root.path(),
+        ));
+
+        let site = crate::create_site(
+            db.as_ref(),
+            "asset-api-source-url".to_string(),
+            "Asset API Source URL".to_string(),
+            "default".to_string(),
+        )
+        .await
+        .expect("failed to create site");
+        let author = create_user(db.as_ref(), "asset-author-source-url", None, None, false)
+            .await
+            .expect("failed to create author");
+        crate::create_membership(
+            db.as_ref(),
+            crate::NewMembership {
+                site_id: site.id,
+                user_id: author.id,
+                role: SiteRole::Author,
+            },
+        )
+        .await
+        .expect("failed to create author membership");
+
+        let author_cookie = seed_session_cookie(router.clone(), author.id).await;
+        let (boundary, body) = multipart_body_with_source_url("not-a-url");
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/site/{}/assets", site.id))
+                    .header(header::COOKIE, &author_cookie)
+                    .header(
+                        header::CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .expect("failed to build source url asset upload request"),
+            )
+            .await
+            .expect("failed to call source url asset upload");
+
+        assert_eq!(create_response.status(), StatusCode::BAD_REQUEST);
+        let create_body = json_body(create_response).await;
+        assert_eq!(create_body["message"], "Invalid Input");
+        assert_eq!(
+            create_body["details"],
+            "remote image urls are not supported for this endpoint"
+        );
     }
 
     #[tokio::test]

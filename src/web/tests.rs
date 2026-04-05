@@ -660,7 +660,7 @@ async fn admin_asset_upload_creates_multiple_assets_and_redirects_with_toast() {
 }
 
 #[tokio::test]
-async fn admin_asset_upload_rejects_mixed_files_and_source_url() {
+async fn admin_asset_upload_prefers_files_when_source_url_is_also_present() {
     let db = Arc::new(test_db_start().await);
     let site = crate::create_site(
         db.as_ref(),
@@ -715,11 +715,25 @@ async fn admin_asset_upload_rejects_mixed_files_and_source_url() {
         .await
         .expect("failed to call mixed upload route");
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::LOCATION)
+            .expect("missing redirect location")
+            .to_str()
+            .expect("invalid redirect location"),
+        format!(
+            "/admin/site/{}/assets?{}=1",
+            site.id,
+            assets::ASSET_UPLOAD_TOAST_QUERY_PARAM
+        )
+    );
     let assets = crate::list_assets(db.as_ref(), site.id)
         .await
         .expect("failed to list assets after mixed upload");
-    assert!(assets.is_empty());
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0].original_filename, "first.png");
 }
 
 #[tokio::test]

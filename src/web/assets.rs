@@ -11,7 +11,7 @@ pub(crate) struct UploadedAssetInput {
 
 pub(crate) struct ParsedAssetCreateRequest {
     pub(crate) uploads: Vec<UploadedAssetInput>,
-    pub(crate) source_url: Option<Url>,
+    pub(crate) source_url: Option<String>,
 }
 
 pub(crate) struct StoredAssetBatch {
@@ -53,10 +53,10 @@ pub(crate) fn normalize_remote_asset_url(value: &str) -> Result<Option<Url>, Sit
     }
 
     let parsed = Url::parse(trimmed)
-        .map_err(|error| SiteError::internal(format!("invalid asset import url: {error}")))?;
+        .map_err(|error| SiteError::BadRequest(format!("invalid asset import url: {error}")))?;
     match parsed.scheme() {
         "http" | "https" => Ok(Some(parsed)),
-        scheme => Err(SiteError::internal(format!(
+        scheme => Err(SiteError::BadRequest(format!(
             "unsupported asset import url scheme: {scheme}"
         ))),
     }
@@ -176,13 +176,13 @@ pub(crate) async fn parse_asset_create_request(
     mut multipart: Multipart,
 ) -> Result<ParsedAssetCreateRequest, SiteError> {
     let mut uploads = Vec::new();
-    let mut source_url: Option<Url> = None;
+    let mut source_url: Option<String> = None;
 
     loop {
         let field = match multipart.next_field().await {
             Ok(field) => field,
             Err(error) => {
-                return Err(SiteError::internal(format!(
+                return Err(SiteError::BadRequest(format!(
                     "failed to parse upload: {error}"
                 )));
             }
@@ -194,12 +194,14 @@ pub(crate) async fn parse_asset_create_request(
                 let original_filename = field
                     .file_name()
                     .map(|value| value.to_string())
-                    .ok_or_else(|| SiteError::internal("missing original filename".to_string()))?;
+                    .ok_or_else(|| {
+                        SiteError::BadRequest("missing original filename".to_string())
+                    })?;
                 let mime_type = field.content_type().map(|value| value.to_string());
                 let bytes = match field.bytes().await {
                     Ok(bytes) => bytes,
                     Err(error) => {
-                        return Err(SiteError::internal(format!(
+                        return Err(SiteError::BadRequest(format!(
                             "failed to read upload: {error}"
                         )));
                     }
@@ -218,21 +220,18 @@ pub(crate) async fn parse_asset_create_request(
                 let value = match field.text().await {
                     Ok(value) => value,
                     Err(error) => {
-                        return Err(SiteError::internal(format!(
+                        return Err(SiteError::BadRequest(format!(
                             "failed to read asset import url: {error}"
                         )));
                     }
                 };
-                source_url = normalize_remote_asset_url(&value)?;
+                let value = value.trim();
+                if !value.is_empty() {
+                    source_url = Some(value.to_string());
+                }
             }
             _ => continue,
         }
-    }
-
-    if !uploads.is_empty() && source_url.is_some() {
-        return Err(SiteError::BadRequest(
-            "provide uploaded files or an image url, not both".to_string(),
-        ));
     }
 
     Ok(ParsedAssetCreateRequest {
@@ -250,6 +249,9 @@ pub(crate) async fn resolve_asset_create_request(
     }
 
     if let Some(source_url) = parsed.source_url {
+        let source_url = normalize_remote_asset_url(&source_url)?.ok_or_else(|| {
+            SiteError::BadRequest("provide uploaded files or an image url".to_string())
+        })?;
         let (bytes, original_filename, mime_type) = fetch_remote_asset(client, source_url).await?;
         return Ok(vec![UploadedAssetInput {
             bytes,
