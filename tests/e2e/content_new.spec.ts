@@ -668,8 +668,8 @@ test.describe("content new editor", () => {
 			await tableButton.click();
 			await expect(page.locator("[data-table-controls]")).toBeVisible();
 			await expect(page.locator(".ProseMirror table")).toBeVisible();
-			await expect(page.locator(".ProseMirror table tr")).toHaveCount(3);
-			await expect(page.locator(".ProseMirror th")).toHaveCount(3);
+			await expect(page.locator(".ProseMirror table tr")).toHaveCount(2);
+			await expect(page.locator(".ProseMirror th")).toHaveCount(2);
 
 			await page.locator(".ProseMirror th").nth(0).click();
 			await page.keyboard.type("Name");
@@ -690,29 +690,53 @@ test.describe("content new editor", () => {
 			await page.keyboard.press("Tab");
 			await page.keyboard.type("Reviewing");
 
+			const rowCountBeforeRowEdits = await page
+				.locator(".ProseMirror table tr")
+				.count();
+
 			await page.locator(".ProseMirror table tr").nth(1).locator("td").nth(0).click();
 			await rowBeforeButton.click();
-			await expect(page.locator(".ProseMirror table tr")).toHaveCount(4);
+			await expect(page.locator(".ProseMirror table tr")).toHaveCount(
+				rowCountBeforeRowEdits + 1,
+			);
 			await deleteRowButton.click();
-			await expect(page.locator(".ProseMirror table tr")).toHaveCount(3);
+			await expect(page.locator(".ProseMirror table tr")).toHaveCount(
+				rowCountBeforeRowEdits,
+			);
 
 			await page.locator(".ProseMirror table tr").nth(1).locator("td").nth(0).click();
 			await rowAfterButton.click();
-			await expect(page.locator(".ProseMirror table tr")).toHaveCount(4);
+			await expect(page.locator(".ProseMirror table tr")).toHaveCount(
+				rowCountBeforeRowEdits + 1,
+			);
 			await deleteRowButton.click();
-			await expect(page.locator(".ProseMirror table tr")).toHaveCount(3);
+			await expect(page.locator(".ProseMirror table tr")).toHaveCount(
+				rowCountBeforeRowEdits,
+			);
+
+			const headerCellCountBeforeColumnEdits = await page
+				.locator(".ProseMirror th")
+				.count();
 
 			await page.locator(".ProseMirror table tr").nth(1).locator("td").nth(1).click();
 			await columnBeforeButton.click();
-			await expect(page.locator(".ProseMirror th")).toHaveCount(4);
+			await expect(page.locator(".ProseMirror th")).toHaveCount(
+				headerCellCountBeforeColumnEdits + 1,
+			);
 			await deleteColumnButton.click();
-			await expect(page.locator(".ProseMirror th")).toHaveCount(3);
+			await expect(page.locator(".ProseMirror th")).toHaveCount(
+				headerCellCountBeforeColumnEdits,
+			);
 
 			await page.locator(".ProseMirror table tr").nth(1).locator("td").nth(1).click();
 			await columnAfterButton.click();
-			await expect(page.locator(".ProseMirror th")).toHaveCount(4);
+			await expect(page.locator(".ProseMirror th")).toHaveCount(
+				headerCellCountBeforeColumnEdits + 1,
+			);
 			await deleteColumnButton.click();
-			await expect(page.locator(".ProseMirror th")).toHaveCount(3);
+			await expect(page.locator(".ProseMirror th")).toHaveCount(
+				headerCellCountBeforeColumnEdits,
+			);
 
 			const selectedRow = page.locator(".ProseMirror table tr").nth(1);
 			await selectTableCells(
@@ -741,7 +765,7 @@ test.describe("content new editor", () => {
 			const headerColumnCountBefore = await page.locator(".ProseMirror th").count();
 			await headerColumnButton.click();
 			await expect(page.locator(".ProseMirror th")).toHaveCount(
-				headerColumnCountBefore + 2,
+				headerColumnCountBefore + rowCountBeforeRowEdits - 1,
 			);
 			await headerColumnButton.click();
 			await expect(page.locator(".ProseMirror th")).toHaveCount(
