@@ -96,6 +96,15 @@ async function placeCaretInEditor(
 	}, targetText);
 }
 
+async function selectTableCells(
+	page: import("@playwright/test").Page,
+	firstSelector: string,
+	secondSelector: string,
+) {
+	await page.locator(firstSelector).click();
+	await page.locator(secondSelector).click({ modifiers: ["Shift"] });
+}
+
 test.describe("content new editor", () => {
 	test.setTimeout(defaultTimeout);
 
@@ -600,6 +609,269 @@ test.describe("content new editor", () => {
 			expect(structuralMarkdown).toContain("- First item");
 			expect(structuralMarkdown).toContain("1. Second item");
 			expect(structuralMarkdown).toContain("> Third quote");
+
+			await context.close();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
+	test("creates and edits markdown tables from the toolbar", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const subject = "table-toolbar-user";
+			const userId = await createUser(harness, subject);
+			await addMembership(harness, userId, "owner");
+			const contentId = await createContent(harness, {
+				pageType: "page",
+				title: "Table editing page",
+				slug: "table-editing-page",
+				pageContent: "Intro paragraph",
+				creatorSub: subject,
+			});
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				subject,
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/edit`,
+				{ waitUntil: "domcontentloaded" },
+			);
+
+			const tableButton = page.getByRole("button", { name: "Table" });
+			const rowBeforeButton = page.getByRole("button", { name: "Row before" });
+			const rowAfterButton = page.getByRole("button", { name: "Row after" });
+			const deleteRowButton = page.getByRole("button", { name: "Delete row" });
+			const columnBeforeButton = page.getByRole("button", {
+				name: "Column before",
+			});
+			const columnAfterButton = page.getByRole("button", {
+				name: "Column after",
+			});
+			const deleteColumnButton = page.getByRole("button", {
+				name: "Delete column",
+			});
+			const mergeCellsButton = page.getByRole("button", { name: "Merge cells" });
+			const splitCellButton = page.getByRole("button", { name: "Split cell" });
+			const headerRowButton = page.getByRole("button", { name: "Header row" });
+			const headerColumnButton = page.getByRole("button", {
+				name: "Header column",
+			});
+			const headerCellButton = page.getByRole("button", { name: "Header cell" });
+
+			await expect(page.locator("[data-table-controls]")).toBeHidden();
+			await tableButton.click();
+			await expect(page.locator("[data-table-controls]")).toBeVisible();
+			await expect(page.locator(".ProseMirror table")).toBeVisible();
+			await expect(page.locator(".ProseMirror table tr")).toHaveCount(2);
+			await expect(page.locator(".ProseMirror th")).toHaveCount(2);
+
+			await page.locator(".ProseMirror th").nth(0).click();
+			await page.keyboard.type("Name");
+			await page.keyboard.press("Tab");
+			await page.keyboard.type("Role");
+			await page.keyboard.press("Tab");
+			await page.keyboard.type("Status");
+			await page.keyboard.press("Tab");
+			await page.keyboard.type("Alice");
+			await page.keyboard.press("Tab");
+			await page.keyboard.type("Writer");
+			await page.keyboard.press("Tab");
+			await page.keyboard.type("Active");
+			await page.keyboard.press("Tab");
+			await page.keyboard.type("Bob");
+			await page.keyboard.press("Tab");
+			await page.keyboard.type("Editor");
+			await page.keyboard.press("Tab");
+			await page.keyboard.type("Reviewing");
+
+			const rowCountBeforeRowEdits = await page
+				.locator(".ProseMirror table tr")
+				.count();
+
+			await page.locator(".ProseMirror table tr").nth(1).locator("td").nth(0).click();
+			await rowBeforeButton.click();
+			await expect(page.locator(".ProseMirror table tr")).toHaveCount(
+				rowCountBeforeRowEdits + 1,
+			);
+			await deleteRowButton.click();
+			await expect(page.locator(".ProseMirror table tr")).toHaveCount(
+				rowCountBeforeRowEdits,
+			);
+
+			await page.locator(".ProseMirror table tr").nth(1).locator("td").nth(0).click();
+			await rowAfterButton.click();
+			await expect(page.locator(".ProseMirror table tr")).toHaveCount(
+				rowCountBeforeRowEdits + 1,
+			);
+			await deleteRowButton.click();
+			await expect(page.locator(".ProseMirror table tr")).toHaveCount(
+				rowCountBeforeRowEdits,
+			);
+
+			const headerCellCountBeforeColumnEdits = await page
+				.locator(".ProseMirror th")
+				.count();
+
+			await page.locator(".ProseMirror table tr").nth(1).locator("td").nth(1).click();
+			await columnBeforeButton.click();
+			await expect(page.locator(".ProseMirror th")).toHaveCount(
+				headerCellCountBeforeColumnEdits + 1,
+			);
+			await deleteColumnButton.click();
+			await expect(page.locator(".ProseMirror th")).toHaveCount(
+				headerCellCountBeforeColumnEdits,
+			);
+
+			await page.locator(".ProseMirror table tr").nth(1).locator("td").nth(1).click();
+			await columnAfterButton.click();
+			await expect(page.locator(".ProseMirror th")).toHaveCount(
+				headerCellCountBeforeColumnEdits + 1,
+			);
+			await deleteColumnButton.click();
+			await expect(page.locator(".ProseMirror th")).toHaveCount(
+				headerCellCountBeforeColumnEdits,
+			);
+
+			const selectedRow = page.locator(".ProseMirror table tr").nth(1);
+			await selectTableCells(
+				page,
+				".ProseMirror table tr:nth-child(2) td:nth-child(1)",
+				".ProseMirror table tr:nth-child(2) td:nth-child(2)",
+			);
+			await expect(mergeCellsButton).toBeEnabled();
+			await mergeCellsButton.click();
+			await expect(selectedRow.locator('td[colspan="2"]')).toHaveCount(1);
+			await splitCellButton.click();
+			await expect(selectedRow.locator('td[colspan="2"]')).toHaveCount(0);
+
+			await page.locator(".ProseMirror table tr").nth(1).locator("td").nth(0).click();
+			const headerCellCountBefore = await page.locator(".ProseMirror th").count();
+			await headerCellButton.click();
+			await expect(page.locator(".ProseMirror th")).toHaveCount(
+				headerCellCountBefore + 1,
+			);
+			await headerCellButton.click();
+			await expect(page.locator(".ProseMirror th")).toHaveCount(
+				headerCellCountBefore,
+			);
+
+			await page.locator(".ProseMirror table tr").nth(1).locator("td").nth(0).click();
+			const headerColumnCountBefore = await page.locator(".ProseMirror th").count();
+			await headerColumnButton.click();
+			await expect(page.locator(".ProseMirror th")).toHaveCount(
+				headerColumnCountBefore + rowCountBeforeRowEdits - 1,
+			);
+			await headerColumnButton.click();
+			await expect(page.locator(".ProseMirror th")).toHaveCount(
+				headerColumnCountBefore,
+			);
+
+			await page.locator(".ProseMirror table tr").nth(1).locator("td").nth(0).click();
+			const headerRowCountBefore = await page.locator(".ProseMirror th").count();
+			await headerRowButton.click();
+			const headerRowCountAfterFirstToggle = await page
+				.locator(".ProseMirror th")
+				.count();
+			expect(headerRowCountAfterFirstToggle).not.toBe(headerRowCountBefore);
+			await headerRowButton.click();
+			await expect(page.locator(".ProseMirror th")).toHaveCount(
+				headerRowCountBefore,
+			);
+
+			await page.getByRole("button", { name: "Save content" }).click();
+			await expect(page.locator(".message--toast")).toContainText("Content saved.");
+
+			await page.reload({ waitUntil: "domcontentloaded" });
+			await expect(page.locator(".ProseMirror table")).toBeVisible();
+			await expect(page.locator(".ProseMirror")).toContainText("Name");
+			await expect(page.locator(".ProseMirror")).toContainText("Bob");
+			await page.getByRole("button", { name: "Markdown" }).click();
+			const savedMarkdown = await page.locator("#page_content").inputValue();
+			expect(savedMarkdown).toMatch(/\|\s*Name\s*\|/);
+			expect(savedMarkdown).toMatch(/\|\s*Bob\s*\|/);
+			expect(savedMarkdown).toContain("Reviewing");
+
+			await context.close();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
+	test("round-trips markdown tables between source and rich editor", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const subject = "table-source-user";
+			const userId = await createUser(harness, subject);
+			await addMembership(harness, userId, "owner");
+			const contentId = await createContent(harness, {
+				pageType: "page",
+				title: "Table source page",
+				slug: "table-source-page",
+				pageContent: "Initial content",
+				creatorSub: subject,
+			});
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				subject,
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/edit`,
+				{ waitUntil: "domcontentloaded" },
+			);
+
+			await page.getByRole("button", { name: "Markdown" }).click();
+			await page.locator("#page_content").fill(
+				[
+					"| Name | Score |",
+					"| --- | ---: |",
+					"| Alice | 10 |",
+					"| Bob | 7 |",
+				].join("\n"),
+			);
+
+			await expect(page.locator(".ProseMirror table")).toBeVisible();
+			await expect(page.locator(".ProseMirror th")).toContainText([
+				"Name",
+				"Score",
+			]);
+			await page.locator(".ProseMirror table tr").nth(1).locator("td").nth(0).click();
+			await expect(page.locator("[data-table-controls]")).toBeVisible();
+			await placeCaretInEditor(
+				page,
+				".ProseMirror table tr:nth-child(2) td:nth-child(1)",
+				"Alice",
+			);
+			await page.keyboard.type(" Cooper");
+
+			const updatedMarkdown = await page.locator("#page_content").inputValue();
+			expect(updatedMarkdown).toMatch(/\|\s*Name\s*\|\s*Score\s*\|/);
+			expect(updatedMarkdown).toMatch(/\|\s*Alice Cooper\s*\|\s*10\s*\|/);
+			expect(updatedMarkdown).toMatch(/\|\s*Bob\s*\|\s*7\s*\|/);
+
+			await page.getByRole("button", { name: "Save content" }).click();
+			await expect(page.locator(".message--toast")).toContainText("Content saved.");
+
+			await page.reload({ waitUntil: "domcontentloaded" });
+			await expect(page.locator(".ProseMirror table")).toBeVisible();
+			await expect(page.locator(".ProseMirror table tr").nth(1)).toContainText(
+				"Alice Cooper",
+			);
+			await page.getByRole("button", { name: "Markdown" }).click();
+			const reloadedMarkdown = await page.locator("#page_content").inputValue();
+			expect(reloadedMarkdown).toMatch(/\|\s*Name\s*\|\s*Score\s*\|/);
+			expect(reloadedMarkdown).toMatch(/\|\s*Alice Cooper\s*\|\s*10\s*\|/);
+			expect(reloadedMarkdown).toMatch(/\|\s*Bob\s*\|\s*7\s*\|/);
 
 			await context.close();
 		} finally {

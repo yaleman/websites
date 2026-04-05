@@ -4,8 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "build:admin": "rspack build",
-    "dev:admin": "rspack watch",
+    "update-admin-images": "mkdir -p admin-ui-assets/images && rm -rf admin-ui-assets/images/* && cp -R assets/images/* admin-ui-assets/images/",
+    "build:admin": "rspack build && pnpm run update-admin-images",
+    "dev:admin": "pnpm run update-admin-images && rspack watch",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -26,6 +27,7 @@
     "@tiptap/core": "^3.20.1",
     "@tiptap/extension-image": "^3.20.1",
     "@tiptap/extension-link": "^3.20.1",
+    "@tiptap/extension-table": "^3.20.1",
     "@tiptap/markdown": "^3.20.1",
     "@tiptap/starter-kit": "^3.20.1",
     "@types/node": "^25.3.5",

@@ -16,3 +16,7 @@ This is a website management system built to replace a jumble of Wordpress and s
 ## Why the name?
 
 Couldn't think of a better one, will likely rename it one day!
+
+## Thanks
+
+Favicon - editor by FAUZUL KABIR from [Noun Project](https://thenounproject.com/browse/icons/term/editor/) (CC BY 3.0)

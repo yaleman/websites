@@ -79,6 +79,37 @@
 		@apply my-4 border-l-4 border-slate-300 pl-4 italic text-slate-700;
 	}
 
+	.editor-shell .tableWrapper,
+	.editor-preview__body .tableWrapper {
+		@apply my-4 overflow-x-auto;
+	}
+
+	.editor-shell .ProseMirror table,
+	.editor-preview__body table {
+		@apply min-w-full border-collapse;
+	}
+
+	.editor-shell .ProseMirror th,
+	.editor-shell .ProseMirror td,
+	.editor-preview__body th,
+	.editor-preview__body td {
+		@apply min-w-[8rem] border border-slate-300 px-3 py-2 align-top;
+	}
+
+	.editor-shell .ProseMirror th,
+	.editor-preview__body th {
+		@apply bg-slate-100 font-semibold text-slate-900;
+	}
+
+	.editor-shell .ProseMirror td,
+	.editor-preview__body td {
+		@apply bg-white text-slate-800;
+	}
+
+	.editor-shell .ProseMirror .selectedCell {
+		@apply bg-sky-50;
+	}
+
 	.editor-shell .ProseMirror h1,
 	.editor-preview__body h1 {
 		@apply mt-10 mb-4 text-4xl font-bold tracking-tight text-slate-950;
@@ -117,6 +148,10 @@
 
 	.editor-toolbar__group {
 		@apply flex gap-2 border-r border-slate-200 pr-2 last:border-r-0 last:pr-0;
+	}
+
+	.editor-toolbar__group--table[hidden] {
+		@apply hidden;
 	}
 
 	.editor-button {
