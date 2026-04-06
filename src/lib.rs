@@ -1029,7 +1029,7 @@ fn render_tag_links(tags: &[String]) -> String {
 fn render_rss_items_xml(content_items: &[entities::content_item::Model]) -> String {
     let mut rows = String::new();
     for item in content_items {
-        let pub_date = item.content_publish_timestamp_rfc2822();
+        let pub_date = item.content_publish_timestamp();
         let route = content_primary_route(item);
         let route = route.trim_matches('/');
         let link = format!("/{route}/");
@@ -1051,7 +1051,7 @@ fn render_atom_entries_xml(content_items: &[entities::content_item::Model]) -> S
         let link = format!("/{route}/");
         let updated = item.content_publish_timestamp();
         let title = escape_xml_text(item.title.as_str());
-        let published = item.content_publish_timestamp_rfc2822();
+        let published = item.content_publish_timestamp();
         let summary = escape_xml_text(item.page_content.as_str());
         rows.push_str(&format!(
             "<entry><title>{}</title><link href=\"{}\"/><id>{}</id><published>{}</published><updated>{}</updated><summary>{}</summary></entry>",
@@ -1062,12 +1062,19 @@ fn render_atom_entries_xml(content_items: &[entities::content_item::Model]) -> S
 }
 
 fn escape_xml_text(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
+    html_escape::encode_text(input)
+        .replace(r#"""#, "&quot;")
+        .replace(r#"'"#, "&apos;")
+}
+
+#[test]
+fn test_escape_xml_text() {
+    let input = "This is a title with special characters: <, >, &, \", '";
+    let escaped = escape_xml_text(input);
+    assert_eq!(
+        escaped,
+        "This is a title with special characters: &lt;, &gt;, &amp;, &quot;, &apos;"
+    );
 }
 
 fn content_is_publishable_at(content: &entities::content_item::Model, now: DateTime<Utc>) -> bool {
