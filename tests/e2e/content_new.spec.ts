@@ -784,7 +784,7 @@ test.describe("content new editor", () => {
 				headerRowCountBefore,
 			);
 
-			await page.getByRole("button", { name: "Save content" }).click();
+			await page.getByRole("button", { name: /^Save(?: content)?$/ }).click();
 			await expect(page.locator(".message--toast")).toContainText("Content saved.");
 
 			await page.reload({ waitUntil: "domcontentloaded" });
@@ -859,7 +859,7 @@ test.describe("content new editor", () => {
 			expect(updatedMarkdown).toMatch(/\|\s*Alice Cooper\s*\|\s*10\s*\|/);
 			expect(updatedMarkdown).toMatch(/\|\s*Bob\s*\|\s*7\s*\|/);
 
-			await page.getByRole("button", { name: "Save content" }).click();
+			await page.getByRole("button", { name: /^Save(?: content)?$/ }).click();
 			await expect(page.locator(".message--toast")).toContainText("Content saved.");
 
 			await page.reload({ waitUntil: "domcontentloaded" });
@@ -1367,7 +1367,9 @@ test.describe("content new editor", () => {
 			const toast = page.locator(".message--toast");
 			await expect(toast).toBeVisible();
 			await expect(toast).toContainText("Content saved.");
-			await expect(page.getByRole("button", { name: "Save content" })).toBeVisible();
+			await expect(
+				page.getByRole("button", { name: /^Save(?: content)?$/ }),
+			).toBeVisible();
 		} finally {
 			await cleanupHarness(harness);
 		}
@@ -1513,7 +1515,7 @@ test.describe("content new editor", () => {
 
 			await page.getByRole("button", { name: "Markdown" }).click();
 			await page.locator("#page_content").fill("Updated body from source mode");
-			await page.getByRole("button", { name: "Save content" }).click();
+			await page.getByRole("button", { name: /^Save(?: content)?$/ }).click();
 
 			await expect(page).toHaveURL(
 				new RegExp(`/admin/site/${harness.siteId}/content/${contentId}/edit`),
@@ -1525,6 +1527,56 @@ test.describe("content new editor", () => {
 				"Updated body from source mode",
 			);
 			await expect(toast).toBeHidden({ timeout: 4000 });
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
+	test("saves published content without changing the prefilled publish timestamp", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const subject = "published-editor-user";
+			const userId = await createUser(harness, subject);
+			await addMembership(harness, userId, "owner");
+			const contentId = await createContent(harness, {
+				pageType: "post",
+				title: "Published page",
+				slug: "published-page",
+				pageContent: "Already published body",
+				creatorSub: subject,
+				draft: false,
+			});
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				subject,
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/edit`,
+				{ waitUntil: "domcontentloaded" },
+			);
+
+			const publishedAtInput = page.locator("#published_at");
+			await expect(publishedAtInput).toHaveValue(
+				/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)/,
+			);
+			await page.getByRole("button", { name: /^Save(?: content)?$/ }).click();
+
+			await expect(page).toHaveURL(
+				new RegExp(`/admin/site/${harness.siteId}/content/${contentId}/edit`),
+			);
+			await expect(page.locator(".message--toast")).toContainText(
+				"Content saved.",
+			);
+			await expect(publishedAtInput).toHaveValue(
+				/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)/,
+			);
+
+			await context.close();
 		} finally {
 			await cleanupHarness(harness);
 		}
@@ -1566,7 +1618,7 @@ test.describe("content new editor", () => {
 						response.url() ===
 							`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/edit`,
 				),
-				page.getByRole("button", { name: "Save content" }).click(),
+				page.getByRole("button", { name: /^Save(?: content)?$/ }).click(),
 			]);
 			await page.waitForLoadState("domcontentloaded");
 			await page.goto(
@@ -1588,7 +1640,7 @@ test.describe("content new editor", () => {
 						response.url() ===
 							`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}/edit`,
 				),
-				page.getByRole("button", { name: "Save content" }).click(),
+				page.getByRole("button", { name: /^Save(?: content)?$/ }).click(),
 			]);
 			await page.waitForLoadState("domcontentloaded");
 			await page.goto(
