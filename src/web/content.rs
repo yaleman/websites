@@ -1188,7 +1188,11 @@ pub(crate) async fn admin_site_content_source(
         .collect();
 
     let draft = content.draft;
-    let published_at = content.content_publish_timestamp();
+    let published_at = format_optional_datetime_for_form(content.published_at);
+    let published_at_display = content
+        .published_at
+        .as_ref()
+        .map(|_| content.content_publish_timestamp());
     let title = content.title;
     let slug = content.slug;
     let page_content = content.page_content;
@@ -1223,6 +1227,7 @@ pub(crate) async fn admin_site_content_source(
         page_type: content.page_type.to_string(),
         draft,
         published_at,
+        published_at_display,
         page_content,
         site_id: content.site_id,
         allow_external_image: true,
@@ -1670,9 +1675,32 @@ pub(crate) fn format_optional_datetime(value: Option<DateTime<Utc>>) -> String {
         .unwrap_or_else(|| "n/a".to_string())
 }
 
+fn format_optional_datetime_for_form(value: Option<DateTime<Utc>>) -> String {
+    value
+        .map(|timestamp| timestamp.to_rfc3339())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_optional_datetime_for_form_uses_rfc3339() {
+        let timestamp = DateTime::parse_from_rfc3339("2026-04-06T02:13:47Z")
+            .expect("expected test timestamp to parse")
+            .with_timezone(&Utc);
+
+        assert_eq!(
+            format_optional_datetime_for_form(Some(timestamp)),
+            "2026-04-06T02:13:47+00:00"
+        );
+    }
+
+    #[test]
+    fn format_optional_datetime_for_form_returns_empty_string_for_missing_value() {
+        assert_eq!(format_optional_datetime_for_form(None), "");
+    }
 
     #[test]
     fn preview_asset_prefix_formats_site_scoped_path() {

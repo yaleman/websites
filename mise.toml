@@ -1,4 +1,5 @@
 [tools]
+"github:xd009642/tarpaulin" = "latest"
 pnpm = "latest"
 python = "3.13"
 semgrep = "latest"
@@ -45,7 +46,7 @@ depends = ["frontend_build"]
 run = "cargo run"
 
 [tasks.coverage]
-run = "cargo tarpaulin --lib --out Html --exclude-files src/cli.rs"
+run = "cargo tarpaulin --engine llvm --lib --out Html --exclude-files src/cli.rs"
 
 [tasks.docs_build]
 run = "cd docs && mdbook build"

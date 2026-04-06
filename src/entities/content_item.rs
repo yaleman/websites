@@ -46,11 +46,8 @@ impl Related<super::site::Entity> for Entity {
 impl ActiveModelBehavior for ActiveModel {}
 
 impl Model {
+    /// Returns the publish timestamp of the content item, which is either the published_at timestamp if it exists, or the created_at timestamp if published_at is None.
     pub fn content_publish_timestamp(&self) -> String {
-        self.published_at.unwrap_or(self.created_at).to_rfc3339()
-    }
-
-    pub fn content_publish_timestamp_rfc2822(&self) -> String {
         self.published_at.unwrap_or(self.created_at).to_rfc2822()
     }
 }

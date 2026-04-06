@@ -13,10 +13,7 @@
         <option value="page" {% if page_type == "page" %}selected{% endif %}>Page</option>
       </select>
     </div>
-    <div class="form-field">
-      <label for="slug">Slug</label>
-      <input id="slug" name="slug" value="{{ slug }}" required />
-    </div>
+
     <div class="form-field">
       <label for="draft">Publish State</label>
       <select id="draft" name="draft">
@@ -24,16 +21,26 @@
         <option value="false" {% if !draft %}selected{% endif %}>Published</option>
       </select>
     </div>
-    <div class="form-field">
-      <label for="published_at">Published At</label>
-      <input id="published_at" name="published_at" value="{{ published_at }}" />
-    </div>
   </div>
 
   {% include "editor.html" %}
 
+  <div class="form-grid">
+    <div class="form-field">
+      <label for="published_at">Published At</label>
+      <input id="published_at" name="published_at" value="{{ published_at }}" />
+      {% if let Some(published_at_display) = published_at_display %}
+      <p>{{ published_at_display }}</p>
+      {% endif %}
+    </div>
+    <div class="form-field">
+      <label for="slug">Slug</label>
+      <input id="slug" name="slug" value="{{ slug }}" required />
+    </div>
+  </div>
+
   <div class="form-actions">
-    <button type="submit" class="save">Save content</button>
+    <button type="submit" class="save">Save</button>
   </div>
 </form>
 

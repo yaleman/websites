@@ -288,6 +288,7 @@ pub(crate) struct AdminContentSourceTemplate {
     pub(crate) page_type: String,
     pub(crate) draft: bool,
     pub(crate) published_at: String,
+    pub(crate) published_at_display: Option<String>,
     pub(crate) page_content: String,
     pub(crate) site_id: Uuid,
     pub(crate) allow_external_image: bool,

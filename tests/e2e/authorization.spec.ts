@@ -297,7 +297,7 @@ const routeCases: RouteCase[] = [
 		prepare: async (harness, fixtures) => ({
 			path: `/admin/site/${harness.siteId}/content/${fixtures.contentId}/edit`,
 			assertSuccess: async (response) => {
-				expect(await response.text()).toContain("Save content");
+				expect(await response.text()).toContain("Save");
 			},
 		}),
 	},
