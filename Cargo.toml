@@ -56,7 +56,7 @@ similar = "3.0.0"
 sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "sqlite"] }
 tempfile = "3.27.0"
 tera = "1.20.1"
-tokio = { version = "1.51.0", features = [
+tokio = { version = "1.51.1", features = [
     "rt-multi-thread",
     "macros",
     "signal",
