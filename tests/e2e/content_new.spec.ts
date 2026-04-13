@@ -1474,6 +1474,52 @@ test.describe("content new editor", () => {
 		}
 	});
 
+	test("adds an existing user to memberships when clicking an autocomplete option", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const ownerId = await createUser(harness, "membership-owner");
+			await addMembership(harness, ownerId, "owner");
+			await createUser(harness, "membership-click-target", {
+				email: "membership-click-target@example.com",
+			});
+			await seedSession(harness, "membership-click-target");
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				"membership-owner",
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/memberships`,
+				{ waitUntil: "domcontentloaded" },
+			);
+
+			await page.getByLabel("User").fill("membership-click-target");
+			const option = page.getByRole("option", {
+				name: /membership-click-target membership-click-target@example.com/i,
+			});
+			await expect(option).toBeVisible();
+			await option.click();
+			await expect(page.getByLabel("User")).toHaveValue(
+				"membership-click-target@example.com (membership-click-target)",
+			);
+			await page.getByRole("button", { name: "Add member" }).click();
+			await expect(
+				page.locator('[aria-label="membership-click-target"]'),
+			).toBeVisible();
+			await expect(
+				page.getByText("membership-click-target@example.com"),
+			).toBeVisible();
+
+			await context.close();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
 	test("saves back to the source editor and shows a toast", async ({
 		browser,
 	}) => {
