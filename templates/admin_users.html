@@ -1,32 +1,40 @@
 {% extends "base_template.html" %}
 
 {% block body %}
-<section>
+<section class="surface max-w-3xl p-4 md:p-6">
   <h2>Create User</h2>
-  <form method="post" action="/admin/users">
+  <form method="post" action="/admin/users" class="stack-form">
     <input type="hidden" name="csrf_token" value="{{ create_user_csrf_token }}" />
-    <label for="subject">Subject</label>
-    <input id="subject" name="subject" required />
+    <div class="form-field">
+      <label for="subject">Subject</label>
+      <input id="subject" name="subject" required />
+    </div>
 
-    <label for="email">Email</label>
-    <input id="email" name="email" type="email" />
+    <div class="form-field">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" />
+    </div>
 
-    <label for="display_name">Display Name</label>
-    <input id="display_name" name="display_name" />
+    <div class="form-field">
+      <label for="display_name">Display Name</label>
+      <input id="display_name" name="display_name" />
+    </div>
 
-    <label for="admin">
+    <label for="admin" class="inline-checkbox">
       <input id="admin" name="admin" type="checkbox" value="true" />
       Global admin
     </label>
 
-    <button type="submit">Create user</button>
+    <div class="form-actions">
+      <button type="submit">Create user</button>
+    </div>
   </form>
 </section>
 
-<section>
+<section class="surface grid gap-4 p-4 md:p-6">
   <h2>Users</h2>
   {% if users.is_empty() %}
-  <p>No users yet.</p>
+  <p class="inline-body">No users yet.</p>
   {% else %}
   <table>
     <thead>
