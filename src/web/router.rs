@@ -4,6 +4,7 @@ use super::{assets::*, content::*, dashboard::*, sites::*, themes::*};
 use axum::extract::DefaultBodyLimit;
 
 const WORDPRESS_IMPORT_MAX_BYTES: usize = 64 * 1024 * 1024;
+const ASSET_UPLOAD_MAX_BYTES: usize = 50 * 1024 * 1024;
 
 pub(crate) async fn health_check() -> Json<&'static str> {
     Json("ok")
@@ -113,11 +114,15 @@ pub(crate) fn build_admin_app(
         .route("/admin/site/{site_id}/assets", get(admin_site_assets))
         .route(
             "/admin/site/{site_id}/assets/new",
-            get(admin_site_assets_new).post(admin_site_assets_create),
+            get(admin_site_assets_new)
+                .post(admin_site_assets_create)
+                .layer(DefaultBodyLimit::max(ASSET_UPLOAD_MAX_BYTES)),
         )
         .route(
             "/admin/site/{site_id}/assets/{asset_id}/replace",
-            get(admin_site_asset_replace).post(admin_site_asset_replace_update),
+            get(admin_site_asset_replace)
+                .post(admin_site_asset_replace_update)
+                .layer(DefaultBodyLimit::max(ASSET_UPLOAD_MAX_BYTES)),
         )
         .route(
             "/admin/site/{site_id}/settings",

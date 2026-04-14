@@ -2,6 +2,22 @@ use super::state::*;
 use super::*;
 use crate::collect_asset_filenames;
 
+fn multipart_site_error(
+    action: &str,
+    error: &axum::extract::multipart::MultipartError,
+) -> SiteError {
+    let details = error.body_text();
+    match error.status() {
+        StatusCode::BAD_REQUEST => {
+            SiteError::BadRequest(format!("failed to parse {action}: {details}"))
+        }
+        StatusCode::PAYLOAD_TOO_LARGE => {
+            SiteError::PayloadTooLarge(format!("{action} exceeded the 50 MB upload limit"))
+        }
+        _ => SiteError::internal(format!("failed to parse {action}: {details}")),
+    }
+}
+
 pub(crate) fn display_route_path(route: &str) -> String {
     format!("/{}", route.trim_matches('/'))
 }
@@ -176,11 +192,7 @@ pub(crate) async fn parse_asset_create_upload(
     loop {
         let field = match multipart.next_field().await {
             Ok(field) => field,
-            Err(error) => {
-                return Err(SiteError::internal(format!(
-                    "failed to parse upload: {error}"
-                )));
-            }
+            Err(error) => return Err(multipart_site_error("asset upload", &error)),
         };
 
         let Some(field) = field else { break };
@@ -197,11 +209,7 @@ pub(crate) async fn parse_asset_create_upload(
                 let mime_type = field.content_type().map(|value| value.to_string());
                 let bytes = match field.bytes().await {
                     Ok(bytes) => bytes,
-                    Err(error) => {
-                        return Err(SiteError::internal(format!(
-                            "failed to read upload: {error}"
-                        )));
-                    }
+                    Err(error) => return Err(multipart_site_error("asset upload", &error)),
                 };
                 if bytes.is_empty() {
                     continue;
@@ -216,11 +224,7 @@ pub(crate) async fn parse_asset_create_upload(
             Some("source_url") => {
                 let value = match field.text().await {
                     Ok(value) => value,
-                    Err(error) => {
-                        return Err(SiteError::internal(format!(
-                            "failed to read asset import url: {error}"
-                        )));
-                    }
+                    Err(error) => return Err(multipart_site_error("asset import url", &error)),
                 };
                 let parsed = normalize_remote_asset_url(&value)?;
                 if let Some(parsed) = parsed {
@@ -321,11 +325,7 @@ pub(crate) async fn parse_asset_upload(
     loop {
         let field = match multipart.next_field().await {
             Ok(field) => field,
-            Err(error) => {
-                return Err(SiteError::internal(format!(
-                    "failed to parse upload: {error}"
-                )));
-            }
+            Err(error) => return Err(multipart_site_error("asset upload", &error)),
         };
 
         let Some(field) = field else { break };
@@ -335,11 +335,7 @@ pub(crate) async fn parse_asset_upload(
                 let field_mime_type = field.content_type().map(|value| value.to_string());
                 let bytes = match field.bytes().await {
                     Ok(bytes) => bytes,
-                    Err(error) => {
-                        return Err(SiteError::internal(format!(
-                            "failed to read upload: {error}"
-                        )));
-                    }
+                    Err(error) => return Err(multipart_site_error("asset upload", &error)),
                 };
                 if bytes.is_empty() {
                     continue;
@@ -350,11 +346,7 @@ pub(crate) async fn parse_asset_upload(
             Some("source_url") => {
                 let value = match field.text().await {
                     Ok(value) => value,
-                    Err(error) => {
-                        return Err(SiteError::internal(format!(
-                            "failed to read asset import url: {error}"
-                        )));
-                    }
+                    Err(error) => return Err(multipart_site_error("asset import url", &error)),
                 };
                 source_url = normalize_remote_asset_url(&value)?;
             }

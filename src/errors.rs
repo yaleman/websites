@@ -7,6 +7,7 @@ use axum::{
 };
 use sea_orm::DbErr;
 use serde_json::json;
+use tracing::{error, warn};
 use uuid::Uuid;
 
 #[derive(Template)]
@@ -54,6 +55,7 @@ pub enum SiteError {
     TeraTemplate(tera::Error),
     XmlParsing(String),
     BadRequest(String),
+    PayloadTooLarge(String),
     MembershipNotFound(Uuid),
 }
 
@@ -69,21 +71,27 @@ impl IntoResponse for SiteError {
         match self {
             SiteError::NotFound => (axum::http::StatusCode::NOT_FOUND, "Not Found").into_response(),
             SiteError::Internal(msg) => {
+                error!(error = %msg, "internal site error");
                 (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(msg)).into_response()
             }
             SiteError::UnAuthorized(ref msg) => SiteErrorPage::new(StatusCode::UNAUTHORIZED, &self.to_string(), &format!("Please log in to access this page. {}", msg))
                 .into_response(),
             SiteError::Database(error) => {
+                error!(error = %error, "database site error");
                 (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(error)).into_response()
             }
             SiteError::Io(error) => {
+                error!(error = %error, "io site error");
                 (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(error)).into_response()
             }
-            SiteError::TeraTemplate(err) => (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Html(format!("Template rendering error: {:?}", err)),
-            )
-                .into_response(),
+            SiteError::TeraTemplate(err) => {
+                error!(error = %err, "template rendering site error");
+                (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    Html(format!("Template rendering error: {:?}", err)),
+                )
+                    .into_response()
+            }
             SiteError::SiteNotFound(identifier) => (
                 axum::http::StatusCode::NOT_FOUND,
                 Json(json!({"message" :  "Site Not Found", "identifier" : identifier})),
@@ -104,6 +112,14 @@ impl IntoResponse for SiteError {
                 Json(json!({"message" :  "Invalid Input", "details" : msg})),
             )
                 .into_response(),
+            SiteError::PayloadTooLarge(msg) => {
+                warn!(error = %msg, "request payload exceeded limit");
+                (
+                    axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+                    Json(json!({"message" :  "Payload Too Large", "details" : msg})),
+                )
+                    .into_response()
+            }
             SiteError::MembershipNotFound(identifier) => (
                 axum::http::StatusCode::NOT_FOUND,
                 Json(json!({"message" :  "Site Permission Membership Not Found", "identifier" : identifier})),
@@ -127,6 +143,7 @@ impl std::fmt::Display for SiteError {
             SiteError::ContentNotFound(identifier) => write!(f, "Content Not Found: {identifier}"),
             SiteError::XmlParsing(msg) => write!(f, "XML Parsing Error: {msg}"),
             SiteError::BadRequest(msg) => write!(f, "Invalid Input: {msg}"),
+            SiteError::PayloadTooLarge(msg) => write!(f, "Payload Too Large: {msg}"),
             SiteError::MembershipNotFound(identifier) => {
                 write!(f, "Membership Not Found: {identifier}")
             }
