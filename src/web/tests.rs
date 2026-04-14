@@ -454,6 +454,120 @@ async fn admin_assets_page_sorts_by_name_and_renders_selected_controls() {
 }
 
 #[tokio::test]
+async fn admin_dashboard_only_lists_sites_for_current_user() {
+    let db = Arc::new(test_db_start().await);
+    let visible_site = crate::create_site(
+        db.as_ref(),
+        "visible-site".to_string(),
+        "Visible Site".to_string(),
+        DEFAULT_TEMPLATE_NAME.to_string(),
+    )
+    .await
+    .expect("failed to create visible site");
+    let hidden_site = crate::create_site(
+        db.as_ref(),
+        "hidden-site".to_string(),
+        "Hidden Site".to_string(),
+        DEFAULT_TEMPLATE_NAME.to_string(),
+    )
+    .await
+    .expect("failed to create hidden site");
+    let viewer = crate::entities::user::create_user(
+        db.as_ref(),
+        "dashboard-viewer",
+        Some("viewer@example.com"),
+        Some("Viewer"),
+        false,
+    )
+    .await
+    .expect("failed to create dashboard viewer");
+    crate::create_membership(
+        db.as_ref(),
+        crate::NewMembership {
+            site_id: visible_site.id,
+            user_id: viewer.id,
+            role: SiteRole::Viewer,
+        },
+    )
+    .await
+    .expect("failed to create dashboard membership");
+
+    let session_store = MemoryStore::default();
+    let router = test_app_router(test_admin_state(db.clone()), session_store.clone()).router;
+    let cookie = seed_session_cookie(test_admin_state(db.clone()), session_store, viewer.id).await;
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/admin")
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .expect("failed to build dashboard request"),
+        )
+        .await
+        .expect("failed to call dashboard");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read dashboard body");
+    let body = String::from_utf8(body.to_vec()).expect("invalid dashboard body");
+    assert!(body.contains(&visible_site.full_title));
+    assert!(!body.contains(&hidden_site.full_title));
+}
+
+#[tokio::test]
+async fn admin_dashboard_lists_all_sites_for_global_admin() {
+    let db = Arc::new(test_db_start().await);
+    let first_site = crate::create_site(
+        db.as_ref(),
+        "first-site".to_string(),
+        "First Site".to_string(),
+        DEFAULT_TEMPLATE_NAME.to_string(),
+    )
+    .await
+    .expect("failed to create first site");
+    let second_site = crate::create_site(
+        db.as_ref(),
+        "second-site".to_string(),
+        "Second Site".to_string(),
+        DEFAULT_TEMPLATE_NAME.to_string(),
+    )
+    .await
+    .expect("failed to create second site");
+    let admin = crate::entities::user::create_user(
+        db.as_ref(),
+        "dashboard-admin",
+        Some("admin@example.com"),
+        Some("Admin"),
+        true,
+    )
+    .await
+    .expect("failed to create dashboard admin");
+
+    let session_store = MemoryStore::default();
+    let router = test_app_router(test_admin_state(db.clone()), session_store.clone()).router;
+    let cookie = seed_session_cookie(test_admin_state(db.clone()), session_store, admin.id).await;
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/admin")
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .expect("failed to build admin dashboard request"),
+        )
+        .await
+        .expect("failed to call admin dashboard");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read admin dashboard body");
+    let body = String::from_utf8(body.to_vec()).expect("invalid admin dashboard body");
+    assert!(body.contains(&first_site.full_title));
+    assert!(body.contains(&second_site.full_title));
+}
+
+#[tokio::test]
 async fn admin_asset_upload_page_sorts_by_size_and_renders_selected_controls() {
     let db = Arc::new(test_db_start().await);
     let site = crate::create_site(

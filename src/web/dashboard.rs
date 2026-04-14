@@ -31,7 +31,11 @@ pub(crate) async fn get_index(
     Query(query): Query<DashboardQuery>,
 ) -> Result<AdminIndexTemplate, SiteError> {
     let viewer = current_user(&session).await?;
-    let sites = list_sites(state.db.as_ref()).await?;
+    let sites = if viewer.admin {
+        list_sites(state.db.as_ref()).await?
+    } else {
+        list_sites_for_subject(state.db.as_ref(), &viewer.subject).await?
+    };
     let mut links = vec![AdminLink::new("/admin/sites/new", "New site")];
     if viewer.admin {
         links.push(AdminLink::new("/admin/sites/import", "Import site"));

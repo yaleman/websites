@@ -1606,6 +1606,11 @@ const initMembershipCreateForm = () => {
 	});
 
 	for (const candidate of candidates) {
+		candidate.element.addEventListener("pointerdown", (event) => {
+			// Keep focus on the query input so blur handlers do not close the menu
+			// before the option click can commit the selected user.
+			event.preventDefault();
+		});
 		candidate.element.addEventListener("click", () => {
 			applyCandidate(candidate);
 			queryInput.focus();
