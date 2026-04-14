@@ -8,8 +8,9 @@ use crate::constants::SESSION_USER;
 use crate::db::test_db_start;
 use axum::Router;
 use axum::body::{Body, to_bytes};
+use axum::extract::{DefaultBodyLimit, Multipart};
 use axum::http::{Request, StatusCode, header};
-use axum::routing::get;
+use axum::routing::{get, post};
 use sea_orm::{ActiveModelTrait, Set};
 use serde::de::value::{Error as ValueError, StrDeserializer};
 #[cfg(unix)]
@@ -836,6 +837,122 @@ async fn admin_site_assets_create_rejects_mixed_file_and_source_url() {
         .await
         .expect("failed to list assets after rejected upload");
     assert!(assets.is_empty());
+}
+
+#[tokio::test]
+async fn admin_site_assets_create_accepts_batches_larger_than_axum_default_limit() {
+    let db = Arc::new(test_db_start().await);
+    let site = crate::create_site(
+        db.as_ref(),
+        "asset-large-batch-upload".to_string(),
+        "Asset Large Batch Upload".to_string(),
+        DEFAULT_TEMPLATE_NAME.to_string(),
+    )
+    .await
+    .expect("failed to create site");
+    let author = crate::entities::user::create_user(
+        db.as_ref(),
+        "asset-large-batch-author",
+        Some("author@example.com"),
+        Some("Author"),
+        false,
+    )
+    .await
+    .expect("failed to create author");
+    crate::create_membership(
+        db.as_ref(),
+        crate::NewMembership {
+            site_id: site.id,
+            user_id: author.id,
+            role: SiteRole::Author,
+        },
+    )
+    .await
+    .expect("failed to create author membership");
+
+    let session_store = MemoryStore::default();
+    let test_router = test_app_router(test_admin_state(db.clone()), session_store.clone());
+    let cookie = seed_session_cookie(
+        test_admin_state(db.clone()),
+        test_router.session_store.clone(),
+        author.id,
+    )
+    .await;
+    let first_file = vec![0_u8; 1024 * 1024 + 256 * 1024];
+    let second_file = vec![1_u8; 1024 * 1024 + 256 * 1024];
+    let files = vec![
+        ("first.png", "image/png", first_file.as_slice()),
+        ("second.png", "image/png", second_file.as_slice()),
+    ];
+    let (boundary, body) = multipart_asset_upload_request_body(&files, None);
+
+    let response = test_router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/site/{}/assets/new", site.id))
+                .header(header::COOKIE, cookie)
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .expect("failed to build large asset create request"),
+        )
+        .await
+        .expect("failed to call large asset create route");
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+    let assets = crate::list_assets(db.as_ref(), site.id)
+        .await
+        .expect("failed to list created large assets");
+    assert_eq!(assets.len(), 2);
+}
+
+#[tokio::test]
+async fn asset_upload_parser_returns_payload_too_large_for_limited_routes() {
+    async fn limited_upload(multipart: Multipart) -> Result<StatusCode, SiteError> {
+        crate::web::assets::parse_asset_create_upload(multipart).await?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    let router = Router::new().route(
+        "/upload",
+        post(limited_upload).layer(DefaultBodyLimit::max(64)),
+    );
+    let large_file = vec![0_u8; 512];
+    let files = vec![("first.png", "image/png", large_file.as_slice())];
+    let (boundary, body) = multipart_asset_upload_request_body(&files, None);
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/upload")
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .expect("failed to build limited upload request"),
+        )
+        .await
+        .expect("failed to call limited upload route");
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read limited upload body");
+    let body: serde_json::Value =
+        serde_json::from_slice(&body).expect("limited upload body should be json");
+    assert_eq!(body["message"], "Payload Too Large");
+    assert_eq!(
+        body["details"],
+        "asset upload exceeded the 50 MB upload limit"
+    );
 }
 
 #[tokio::test]

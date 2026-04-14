@@ -159,6 +159,7 @@ impl From<SiteError> for ApiError {
                 Self::NotFound(format!("membership not found: {identifier}"))
             }
             SiteError::BadRequest(message) => Self::BadRequest(message),
+            SiteError::PayloadTooLarge(message) => Self::BadRequest(message),
             SiteError::UnAuthorized(message) => Self::Unauthorized(message),
             SiteError::Internal(message)
             | SiteError::Database(message)
