@@ -529,7 +529,7 @@ pub(crate) async fn api_site_content_list(
     let mut items = list_content(state.db.as_ref(), site_id, page_type, None)
         .await
         .map_err(|err| ApiError::Internal(err.to_string()))?;
-    items.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    items.sort_by_key(|right| std::cmp::Reverse(right.created_at));
     items.truncate(limit);
 
     let mut response_items = Vec::with_capacity(items.len());
@@ -934,7 +934,7 @@ pub(crate) async fn api_site_assets_list(
     {
         assets.retain(|asset| asset.mime_type == type_filter);
     }
-    assets.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    assets.sort_by_key(|right| std::cmp::Reverse(right.created_at));
     assets.truncate(limit);
 
     let asset_ids = assets.iter().map(|asset| asset.id).collect::<Vec<_>>();
