@@ -338,7 +338,7 @@ pub async fn export_site_with_roots(
             .filter(entities::content_tag::Column::ContentId.eq(content.id))
             .all(db)
             .await?;
-        content_tag_links.sort_by(|left, right| left.id.cmp(&right.id));
+        content_tag_links.sort_by_key(|left| left.id);
 
         let mut revisions = entities::content_revision::Entity::find()
             .filter(entities::content_revision::Column::ContentId.eq(content.id))
@@ -366,7 +366,7 @@ pub async fn export_site_with_roots(
                 .filter(entities::content_revision_tag::Column::RevisionId.eq(revision.id))
                 .all(db)
                 .await?;
-            revision_tag_links.sort_by(|left, right| left.id.cmp(&right.id));
+            revision_tag_links.sort_by_key(|left| left.id);
 
             exported_revisions.push(ExportContentRevision {
                 id: revision.id,

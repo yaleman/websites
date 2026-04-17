@@ -319,7 +319,7 @@ pub fn apply_issue_replacements(
     }
 
     let _ = source;
-    applied.sort_by(|left, right| right.start.cmp(&left.start));
+    applied.sort_by_key(|right| std::cmp::Reverse(right.start));
     applied
 }
 
