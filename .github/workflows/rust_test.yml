@@ -19,8 +19,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - uses: jdx/mise-action@v4
       - name: Set up pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@v6
         with:
+          version: 10.30.3
           run_install: false
       - name: Set up Python
         uses: actions/setup-python@v6
