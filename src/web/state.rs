@@ -1299,10 +1299,10 @@ pub(crate) fn sort_content_items(
             });
         }
         ContentListSortBy::CreatedDesc => {
-            content_items.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+            content_items.sort_by_key(|right| std::cmp::Reverse(right.created_at));
         }
         ContentListSortBy::CreatedAsc => {
-            content_items.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+            content_items.sort_by_key(|left| left.created_at);
         }
         ContentListSortBy::UpdatedDesc => {
             content_items.sort_by(
