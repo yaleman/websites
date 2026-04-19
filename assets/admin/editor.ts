@@ -246,6 +246,58 @@ const bindNewContentSlugController = () => {
 	syncSlugFromTitle();
 };
 
+const formatLocalDateTimeInputValue = (value: Date) => {
+	const year = value.getFullYear();
+	const month = `${value.getMonth() + 1}`.padStart(2, "0");
+	const day = `${value.getDate()}`.padStart(2, "0");
+	const hours = `${value.getHours()}`.padStart(2, "0");
+	const minutes = `${value.getMinutes()}`.padStart(2, "0");
+	return `${year}-${month}-${day}T${hours}:${minutes}`;
+};
+
+const bindNewContentCreatedAtController = () => {
+	const form = document.querySelector<HTMLFormElement>(
+		"form[data-new-content-created-at]",
+	);
+
+	if (!form) {
+		return;
+	}
+
+	const localInput =
+		form.querySelector<HTMLInputElement>("[data-created-at-local]");
+	const utcInput = form.querySelector<HTMLInputElement>("[data-created-at-utc]");
+
+	if (!localInput || !utcInput) {
+		return;
+	}
+
+	const syncUtcValue = () => {
+		const value = localInput.value.trim();
+		if (!value) {
+			utcInput.value = "";
+			return;
+		}
+
+		const parsed = new Date(value);
+		if (Number.isNaN(parsed.getTime())) {
+			utcInput.value = "";
+			return;
+		}
+
+		utcInput.value = parsed.toISOString();
+	};
+
+	if (!localInput.value && !utcInput.value) {
+		localInput.value = formatLocalDateTimeInputValue(new Date());
+	}
+
+	syncUtcValue();
+	localInput.addEventListener("input", syncUtcValue);
+	localInput.addEventListener("change", syncUtcValue);
+	form.addEventListener("submit", syncUtcValue);
+};
+
 const createAssetCard = (asset: AssetLibraryItem, selected: boolean) => {
 	const button = document.createElement("button");
 	button.type = "button";
@@ -1716,6 +1768,7 @@ function doPageStartup() {
 	initTransientMessages();
 	initTagEditor();
 	bindNewContentSlugController();
+	bindNewContentCreatedAtController();
 	initMembershipCreateForm();
 	bindConfirmingForms();
 	announceAssetLibraryUpdate();

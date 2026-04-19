@@ -159,6 +159,7 @@ mod revision_entity_tests {
                 page_content: "Initial body".to_string(),
                 draft: true,
                 creator_sub: "creator".to_string(),
+                created_at: None,
                 published_at: None,
             },
         )

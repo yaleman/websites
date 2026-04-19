@@ -963,6 +963,7 @@ pub(crate) async fn admin_site_content_create(
     require_site_role(&state, &session, site_id, SiteRole::Author).await?;
     let actor = current_user(&session).await?;
     let tag_names = parse_tag_list(form.tag_list);
+    let created_at = parse_optional_datetime(normalize_optional(form.created_at), "created_at")?;
     let title = form.title;
     let slug = form.slug;
     let page_content = form.page_content;
@@ -985,6 +986,7 @@ pub(crate) async fn admin_site_content_create(
             page_content,
             draft,
             creator_sub: actor.subject.clone(),
+            created_at,
             published_at: None,
         },
     )

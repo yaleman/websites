@@ -1005,6 +1005,7 @@ pub async fn execute(
                                     page_content,
                                     creator_sub,
                                     draft,
+                                    created_at: None,
                                     published_at,
                                 },
                             )

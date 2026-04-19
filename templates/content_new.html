@@ -1,6 +1,6 @@
 {% extends "base_template.html" %}
 {% block body %}
-<form method="post" action class="editor-form" data-editor-config data-new-content-slug-controller data-site-id="{{ site_id }}" data-allow-external-image="{{ allow_external_image }}">
+<form method="post" action class="editor-form" data-editor-config data-new-content-slug-controller data-new-content-created-at data-site-id="{{ site_id }}" data-allow-external-image="{{ allow_external_image }}">
   <div class="form-grid">
     <div class="form-field">
       <label for="title">Title</label>
@@ -25,13 +25,20 @@
     <button type="submit" class="save">Create content</button>
   </div>
 
-  <div class="form-field">
-    <div class="flex items-end justify-between gap-2">
-      <label for="slug">Slug</label>
-      <button type="button" class="editor-button" data-slug-reset>Use title slug</button>
+  <div class="form-grid">
+    <div class="form-field">
+      <label for="created_at_local">Created At</label>
+      <input id="created_at_local" type="datetime-local" step="60" data-created-at-local />
+      <input id="created_at" name="created_at" type="hidden" data-created-at-utc />
     </div>
-    <input id="slug" name="slug" type="text" required />
-    <p class="text-xs text-slate-500">Auto-generates from the title until you choose to edit it.</p>
+    <div class="form-field">
+      <div class="flex items-end justify-between gap-2">
+        <label for="slug">Slug</label>
+        <button type="button" class="editor-button" data-slug-reset>Use title slug</button>
+      </div>
+      <input id="slug" name="slug" type="text" required />
+      <p class="text-xs text-slate-500">Auto-generates from the title until you choose to edit it.</p>
+    </div>
   </div>
 
 </form>
