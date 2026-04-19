@@ -98,6 +98,7 @@ pub struct NewContent {
     pub page_content: String,
     pub draft: bool,
     pub creator_sub: String,
+    pub created_at: Option<DateTime<Utc>>,
     pub published_at: Option<DateTime<Utc>>,
 }
 
@@ -1152,7 +1153,6 @@ pub async fn create_content<C: ConnectionTrait>(
     db: &C,
     input: NewContent,
 ) -> Result<entities::content_item::Model, SiteError> {
-    let now = Utc::now();
     let content_id = Uuid::now_v7();
     let revision_id = Uuid::now_v7();
     let NewContent {
@@ -1163,11 +1163,13 @@ pub async fn create_content<C: ConnectionTrait>(
         page_content,
         draft,
         creator_sub,
+        created_at,
         published_at,
     } = input;
+    let created_at = created_at.unwrap_or_else(Utc::now);
 
     let published_at = if !draft {
-        Some(published_at.unwrap_or(Utc::now()))
+        Some(published_at.unwrap_or(created_at))
     } else {
         published_at
     };
@@ -1181,7 +1183,7 @@ pub async fn create_content<C: ConnectionTrait>(
         page_content: Set(page_content.clone()),
         draft: Set(draft),
         creator_sub: Set(creator_sub),
-        created_at: Set(now),
+        created_at: Set(created_at),
         last_updated: Set(None),
         published_at: Set(published_at),
     }
@@ -1199,7 +1201,7 @@ pub async fn create_content<C: ConnectionTrait>(
         draft: Set(draft),
         page_type: Set(page_type),
         editor_sub: Set(content.creator_sub.clone()),
-        created_at: Set(now),
+        created_at: Set(created_at),
     }
     .insert(db)
     .await?;
@@ -1552,6 +1554,7 @@ pub async fn import_wordpress_xml<C: ConnectionTrait>(
                 page_content: content,
                 draft,
                 creator_sub: creator_sub.to_string(),
+                created_at,
                 published_at,
             },
         )
@@ -2962,11 +2965,83 @@ mod tests {
                 page_content: "Body".to_string(),
                 draft,
                 creator_sub: "creator".to_string(),
+                created_at: None,
                 published_at: None,
             },
         )
         .await
         .expect("failed to create content")
+    }
+
+    #[tokio::test]
+    async fn create_content_uses_explicit_created_at_for_content_revision_and_publish_time() {
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+        let created_at = Utc
+            .with_ymd_and_hms(2024, 12, 31, 23, 45, 0)
+            .single()
+            .expect("invalid created_at");
+
+        let content = create_content(
+            &db,
+            NewContent {
+                site_id: site.id,
+                page_type: PageType::Post,
+                title: "Backdated post".to_string(),
+                slug: "backdated-post".to_string(),
+                page_content: "Body".to_string(),
+                draft: false,
+                creator_sub: "creator".to_string(),
+                created_at: Some(created_at),
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create backdated content");
+
+        assert_eq!(content.created_at, created_at);
+        assert_eq!(content.published_at, Some(created_at));
+
+        let revisions = list_revisions(&db, content.id)
+            .await
+            .expect("failed to load revisions");
+        assert_eq!(revisions.len(), 1);
+        assert_eq!(revisions[0].created_at, created_at);
+    }
+
+    #[tokio::test]
+    async fn create_content_defaults_created_at_to_current_time_when_missing() {
+        let db = test_db_start().await;
+        let site = create_site_fixture(&db).await;
+        let before = Utc::now();
+
+        let content = create_content(
+            &db,
+            NewContent {
+                site_id: site.id,
+                page_type: PageType::Page,
+                title: "Fresh page".to_string(),
+                slug: "fresh-page".to_string(),
+                page_content: "Body".to_string(),
+                draft: true,
+                creator_sub: "creator".to_string(),
+                created_at: None,
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create content with default created_at");
+        let after = Utc::now();
+
+        assert!(content.created_at >= before);
+        assert!(content.created_at <= after);
+        assert_eq!(content.published_at, None);
+
+        let revisions = list_revisions(&db, content.id)
+            .await
+            .expect("failed to load revisions");
+        assert_eq!(revisions.len(), 1);
+        assert_eq!(revisions[0].created_at, content.created_at);
     }
 
     #[tokio::test]
@@ -3285,6 +3360,7 @@ mod tests {
                 page_content: "shared needle".to_string(),
                 draft: true,
                 creator_sub: "creator".to_string(),
+                created_at: None,
                 published_at: None,
             },
         )
@@ -3300,6 +3376,7 @@ mod tests {
                 page_content: "shared needle".to_string(),
                 draft: true,
                 creator_sub: "creator".to_string(),
+                created_at: None,
                 published_at: None,
             },
         )
@@ -4143,6 +4220,7 @@ mod tests {
                 page_content: "Hello world".to_string(),
                 draft: false,
                 creator_sub: "creator".to_string(),
+                created_at: None,
                 published_at: Some(Utc::now()),
             },
         )
@@ -4239,6 +4317,7 @@ mod tests {
                 page_content: "Hello world".to_string(),
                 draft: true,
                 creator_sub: "creator".to_string(),
+                created_at: None,
                 published_at: None,
             },
         )
@@ -4585,6 +4664,7 @@ mod tests {
                     .to_string(),
                 draft: true,
                 creator_sub: "creator".to_string(),
+                created_at: None,
                 published_at: None,
             },
         )
@@ -4644,6 +4724,7 @@ mod tests {
                 .join("\n"),
                 draft: true,
                 creator_sub: "creator".to_string(),
+                created_at: None,
                 published_at: None,
             },
         )
@@ -4733,6 +4814,7 @@ mod tests {
                 ),
                 draft: true,
                 creator_sub: "creator".to_string(),
+                created_at: None,
                 published_at: None,
             },
         )
@@ -4847,6 +4929,7 @@ mod tests {
                     .to_string(),
                 draft: false,
                 creator_sub: "creator".to_string(),
+                created_at: None,
                 published_at: None,
             },
         )
@@ -4913,6 +4996,7 @@ mod tests {
                 .join("\n"),
                 draft: false,
                 creator_sub: "creator".to_string(),
+                created_at: None,
                 published_at: None,
             },
         )
@@ -5015,6 +5099,7 @@ mod tests {
                 ),
                 draft: false,
                 creator_sub: "creator".to_string(),
+                created_at: None,
                 published_at: None,
             },
         )
@@ -5064,6 +5149,7 @@ mod tests {
                 page_content: "Body".to_string(),
                 draft: false,
                 creator_sub: "creator".to_string(),
+                created_at: None,
                 published_at: Some(now - chrono::Duration::days(1)),
             },
         )
@@ -5079,6 +5165,7 @@ mod tests {
                 page_content: "Body".to_string(),
                 draft: false,
                 creator_sub: "creator".to_string(),
+                created_at: None,
                 published_at: Some(now + chrono::Duration::days(7)),
             },
         )

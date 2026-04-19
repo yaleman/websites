@@ -105,6 +105,33 @@ async function selectTableCells(
 	await page.locator(secondSelector).click({ modifiers: ["Shift"] });
 }
 
+function extractContentIdFromEditUrl(url: string): string {
+	const match = url.match(/\/content\/([0-9a-f-]+)\/edit(?:\?.*)?$/);
+	if (!match) {
+		throw new Error(`Could not extract content id from ${url}`);
+	}
+	return match[1];
+}
+
+async function readContentMetadata(
+	page: import("@playwright/test").Page,
+): Promise<Record<string, string>> {
+	const section = page.locator("section").filter({
+		has: page.getByRole("heading", { name: "Content Metadata", exact: true }),
+	});
+	return section.locator("tbody tr").evaluateAll((rows) =>
+		Object.fromEntries(
+			rows.map((row) => {
+				const cells = row.querySelectorAll("td");
+				return [
+					cells[0]?.textContent?.trim() ?? "",
+					cells[1]?.textContent?.trim() ?? "",
+				];
+			}),
+		),
+	);
+}
+
 test.describe("content new editor", () => {
 	test.setTimeout(defaultTimeout);
 
@@ -1347,6 +1374,8 @@ test.describe("content new editor", () => {
 				{ waitUntil: "domcontentloaded" },
 			);
 
+			const createdAtInput = page.getByLabel("Created At");
+			await expect(createdAtInput).toHaveValue(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
 			await page.locator("#title").fill("Created from the new page");
 			await expect(page.locator("#slug")).toHaveValue("created-from-the-new-page");
 			await page.locator(".ProseMirror").click();
@@ -1370,6 +1399,133 @@ test.describe("content new editor", () => {
 			await expect(
 				page.getByRole("button", { name: /^Save(?: content)?$/ }),
 			).toBeVisible();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
+	test("creates a draft with a custom created timestamp from the new-content form", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const subject = "backdated-draft-user";
+			const userId = await createUser(harness, subject);
+			await addMembership(harness, userId, "owner");
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				subject,
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/new`,
+				{ waitUntil: "domcontentloaded" },
+			);
+
+			const createdAtInput = page.getByLabel("Created At");
+			await createdAtInput.fill("2024-05-06T14:08");
+			const expectedCreatedAt = await page.evaluate(() => {
+				const input = document.querySelector<HTMLInputElement>("#created_at_local");
+				if (!input?.value) {
+					throw new Error("missing created_at_local value");
+				}
+				return new Date(input.value).toISOString();
+			});
+			await page.locator("#draft").check();
+
+			await page.locator("#title").fill("Backdated draft");
+			await page.locator(".ProseMirror").click();
+			await page.keyboard.type("Backdated body");
+
+			await Promise.all([
+				page.getByRole("button", { name: "Create content" }).click(),
+				page.waitForURL(
+					(newUrl) =>
+						newUrl.pathname.match(
+							new RegExp(
+								`^/admin/site/${harness.siteId}/content/[0-9a-f-]+/edit$`,
+							),
+						) !== null,
+				),
+			]);
+
+			const contentId = extractContentIdFromEditUrl(page.url());
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}`,
+				{ waitUntil: "domcontentloaded" },
+			);
+
+			const metadata = await readContentMetadata(page);
+			expect(Date.parse(metadata.created_at)).toBe(Date.parse(expectedCreatedAt));
+			expect(metadata.published_at).toBe("n/a");
+
+			await context.close();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
+	test("creates published posts using the chosen created timestamp for the route and publish time", async ({
+		browser,
+	}) => {
+		const harness = await setupHarness();
+
+		try {
+			const subject = "published-created-at-user";
+			const userId = await createUser(harness, subject);
+			await addMembership(harness, userId, "owner");
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				subject,
+			);
+
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/new`,
+				{ waitUntil: "domcontentloaded" },
+			);
+
+			await page.getByLabel("Created At").fill("2024-02-03T14:09");
+			const expectedCreatedAt = await page.evaluate(() => {
+				const input = document.querySelector<HTMLInputElement>("#created_at_local");
+				if (!input?.value) {
+					throw new Error("missing created_at_local value");
+				}
+				return new Date(input.value).toISOString();
+			});
+			await page.locator("#draft").uncheck();
+			await page.locator("#title").fill("Published from picker");
+			await page.locator(".ProseMirror").click();
+			await page.keyboard.type("Published body");
+
+			await Promise.all([
+				page.getByRole("button", { name: "Create content" }).click(),
+				page.waitForURL(
+					(newUrl) =>
+						newUrl.pathname.match(
+							new RegExp(
+								`^/admin/site/${harness.siteId}/content/[0-9a-f-]+/edit$`,
+							),
+						) !== null,
+				),
+			]);
+
+			const contentId = extractContentIdFromEditUrl(page.url());
+			await page.goto(
+				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/${contentId}`,
+				{ waitUntil: "domcontentloaded" },
+			);
+
+			const metadata = await readContentMetadata(page);
+			expect(Date.parse(metadata.created_at)).toBe(Date.parse(expectedCreatedAt));
+			expect(Date.parse(metadata.published_at)).toBe(Date.parse(expectedCreatedAt));
+			await expect(page.locator("#content-metadata")).toContainText(
+				"/2024/02/03/published-from-picker",
+			);
+
+			await context.close();
 		} finally {
 			await cleanupHarness(harness);
 		}

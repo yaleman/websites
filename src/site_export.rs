@@ -1099,6 +1099,7 @@ mod tests {
                 page_content: "Body".to_string(),
                 draft: true,
                 creator_sub: "creator".to_string(),
+                created_at: None,
                 published_at: None,
             },
         )
@@ -1377,6 +1378,7 @@ mod tests {
                 page_content: "Source body".to_string(),
                 draft: true,
                 creator_sub: "existing-owner".to_string(),
+                created_at: None,
                 published_at: None,
             },
         )

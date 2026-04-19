@@ -3194,6 +3194,7 @@ async fn admin_site_wordpress_import_reports_updated_password_protected_titles()
             page_content: "Hello world".to_string(),
             draft: false,
             creator_sub: "author".to_string(),
+            created_at: None,
             published_at: Some(Utc::now()),
         },
     )

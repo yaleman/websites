@@ -845,6 +845,7 @@ pub(crate) struct CreateContentForm {
     pub(crate) slug: String,
     pub(crate) page_content: String,
     pub(crate) draft: Option<bool>,
+    pub(crate) created_at: Option<String>,
     pub(crate) tag_list: Option<String>,
 }
 

@@ -637,6 +637,7 @@ pub(crate) async fn api_site_content_create(
             page_content: request.page_content,
             draft: request.draft,
             creator_sub: actor.clone(),
+            created_at: None,
             published_at,
         },
     )
@@ -1605,6 +1606,7 @@ mod tests {
                 page_content: "Body".to_string(),
                 draft: false,
                 creator_sub: creator.subject.clone(),
+                created_at: None,
                 published_at: None,
             },
         )
