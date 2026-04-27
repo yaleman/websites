@@ -11,6 +11,7 @@
         <th>Slug</th>
         <th>Repository</th>
         <th>Branch</th>
+        <th>SSH Key</th>
         <th>Status</th>
         <th>Sites</th>
         <th>Actions</th>
@@ -22,10 +23,12 @@
         <td><code>{{ theme.slug }}</code></td>
         <td>{{ theme.repo_url }}</td>
         <td>{{ theme.branch }}</td>
+        <td>{{ theme.ssh_key_name }}</td>
         <td>{% if theme.installed %}Installed{% else %}Missing files{% endif %}</td>
         <td>{{ theme.site_count }}</td>
         <td>
           <div class="flex flex-wrap gap-2">
+            <a href="{{ theme.edit_href }}" class="btn">Edit</a>
             <form method="post" action="{{ theme.update_href }}" class="flex">
               <button type="submit" class="btn">Update</button>
             </form>
@@ -57,6 +60,19 @@
     <div class="form-field">
       <label for="branch">Branch</label>
       <input id="branch" name="branch" placeholder="optional" />
+    </div>
+
+    <div class="form-field">
+      <label for="ssh_key_name">SSH Key</label>
+      <select id="ssh_key_name" name="ssh_key_name">
+        <option value="">None</option>
+        {% for key in ssh_keys %}
+        <option value="{{ key.name }}">{{ key.name }}</option>
+        {% endfor %}
+      </select>
+      {% if ssh_keys.is_empty() %}
+      <p class="inline-body">No SSH keys are available.</p>
+      {% endif %}
     </div>
 
     <div class="form-actions">

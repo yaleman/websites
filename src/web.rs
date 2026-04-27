@@ -23,8 +23,9 @@ use crate::publish::{
     publish_rendered_site, queue_site_publish, save_rsync_publish_config, save_s3_publish_config,
 };
 use crate::theme_registry::{
-    ThemeAdminRow, ThemeInstallRequest, available_template_names, delete_theme, install_theme,
-    theme_admin_rows, update_theme,
+    ThemeAdminRow, ThemeInstallRequest, ThemeSshKeyOption, ThemeUpdateRequest,
+    available_template_names, delete_theme, get_theme, install_theme, list_theme_ssh_keys,
+    theme_admin_rows, update_theme, update_theme_metadata,
 };
 use crate::tls::build_tls_config;
 use crate::token_auth::{

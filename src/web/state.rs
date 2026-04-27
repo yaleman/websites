@@ -110,6 +110,8 @@ pub(crate) struct AdminState {
     pub(crate) log_path: PathBuf,
     pub(crate) site_templates_root: PathBuf,
     pub(crate) rendered_root: PathBuf,
+    pub(crate) theme_ssh_key_dir: PathBuf,
+    pub(crate) theme_ssh_known_hosts_path: PathBuf,
 }
 
 pub(crate) async fn site_has_publish_config<C: ConnectionTrait>(
@@ -136,6 +138,19 @@ pub(crate) struct AdminIndexTemplate {
 pub(crate) struct AdminThemesTemplate {
     pub(crate) template_shared: AdminTemplateData,
     pub(crate) themes: Vec<ThemeAdminRow>,
+    pub(crate) ssh_keys: Vec<ThemeSshKeyOption>,
+}
+
+#[allow(dead_code)]
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_theme_edit.html")]
+pub(crate) struct AdminThemeEditTemplate {
+    pub(crate) template_shared: AdminTemplateData,
+    pub(crate) slug: String,
+    pub(crate) repo_url: String,
+    pub(crate) branch: String,
+    pub(crate) ssh_key_name: String,
+    pub(crate) ssh_keys: Vec<ThemeSshKeyOption>,
 }
 
 #[allow(dead_code)]
@@ -750,6 +765,14 @@ pub(crate) struct ThemeInstallForm {
     pub(crate) repo_url: String,
     pub(crate) slug: Option<String>,
     pub(crate) branch: Option<String>,
+    pub(crate) ssh_key_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ThemeEditForm {
+    pub(crate) repo_url: String,
+    pub(crate) branch: Option<String>,
+    pub(crate) ssh_key_name: Option<String>,
 }
 
 #[allow(dead_code)]

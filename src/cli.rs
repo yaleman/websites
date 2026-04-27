@@ -148,6 +148,22 @@ pub struct Cli {
         help = "File path where persistent application logs are written"
     )]
     pub log_path: PathBuf,
+    #[arg(
+        long = "theme-ssh-key-dir",
+        env = "WEBSITES_THEME_SSH_KEY_DIR",
+        default_value = "/data/theme_ssh_keys",
+        value_name = "DIR",
+        help = "Directory containing SSH private keys selectable for theme repositories"
+    )]
+    pub theme_ssh_key_dir: PathBuf,
+    #[arg(
+        long = "theme-ssh-known-hosts-path",
+        env = "WEBSITES_THEME_SSH_KNOWN_HOSTS_PATH",
+        default_value = "/data/theme_ssh_known_hosts",
+        value_name = "FILE",
+        help = "File where first-seen theme SSH host keys are stored"
+    )]
+    pub theme_ssh_known_hosts_path: PathBuf,
     #[command(flatten)]
     pub oidc: OidcConfigArgs,
     #[command(subcommand)]
@@ -454,6 +470,7 @@ pub enum ContentCommands {
     },
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn execute(
     command: Commands,
     db_path: &Path,
@@ -461,6 +478,8 @@ pub async fn execute(
     upload_root: &Path,
     rendered_dir: &Path,
     log_path: &Path,
+    theme_ssh_key_dir: &Path,
+    theme_ssh_known_hosts_path: &Path,
     oidc: &OidcConfigArgs,
 ) -> Result<(), String> {
     let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
@@ -507,6 +526,11 @@ pub async fn execute(
             println!("upload_dir={}", upload_root.display());
             println!("rendered_dir={}", rendered_dir.display());
             println!("log_path={}", log_path.display());
+            println!("theme_ssh_key_dir={}", theme_ssh_key_dir.display());
+            println!(
+                "theme_ssh_known_hosts_path={}",
+                theme_ssh_known_hosts_path.display()
+            );
             Ok(())
         }
         Commands::Site { command } => match command {
@@ -939,6 +963,8 @@ pub async fn execute(
                     upload_root.to_path_buf(),
                     rendered_dir.to_path_buf(),
                     log_path.to_path_buf(),
+                    theme_ssh_key_dir.to_path_buf(),
+                    theme_ssh_known_hosts_path.to_path_buf(),
                 )
                 .await
                 .map_err(|err| err.to_string())

@@ -4,22 +4,38 @@ use crate::entities::site;
 use crate::entities::theme_registry;
 use crate::errors::SiteError;
 use chrono::Utc;
+use gix::bstr::ByteSlice;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
     IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
+use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, atomic::AtomicBool};
 use tokio::fs;
-use url::Url;
+use tokio_util::io::SyncIoBridge;
 use uuid::Uuid;
+
+type BlockingGitTransport = gix_transport::client::git::blocking_io::Connection<
+    Box<dyn Read + Send>,
+    Box<dyn Write + Send>,
+>;
 
 #[derive(Debug, Clone)]
 pub struct ThemeInstallRequest {
     pub slug: Option<String>,
     pub repo_url: String,
     pub branch: Option<String>,
+    pub ssh_key_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ThemeUpdateRequest {
+    pub repo_url: String,
+    pub branch: Option<String>,
+    pub ssh_key_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -27,10 +43,17 @@ pub struct ThemeAdminRow {
     pub slug: String,
     pub repo_url: String,
     pub branch: String,
+    pub ssh_key_name: String,
     pub installed: bool,
     pub site_count: usize,
+    pub edit_href: String,
     pub update_href: String,
     pub delete_href: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThemeSshKeyOption {
+    pub name: String,
 }
 
 fn theme_path(root: &Path, slug: &str) -> PathBuf {
@@ -85,59 +108,81 @@ fn theme_branch_display(branch: Option<&str>) -> String {
     branch.unwrap_or("default branch").to_string()
 }
 
-fn https_url_for_known_ssh_host(host: &str, path: &str) -> Option<String> {
-    match host {
-        "github.com" | "gitlab.com" | "bitbucket.org" => {
-            let normalized_path = path.trim_start_matches('/');
-            if normalized_path.is_empty() {
-                None
-            } else {
-                Some(format!("https://{host}/{normalized_path}"))
-            }
-        }
-        _ => None,
-    }
+fn theme_key_display(key_name: Option<&str>) -> String {
+    key_name.unwrap_or("None").to_string()
 }
 
-fn unsupported_ssh_repo_url(repo_url: &str) -> SiteError {
-    SiteError::BadRequest(format!(
-        "SSH theme repo URLs must be converted to HTTPS before cloning because the server does not invoke an external ssh program: {repo_url}"
-    ))
-}
-
-fn theme_clone_url(repo_url: &str) -> Result<String, SiteError> {
+fn is_ssh_repo_url(repo_url: &str) -> bool {
     let trimmed = repo_url.trim();
+    trimmed.starts_with("ssh://")
+        || trimmed.starts_with("git+ssh://")
+        || trimmed
+            .split_once(':')
+            .is_some_and(|(host_part, _)| host_part.contains('@') && !host_part.contains('/'))
+}
+
+fn normalize_theme_ssh_key_name(input: Option<String>) -> Result<Option<String>, SiteError> {
+    let Some(value) = input else {
+        return Ok(None);
+    };
+    let trimmed = value.trim();
     if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed == "." || trimmed == ".." || trimmed.contains('/') || trimmed.contains('\\') {
         return Err(SiteError::BadRequest(
-            "theme repo URL cannot be empty".to_string(),
+            "theme ssh key must be selected from the configured key directory".to_string(),
         ));
     }
+    Ok(Some(trimmed.to_string()))
+}
 
-    if let Ok(parsed) = Url::parse(trimmed) {
-        return match parsed.scheme() {
-            "ssh" => {
-                let host = parsed
-                    .host_str()
-                    .ok_or_else(|| unsupported_ssh_repo_url(trimmed))?;
-                https_url_for_known_ssh_host(host, parsed.path())
-                    .ok_or_else(|| unsupported_ssh_repo_url(trimmed))
-            }
-            "git+ssh" => Err(unsupported_ssh_repo_url(trimmed)),
-            _ => Ok(trimmed.to_string()),
-        };
+fn resolve_theme_ssh_key_path(
+    key_dir: &Path,
+    key_name: Option<&str>,
+    repo_url: &str,
+) -> Result<Option<PathBuf>, SiteError> {
+    let key_name = key_name.filter(|value| !value.trim().is_empty());
+    if is_ssh_repo_url(repo_url) && key_name.is_none() {
+        return Err(SiteError::BadRequest(
+            "SSH theme repositories require a selected SSH key".to_string(),
+        ));
     }
+    Ok(key_name.map(|name| key_dir.join(name)))
+}
 
-    if let Some((host_part, repo_path)) = trimmed.split_once(':')
-        && !host_part.contains('/')
-    {
-        let host = host_part.rsplit('@').next().unwrap_or(host_part);
-        if let Some(https_url) = https_url_for_known_ssh_host(host, repo_path) {
-            return Ok(https_url);
+pub async fn list_theme_ssh_keys(key_dir: &Path) -> Result<Vec<ThemeSshKeyOption>, SiteError> {
+    let mut entries = match fs::read_dir(key_dir).await {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(SiteError::internal(format!(
+                "failed to read theme ssh key directory {}: {error}",
+                key_dir.display()
+            )));
         }
-        return Err(unsupported_ssh_repo_url(trimmed));
+    };
+    let mut keys = Vec::new();
+    while let Some(entry) = entries.next_entry().await.map_err(|error| {
+        SiteError::internal(format!("failed to enumerate theme ssh keys: {error}"))
+    })? {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || name == "known_hosts" || name.ends_with(".pub") {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type().await else {
+            continue;
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+        if fs::File::open(entry.path()).await.is_err() {
+            continue;
+        }
+        keys.push(ThemeSshKeyOption { name });
     }
-
-    Ok(trimmed.to_string())
+    keys.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(keys)
 }
 
 async fn read_installed_theme_remote(
@@ -152,7 +197,6 @@ async fn read_installed_theme_remote(
         .url(gix::remote::Direction::Fetch)
         .ok_or_else(|| SiteError::internal("theme repo is missing a fetch URL"))?
         .to_string();
-    let repo_url = theme_clone_url(&repo_url)?;
     let branch = repo
         .head_name()
         .map_err(|error| SiteError::internal(format!("failed to read theme branch: {error}")))?;
@@ -172,6 +216,7 @@ async fn adopt_installed_theme(
         slug: Set(slug.to_string()),
         repo_url: Set(repo_url),
         branch: Set(branch),
+        ssh_key_name: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
     };
@@ -311,8 +356,10 @@ pub async fn theme_admin_rows(
             slug: theme.slug.clone(),
             repo_url: theme.repo_url.clone(),
             branch: theme_branch_display(theme.branch.as_deref()),
+            ssh_key_name: theme_key_display(theme.ssh_key_name.as_deref()),
             installed,
             site_count,
+            edit_href: format!("/admin/themes/{}/edit", theme.slug),
             update_href: format!("/admin/themes/{}/update", theme.slug),
             delete_href: format!("/admin/themes/{}/delete", theme.slug),
         });
@@ -321,10 +368,419 @@ pub async fn theme_admin_rows(
     Ok(rows)
 }
 
+#[derive(Debug, Clone)]
+struct SshRepoUrl {
+    user: String,
+    host: String,
+    port: u16,
+    path: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ThemeSshError {
+    #[error("failed to connect to SSH theme repository: {0}")]
+    Russh(#[from] russh::Error),
+    #[error("failed to decode SSH theme key: {0}")]
+    KeyDecode(#[from] russh::keys::Error),
+    #[error("failed to read SSH theme key: {0}")]
+    KeyIo(#[from] std::io::Error),
+    #[error("failed to encode SSH host key: {0}")]
+    HostKeyEncode(#[from] russh::keys::ssh_key::Error),
+    #[error("SSH host key for {0} changed")]
+    HostKeyChanged(String),
+}
+
+#[derive(Clone)]
+struct ThemeSshClient {
+    host_key_name: String,
+    known_hosts_path: PathBuf,
+}
+
+impl russh::client::Handler for ThemeSshClient {
+    type Error = ThemeSshError;
+
+    async fn check_server_key(
+        &mut self,
+        server_public_key: &russh::keys::ssh_key::PublicKey,
+    ) -> Result<bool, Self::Error> {
+        let encoded_key = server_public_key.to_openssh()?;
+        let known_hosts = read_theme_known_hosts(&self.known_hosts_path)?;
+        match known_hosts.get(&self.host_key_name) {
+            Some(stored_key) if stored_key == &encoded_key => Ok(true),
+            Some(_) => Err(ThemeSshError::HostKeyChanged(self.host_key_name.clone())),
+            None => {
+                write_theme_known_host(&self.known_hosts_path, &self.host_key_name, &encoded_key)?;
+                Ok(true)
+            }
+        }
+    }
+}
+
+fn read_theme_known_hosts(path: &Path) -> Result<BTreeMap<String, String>, std::io::Error> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error),
+    };
+    let mut hosts = BTreeMap::new();
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some((host, key)) = trimmed.split_once(' ') {
+            hosts.insert(host.to_string(), key.to_string());
+        }
+    }
+    Ok(hosts)
+}
+
+fn write_theme_known_host(
+    path: &Path,
+    host: &str,
+    encoded_key: &str,
+) -> Result<(), std::io::Error> {
+    let mut hosts = read_theme_known_hosts(path)?;
+    hosts.insert(host.to_string(), encoded_key.to_string());
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut contents = String::new();
+    for (host, key) in hosts {
+        contents.push_str(&host);
+        contents.push(' ');
+        contents.push_str(&key);
+        contents.push('\n');
+    }
+    std::fs::write(path, contents)
+}
+
+fn parse_ssh_repo_url(repo_url: &str) -> Result<SshRepoUrl, SiteError> {
+    let trimmed = repo_url.trim();
+    if let Some(rest) = trimmed
+        .strip_prefix("ssh://")
+        .or_else(|| trimmed.strip_prefix("git+ssh://"))
+    {
+        let (authority, path) = rest.split_once('/').ok_or_else(|| {
+            SiteError::BadRequest(
+                "SSH theme repository URL is missing a repository path".to_string(),
+            )
+        })?;
+        let (user, host_port) = authority.split_once('@').ok_or_else(|| {
+            SiteError::BadRequest("SSH theme repository URL is missing a username".to_string())
+        })?;
+        let (host, port) = match host_port.rsplit_once(':') {
+            Some((host, port)) => (
+                host,
+                port.parse::<u16>().map_err(|_| {
+                    SiteError::BadRequest(
+                        "SSH theme repository URL has an invalid port".to_string(),
+                    )
+                })?,
+            ),
+            None => (host_port, 22),
+        };
+        if host.is_empty() || path.is_empty() {
+            return Err(SiteError::BadRequest(
+                "SSH theme repository URL is missing a host or repository path".to_string(),
+            ));
+        }
+        return Ok(SshRepoUrl {
+            user: user.to_string(),
+            host: host.to_string(),
+            port,
+            path: format!("/{path}"),
+        });
+    }
+
+    let (user_host, path) = trimmed.split_once(':').ok_or_else(|| {
+        SiteError::BadRequest("SSH theme repository URL is missing a repository path".to_string())
+    })?;
+    let (user, host) = user_host.split_once('@').ok_or_else(|| {
+        SiteError::BadRequest("SSH theme repository URL is missing a username".to_string())
+    })?;
+    if host.is_empty() || path.is_empty() {
+        return Err(SiteError::BadRequest(
+            "SSH theme repository URL is missing a host or repository path".to_string(),
+        ));
+    }
+    Ok(SshRepoUrl {
+        user: user.to_string(),
+        host: host.to_string(),
+        port: 22,
+        path: path.to_string(),
+    })
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn open_ssh_git_transport(
+    repo_url: &str,
+    key_path: &Path,
+    known_hosts_path: &Path,
+) -> Result<BlockingGitTransport, SiteError> {
+    let ssh_url = parse_ssh_repo_url(repo_url)?;
+    let runtime = Arc::new(tokio::runtime::Runtime::new().map_err(|error| {
+        SiteError::internal(format!("failed to create SSH transport runtime: {error}"))
+    })?);
+    let runtime_for_reader = Arc::clone(&runtime);
+    let runtime_for_writer = Arc::clone(&runtime);
+    let stream = runtime
+        .block_on(async {
+            let key_contents = tokio::fs::read_to_string(key_path).await?;
+            let private_key = russh::keys::decode_secret_key(&key_contents, None)?;
+            let config = Arc::new(russh::client::Config::default());
+            let host_key_name = if ssh_url.port == 22 {
+                ssh_url.host.clone()
+            } else {
+                format!("[{}]:{}", ssh_url.host, ssh_url.port)
+            };
+            let mut session = russh::client::connect(
+                config,
+                (ssh_url.host.as_str(), ssh_url.port),
+                ThemeSshClient {
+                    host_key_name,
+                    known_hosts_path: known_hosts_path.to_path_buf(),
+                },
+            )
+            .await?;
+            let auth = session
+                .authenticate_publickey(
+                    ssh_url.user.clone(),
+                    russh::keys::PrivateKeyWithHashAlg::new(Arc::new(private_key), None),
+                )
+                .await?;
+            if !auth.success() {
+                return Err(ThemeSshError::Russh(russh::Error::NotAuthenticated));
+            }
+            let channel = session.channel_open_session().await?;
+            channel
+                .exec(
+                    true,
+                    format!("git-upload-pack {}", shell_quote(&ssh_url.path)),
+                )
+                .await?;
+            Ok::<_, ThemeSshError>(channel.into_stream())
+        })
+        .map_err(|error| {
+            SiteError::internal(format!("failed to open SSH theme transport: {error}"))
+        })?;
+    let (reader, writer) = tokio::io::split(stream);
+    let reader: Box<dyn Read + Send> = Box::new(SshRuntimeReader {
+        inner: SyncIoBridge::new_with_handle(reader, runtime_for_reader.handle().clone()),
+        _runtime: runtime_for_reader,
+    });
+    let writer: Box<dyn Write + Send> = Box::new(SshRuntimeWriter {
+        inner: SyncIoBridge::new_with_handle(writer, runtime_for_writer.handle().clone()),
+        _runtime: runtime_for_writer,
+    });
+    Ok(gix_transport::client::git::blocking_io::Connection::new(
+        reader,
+        writer,
+        gix_transport::Protocol::V2,
+        ssh_url.path.into_bytes(),
+        None::<(String, Option<u16>)>,
+        gix_transport::client::git::ConnectMode::Process,
+        false,
+    )
+    .custom_url(Some(repo_url.as_bytes().to_vec().into())))
+}
+
+struct SshRuntimeReader<R> {
+    inner: SyncIoBridge<R>,
+    _runtime: Arc<tokio::runtime::Runtime>,
+}
+
+impl<R: tokio::io::AsyncRead + Unpin> Read for SshRuntimeReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.inner.read(buf)
+    }
+}
+
+struct SshRuntimeWriter<W> {
+    inner: SyncIoBridge<W>,
+    _runtime: Arc<tokio::runtime::Runtime>,
+}
+
+impl<W: tokio::io::AsyncWrite + Unpin> Write for SshRuntimeWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+fn checkout_theme_worktree(repo: &gix::Repository, ref_name: &str) -> Result<(), SiteError> {
+    let mut reference = repo.find_reference(ref_name).map_err(|error| {
+        SiteError::internal(format!("failed to resolve fetched theme ref: {error}"))
+    })?;
+    let commit = reference.peel_to_commit().map_err(|error| {
+        SiteError::internal(format!("fetched theme ref is not a commit: {error}"))
+    })?;
+    let tree_id = commit.tree_id().map_err(|error| {
+        SiteError::internal(format!("failed to load fetched theme tree: {error}"))
+    })?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| SiteError::internal("theme repository is missing a worktree"))?
+        .to_path_buf();
+    let (mut stream, _) = repo.worktree_stream(tree_id).map_err(|error| {
+        SiteError::internal(format!("failed to stream theme worktree: {error}"))
+    })?;
+    while let Some(mut entry) = stream.next_entry().map_err(|error| {
+        SiteError::internal(format!("failed to read theme worktree entry: {error}"))
+    })? {
+        let relative = entry.relative_path().to_str().map_err(|error| {
+            SiteError::internal(format!("theme worktree path is not utf-8: {error}"))
+        })?;
+        let path = workdir.join(relative);
+        if entry.mode.is_tree() {
+            std::fs::create_dir_all(&path).map_err(|error| {
+                SiteError::internal(format!(
+                    "failed to create theme directory {}: {error}",
+                    path.display()
+                ))
+            })?;
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                SiteError::internal(format!(
+                    "failed to create theme parent {}: {error}",
+                    parent.display()
+                ))
+            })?;
+        }
+        if entry.mode.is_link() {
+            let mut target = Vec::new();
+            entry.read_to_end(&mut target).map_err(|error| {
+                SiteError::internal(format!(
+                    "failed to read theme symlink {}: {error}",
+                    path.display()
+                ))
+            })?;
+            std::os::unix::fs::symlink(String::from_utf8_lossy(&target).as_ref(), &path).map_err(
+                |error| {
+                    SiteError::internal(format!(
+                        "failed to create theme symlink {}: {error}",
+                        path.display()
+                    ))
+                },
+            )?;
+            continue;
+        }
+        let mut file = std::fs::File::create(&path).map_err(|error| {
+            SiteError::internal(format!(
+                "failed to create theme file {}: {error}",
+                path.display()
+            ))
+        })?;
+        std::io::copy(&mut entry, &mut file).map_err(|error| {
+            SiteError::internal(format!(
+                "failed to write theme file {}: {error}",
+                path.display()
+            ))
+        })?;
+        #[cfg(unix)]
+        if entry.mode.is_executable() {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = file
+                .metadata()
+                .map_err(|error| {
+                    SiteError::internal(format!(
+                        "failed to stat theme file {}: {error}",
+                        path.display()
+                    ))
+                })?
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&path, permissions).map_err(|error| {
+                SiteError::internal(format!(
+                    "failed to set theme file mode {}: {error}",
+                    path.display()
+                ))
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn clone_theme_repo_over_ssh(
+    repo_url: &str,
+    destination: &Path,
+    branch: Option<&String>,
+    ssh_key_path: &Path,
+    known_hosts_path: &Path,
+) -> Result<(), SiteError> {
+    let repo = gix::init(destination).map_err(|error| {
+        SiteError::internal(format!("failed to initialize theme repo: {error}"))
+    })?;
+    let mut remote = repo.remote_at(repo_url.to_string()).map_err(|error| {
+        SiteError::internal(format!("failed to configure theme remote: {error}"))
+    })?;
+    remote = remote
+        .with_refspecs(
+            Some("+refs/heads/*:refs/remotes/origin/*"),
+            gix::remote::Direction::Fetch,
+        )
+        .map_err(|error| {
+            SiteError::internal(format!("failed to configure theme fetch refspecs: {error}"))
+        })?;
+    let transport = open_ssh_git_transport(repo_url, ssh_key_path, known_hosts_path)?;
+    let connection = remote.to_connection_with_transport(transport);
+    let mut fetch_options = gix::remote::ref_map::Options::default();
+    let head_refspec = gix::refspec::parse(
+        "HEAD:refs/remotes/origin/HEAD".into(),
+        gix::refspec::parse::Operation::Fetch,
+    )
+    .map_err(|error| SiteError::internal(format!("invalid theme HEAD refspec: {error}")))?
+    .to_owned();
+    fetch_options.extra_refspecs.push(head_refspec);
+    if let Some(branch) = branch.map(String::as_str) {
+        fetch_options.extra_refspecs.push(
+            gix::refspec::parse(
+                branch.as_bytes().as_bstr(),
+                gix::refspec::parse::Operation::Fetch,
+            )
+            .map_err(|error| {
+                SiteError::internal(format!("invalid theme branch {branch}: {error}"))
+            })?
+            .to_owned(),
+        );
+    }
+    let should_interrupt = AtomicBool::new(false);
+    let pending_pack = connection
+        .prepare_fetch(gix::progress::Discard, fetch_options)
+        .map_err(|error| {
+            SiteError::internal(format!("failed to prepare SSH theme fetch: {error}"))
+        })?;
+    pending_pack
+        .with_write_packed_refs_only(true)
+        .receive(gix::progress::Discard, &should_interrupt)
+        .map_err(|error| SiteError::internal(format!("failed to fetch SSH theme repo: {error}")))?;
+    let checkout_ref = branch
+        .map(String::as_str)
+        .map(|branch| format!("refs/remotes/origin/{branch}"))
+        .unwrap_or_else(|| "refs/remotes/origin/HEAD".to_string());
+    checkout_theme_worktree(&repo, &checkout_ref)?;
+    std::fs::write(
+        destination.join(".git").join("HEAD"),
+        format!("ref: {checkout_ref}\n"),
+    )
+    .map_err(|error| SiteError::internal(format!("failed to write theme HEAD: {error}")))?;
+    Ok(())
+}
+
 async fn clone_theme_repo(
-    clone_url: String,
+    repo_url: String,
     destination: PathBuf,
     branch: Option<String>,
+    ssh_key_path: Option<PathBuf>,
+    known_hosts_path: PathBuf,
 ) -> Result<(), SiteError> {
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).await.map_err(|error| {
@@ -342,9 +798,23 @@ async fn clone_theme_repo(
                 destination.display()
             )));
         }
+        if is_ssh_repo_url(&repo_url) {
+            let key_path = ssh_key_path.ok_or_else(|| {
+                SiteError::BadRequest(
+                    "SSH theme repositories require a selected SSH key".to_string(),
+                )
+            })?;
+            return clone_theme_repo_over_ssh(
+                &repo_url,
+                &destination,
+                branch.as_ref(),
+                &key_path,
+                &known_hosts_path,
+            );
+        }
 
         let should_interrupt = AtomicBool::new(false);
-        let mut clone = gix::prepare_clone(clone_url, &destination).map_err(|error| {
+        let mut clone = gix::prepare_clone(repo_url, &destination).map_err(|error| {
             SiteError::internal(format!("failed to prepare theme clone: {error}"))
         })?;
         if let Some(branch) = branch.as_deref() {
@@ -370,6 +840,8 @@ pub async fn install_theme(
     db: &DatabaseConnection,
     actor_sub: &str,
     templates_root: &Path,
+    ssh_key_dir: &Path,
+    known_hosts_path: &Path,
     request: ThemeInstallRequest,
 ) -> Result<theme_registry::Model, SiteError> {
     let slug = match request.slug {
@@ -380,7 +852,9 @@ pub async fn install_theme(
         .branch
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    let clone_url = theme_clone_url(&request.repo_url)?;
+    let ssh_key_name = normalize_theme_ssh_key_name(request.ssh_key_name)?;
+    let ssh_key_path =
+        resolve_theme_ssh_key_path(ssh_key_dir, ssh_key_name.as_deref(), &request.repo_url)?;
     let theme_dir = theme_path(templates_root, &slug);
 
     sync_discovered_themes(db, templates_root).await?;
@@ -396,7 +870,14 @@ pub async fn install_theme(
         )));
     }
 
-    clone_theme_repo(clone_url.clone(), theme_dir.clone(), branch.clone()).await?;
+    clone_theme_repo(
+        request.repo_url.clone(),
+        theme_dir.clone(),
+        branch.clone(),
+        ssh_key_path,
+        known_hosts_path.to_path_buf(),
+    )
+    .await?;
 
     let detected_branch = if branch.is_some() {
         branch.clone()
@@ -417,8 +898,9 @@ pub async fn install_theme(
     let model = theme_registry::ActiveModel {
         id: Set(Uuid::now_v7()),
         slug: Set(slug.clone()),
-        repo_url: Set(clone_url),
+        repo_url: Set(request.repo_url.clone()),
         branch: Set(detected_branch.clone()),
+        ssh_key_name: Set(ssh_key_name.clone()),
         created_at: Set(now),
         updated_at: Set(now),
     }
@@ -438,6 +920,7 @@ pub async fn install_theme(
             "slug": model.slug,
             "repo_url": model.repo_url,
             "branch": model.branch,
+            "ssh_key_name": model.ssh_key_name,
         })),
     )
     .await
@@ -452,6 +935,8 @@ pub async fn update_theme(
     actor_sub: &str,
     slug: &str,
     templates_root: &Path,
+    ssh_key_dir: &Path,
+    known_hosts_path: &Path,
 ) -> Result<theme_registry::Model, SiteError> {
     sync_discovered_themes(db, templates_root).await?;
     let existing = theme_registry::Entity::find()
@@ -466,11 +951,18 @@ pub async fn update_theme(
         .ok_or_else(|| SiteError::internal("theme path has no parent"))?
         .to_path_buf();
     let temp_path = parent.join(format!(".{slug}-update-{}", Uuid::now_v7()));
+    let ssh_key_path = resolve_theme_ssh_key_path(
+        ssh_key_dir,
+        existing.ssh_key_name.as_deref(),
+        &existing.repo_url,
+    )?;
 
     clone_theme_repo(
         existing.repo_url.clone(),
         temp_path.clone(),
         existing.branch.clone(),
+        ssh_key_path,
+        known_hosts_path.to_path_buf(),
     )
     .await?;
 
@@ -522,12 +1014,83 @@ pub async fn update_theme(
             "slug": model.slug,
             "repo_url": model.repo_url,
             "branch": model.branch,
+            "ssh_key_name": model.ssh_key_name,
         })),
     )
     .await
     .map_err(|error| SiteError::internal(format!("failed to log theme update audit: {error}")))?;
     txn.commit().await?;
 
+    Ok(model)
+}
+
+pub async fn get_theme(
+    db: &DatabaseConnection,
+    templates_root: &Path,
+    slug: &str,
+) -> Result<theme_registry::Model, SiteError> {
+    sync_discovered_themes(db, templates_root).await?;
+    theme_registry::Entity::find()
+        .filter(theme_registry::Column::Slug.eq(slug))
+        .one(db)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load theme {slug}: {error}")))?
+        .ok_or_else(|| SiteError::SiteNotFound(slug.to_string()))
+}
+
+pub async fn update_theme_metadata(
+    db: &DatabaseConnection,
+    actor_sub: &str,
+    slug: &str,
+    templates_root: &Path,
+    request: ThemeUpdateRequest,
+) -> Result<theme_registry::Model, SiteError> {
+    sync_discovered_themes(db, templates_root).await?;
+    let existing = theme_registry::Entity::find()
+        .filter(theme_registry::Column::Slug.eq(slug))
+        .one(db)
+        .await
+        .map_err(|error| SiteError::internal(format!("failed to load theme {slug}: {error}")))?
+        .ok_or_else(|| SiteError::SiteNotFound(slug.to_string()))?;
+    let repo_url = request.repo_url.trim().to_string();
+    if repo_url.is_empty() {
+        return Err(SiteError::BadRequest("missing repository url".to_string()));
+    }
+    let branch = request
+        .branch
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let ssh_key_name = normalize_theme_ssh_key_name(request.ssh_key_name)?;
+
+    let txn = db.begin().await?;
+    let now = Utc::now();
+    let mut active = existing.into_active_model();
+    active.repo_url = Set(repo_url);
+    active.branch = Set(branch);
+    active.ssh_key_name = Set(ssh_key_name);
+    active.updated_at = Set(now);
+    let model = active.update(&txn).await.map_err(|error| {
+        SiteError::internal(format!(
+            "failed to update theme metadata for {slug}: {error}"
+        ))
+    })?;
+    log_audit_event(
+        &txn,
+        actor_sub,
+        "edit_theme",
+        "theme_registry",
+        &model.slug,
+        None,
+        Some(serde_json::json!({
+            "slug": model.slug,
+            "repo_url": model.repo_url,
+            "branch": model.branch,
+            "ssh_key_name": model.ssh_key_name,
+        })),
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to log theme edit audit: {error}")))?;
+    txn.commit().await?;
     Ok(model)
 }
 
@@ -665,32 +1228,65 @@ mod tests {
     }
 
     #[test]
-    fn theme_clone_url_converts_common_forge_ssh_urls_to_https() {
-        assert_eq!(
-            theme_clone_url("git@github.com:owner/theme.git")
-                .expect("failed to convert github scp-style url"),
-            "https://github.com/owner/theme.git"
-        );
-        assert_eq!(
-            theme_clone_url("ssh://git@gitlab.com/owner/theme.git")
-                .expect("failed to convert gitlab ssh url"),
-            "https://gitlab.com/owner/theme.git"
-        );
-        assert_eq!(
-            theme_clone_url("ssh://git@bitbucket.org/owner/theme.git")
-                .expect("failed to convert bitbucket ssh url"),
-            "https://bitbucket.org/owner/theme.git"
+    fn ssh_repo_urls_are_kept_as_ssh() {
+        assert!(is_ssh_repo_url("git@github.com:owner/theme.git"));
+        assert!(is_ssh_repo_url("ssh://git@gitlab.com/owner/theme.git"));
+        assert!(is_ssh_repo_url(
+            "git+ssh://git@bitbucket.org/owner/theme.git"
+        ));
+        assert!(!is_ssh_repo_url("https://github.com/owner/theme.git"));
+    }
+
+    #[test]
+    fn theme_ssh_key_names_reject_path_traversal() {
+        let error = normalize_theme_ssh_key_name(Some("../id_ed25519".to_string()))
+            .expect_err("path traversal key name should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("selected from the configured key directory")
         );
     }
 
     #[test]
-    fn theme_clone_url_rejects_unsupported_ssh_hosts_before_clone() {
-        let error = theme_clone_url("git@example.com:owner/theme.git")
-            .expect_err("unsupported ssh host should fail before gix clone");
+    fn ssh_clone_config_requires_selected_key() {
+        let key_dir = Path::new("/tmp/theme-keys");
         assert!(
-            error
-                .to_string()
-                .contains("does not invoke an external ssh program")
+            resolve_theme_ssh_key_path(key_dir, None, "git@example.com:owner/theme.git").is_err()
+        );
+        assert!(
+            resolve_theme_ssh_key_path(key_dir, None, "https://example.com/owner/theme.git")
+                .expect("https clone should not need key")
+                .is_none()
+        );
+        assert_eq!(
+            resolve_theme_ssh_key_path(
+                key_dir,
+                Some("id_ed25519"),
+                "git@example.com:owner/theme.git"
+            )
+            .expect("ssh key should resolve"),
+            Some(key_dir.join("id_ed25519"))
+        );
+    }
+
+    #[tokio::test]
+    async fn list_theme_ssh_keys_filters_and_sorts_entries() {
+        let key_dir = TempDir::new().expect("failed to create ssh key dir");
+        std::fs::write(key_dir.path().join("z_key"), "key").expect("failed to write key");
+        std::fs::write(key_dir.path().join("a_key"), "key").expect("failed to write key");
+        std::fs::write(key_dir.path().join("a_key.pub"), "pub").expect("failed to write pub key");
+        std::fs::write(key_dir.path().join(".hidden"), "key").expect("failed to write hidden key");
+        std::fs::write(key_dir.path().join("known_hosts"), "host")
+            .expect("failed to write known hosts");
+        std::fs::create_dir(key_dir.path().join("nested")).expect("failed to create nested dir");
+
+        let keys = list_theme_ssh_keys(key_dir.path())
+            .await
+            .expect("failed to enumerate ssh keys");
+        assert_eq!(
+            keys.into_iter().map(|key| key.name).collect::<Vec<_>>(),
+            vec!["a_key".to_string(), "z_key".to_string()]
         );
     }
 
@@ -738,15 +1334,20 @@ mod tests {
     async fn install_then_update_theme_refreshes_cloned_content() {
         let db = test_db_start().await;
         let templates_root = seed_site_templates_root();
+        let ssh_key_dir = TempDir::new().expect("failed to create ssh key dir");
+        let known_hosts = TempDir::new().expect("failed to create known hosts dir");
         let repo = create_theme_repo();
         let install = install_theme(
             &db,
             "actor",
             templates_root.path(),
+            ssh_key_dir.path(),
+            &known_hosts.path().join("known_hosts"),
             ThemeInstallRequest {
                 slug: Some("sample-theme".to_string()),
                 repo_url: repo.path().to_string_lossy().to_string(),
                 branch: None,
+                ssh_key_name: None,
             },
         )
         .await
@@ -759,9 +1360,16 @@ mod tests {
         assert_eq!(initial, "version-one");
 
         commit_theme_update(repo.path(), "version-two", "update theme");
-        let updated = update_theme(&db, "actor", "sample-theme", templates_root.path())
-            .await
-            .expect("failed to update theme");
+        let updated = update_theme(
+            &db,
+            "actor",
+            "sample-theme",
+            templates_root.path(),
+            ssh_key_dir.path(),
+            &known_hosts.path().join("known_hosts"),
+        )
+        .await
+        .expect("failed to update theme");
         assert_eq!(updated.slug, "sample-theme");
 
         let refreshed = std::fs::read_to_string(&installed_file)

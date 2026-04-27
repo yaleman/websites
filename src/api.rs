@@ -1290,6 +1290,12 @@ mod tests {
             upload_root: upload_root.to_path_buf(),
             log_path: resolve_log_path(),
             site_templates_root: site_templates_root.to_path_buf(),
+            theme_ssh_key_dir: std::env::temp_dir()
+                .join(format!("websites-theme-ssh-keys-test-{}", Uuid::now_v7())),
+            theme_ssh_known_hosts_path: std::env::temp_dir().join(format!(
+                "websites-theme-known-hosts-test-{}",
+                Uuid::now_v7()
+            )),
             rendered_root: std::env::temp_dir()
                 .join(format!("websites-rendered-test-{}", Uuid::now_v7())),
         }

@@ -8,6 +8,7 @@ pub(crate) async fn admin_themes(
 ) -> Result<AdminThemesTemplate, SiteError> {
     require_global_admin(&session).await?;
     let themes = theme_admin_rows(state.db.as_ref(), state.site_templates_root.as_path()).await?;
+    let ssh_keys = list_theme_ssh_keys(&state.theme_ssh_key_dir).await?;
     let template_shared = AdminTemplateData::new("Themes");
     let template_shared = if query.installed.is_some() {
         template_shared.with_toast_message(&"Theme installed.", &"installed")
@@ -22,6 +23,7 @@ pub(crate) async fn admin_themes(
     Ok(AdminThemesTemplate {
         template_shared,
         themes,
+        ssh_keys,
     })
 }
 
@@ -54,17 +56,68 @@ pub(crate) async fn admin_themes_create(
                 Some(trimmed)
             }
         }),
+        ssh_key_name: form.ssh_key_name,
     };
     let model = install_theme(
         state.db.as_ref(),
         &actor,
         state.site_templates_root.as_path(),
+        &state.theme_ssh_key_dir,
+        &state.theme_ssh_known_hosts_path,
         request,
     )
     .await?;
 
     Ok(Redirect::to(&format!(
         "/admin/themes?installed={}",
+        model.slug
+    )))
+}
+
+pub(crate) async fn admin_theme_edit(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(slug): Path<String>,
+) -> Result<AdminThemeEditTemplate, SiteError> {
+    require_global_admin(&session).await?;
+    let theme = get_theme(
+        state.db.as_ref(),
+        state.site_templates_root.as_path(),
+        &slug,
+    )
+    .await?;
+    let ssh_keys = list_theme_ssh_keys(&state.theme_ssh_key_dir).await?;
+    Ok(AdminThemeEditTemplate {
+        template_shared: AdminTemplateData::new("Edit Theme"),
+        slug: theme.slug,
+        repo_url: theme.repo_url,
+        branch: theme.branch.unwrap_or_default(),
+        ssh_key_name: theme.ssh_key_name.unwrap_or_default(),
+        ssh_keys,
+    })
+}
+
+pub(crate) async fn admin_theme_edit_update(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(slug): Path<String>,
+    Form(form): Form<ThemeEditForm>,
+) -> Result<Redirect, SiteError> {
+    let actor = require_global_admin(&session).await?.subject;
+    let model = update_theme_metadata(
+        state.db.as_ref(),
+        &actor,
+        &slug,
+        state.site_templates_root.as_path(),
+        ThemeUpdateRequest {
+            repo_url: form.repo_url,
+            branch: form.branch,
+            ssh_key_name: form.ssh_key_name,
+        },
+    )
+    .await?;
+    Ok(Redirect::to(&format!(
+        "/admin/themes?updated={}",
         model.slug
     )))
 }
@@ -80,6 +133,8 @@ pub(crate) async fn admin_theme_update(
         &actor,
         &slug,
         state.site_templates_root.as_path(),
+        &state.theme_ssh_key_dir,
+        &state.theme_ssh_known_hosts_path,
     )
     .await?;
 

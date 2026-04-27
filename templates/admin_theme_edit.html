@@ -1,0 +1,35 @@
+{% extends "base_template.html" %}
+{% block body %}
+<section class="surface grid gap-4 p-4 md:p-6">
+  <h2>Edit Theme</h2>
+  <form method="post" action="/admin/themes/{{ slug }}/edit" class="stack-form">
+    <div class="form-field">
+      <label for="repo_url">Repository URL</label>
+      <input id="repo_url" name="repo_url" value="{{ repo_url }}" required />
+    </div>
+
+    <div class="form-field">
+      <label for="branch">Branch</label>
+      <input id="branch" name="branch" value="{{ branch }}" placeholder="optional" />
+    </div>
+
+    <div class="form-field">
+      <label for="ssh_key_name">SSH Key</label>
+      <select id="ssh_key_name" name="ssh_key_name">
+        <option value="" {% if ssh_key_name.is_empty() %}selected{% endif %}>None</option>
+        {% for key in ssh_keys %}
+        <option value="{{ key.name }}" {% if key.name == ssh_key_name %}selected{% endif %}>{{ key.name }}</option>
+        {% endfor %}
+      </select>
+      {% if ssh_keys.is_empty() %}
+      <p class="inline-body">No SSH keys are available.</p>
+      {% endif %}
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn">Save theme</button>
+      <a href="/admin/themes" class="btn">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}
