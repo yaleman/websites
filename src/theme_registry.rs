@@ -12,6 +12,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use tokio::fs;
+use url::Url;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -84,6 +85,61 @@ fn theme_branch_display(branch: Option<&str>) -> String {
     branch.unwrap_or("default branch").to_string()
 }
 
+fn https_url_for_known_ssh_host(host: &str, path: &str) -> Option<String> {
+    match host {
+        "github.com" | "gitlab.com" | "bitbucket.org" => {
+            let normalized_path = path.trim_start_matches('/');
+            if normalized_path.is_empty() {
+                None
+            } else {
+                Some(format!("https://{host}/{normalized_path}"))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn unsupported_ssh_repo_url(repo_url: &str) -> SiteError {
+    SiteError::BadRequest(format!(
+        "SSH theme repo URLs must be converted to HTTPS before cloning because the server does not invoke an external ssh program: {repo_url}"
+    ))
+}
+
+fn theme_clone_url(repo_url: &str) -> Result<String, SiteError> {
+    let trimmed = repo_url.trim();
+    if trimmed.is_empty() {
+        return Err(SiteError::BadRequest(
+            "theme repo URL cannot be empty".to_string(),
+        ));
+    }
+
+    if let Ok(parsed) = Url::parse(trimmed) {
+        return match parsed.scheme() {
+            "ssh" => {
+                let host = parsed
+                    .host_str()
+                    .ok_or_else(|| unsupported_ssh_repo_url(trimmed))?;
+                https_url_for_known_ssh_host(host, parsed.path())
+                    .ok_or_else(|| unsupported_ssh_repo_url(trimmed))
+            }
+            "git+ssh" => Err(unsupported_ssh_repo_url(trimmed)),
+            _ => Ok(trimmed.to_string()),
+        };
+    }
+
+    if let Some((host_part, repo_path)) = trimmed.split_once(':')
+        && !host_part.contains('/')
+    {
+        let host = host_part.rsplit('@').next().unwrap_or(host_part);
+        if let Some(https_url) = https_url_for_known_ssh_host(host, repo_path) {
+            return Ok(https_url);
+        }
+        return Err(unsupported_ssh_repo_url(trimmed));
+    }
+
+    Ok(trimmed.to_string())
+}
+
 async fn read_installed_theme_remote(
     repo_path: &Path,
 ) -> Result<(String, Option<String>), SiteError> {
@@ -96,6 +152,7 @@ async fn read_installed_theme_remote(
         .url(gix::remote::Direction::Fetch)
         .ok_or_else(|| SiteError::internal("theme repo is missing a fetch URL"))?
         .to_string();
+    let repo_url = theme_clone_url(&repo_url)?;
     let branch = repo
         .head_name()
         .map_err(|error| SiteError::internal(format!("failed to read theme branch: {error}")))?;
@@ -265,7 +322,7 @@ pub async fn theme_admin_rows(
 }
 
 async fn clone_theme_repo(
-    repo_url: String,
+    clone_url: String,
     destination: PathBuf,
     branch: Option<String>,
 ) -> Result<(), SiteError> {
@@ -287,7 +344,7 @@ async fn clone_theme_repo(
         }
 
         let should_interrupt = AtomicBool::new(false);
-        let mut clone = gix::prepare_clone(repo_url, &destination).map_err(|error| {
+        let mut clone = gix::prepare_clone(clone_url, &destination).map_err(|error| {
             SiteError::internal(format!("failed to prepare theme clone: {error}"))
         })?;
         if let Some(branch) = branch.as_deref() {
@@ -323,6 +380,7 @@ pub async fn install_theme(
         .branch
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
+    let clone_url = theme_clone_url(&request.repo_url)?;
     let theme_dir = theme_path(templates_root, &slug);
 
     sync_discovered_themes(db, templates_root).await?;
@@ -338,7 +396,7 @@ pub async fn install_theme(
         )));
     }
 
-    clone_theme_repo(request.repo_url.clone(), theme_dir.clone(), branch.clone()).await?;
+    clone_theme_repo(clone_url.clone(), theme_dir.clone(), branch.clone()).await?;
 
     let detected_branch = if branch.is_some() {
         branch.clone()
@@ -359,7 +417,7 @@ pub async fn install_theme(
     let model = theme_registry::ActiveModel {
         id: Set(Uuid::now_v7()),
         slug: Set(slug.clone()),
-        repo_url: Set(request.repo_url.clone()),
+        repo_url: Set(clone_url),
         branch: Set(detected_branch.clone()),
         created_at: Set(now),
         updated_at: Set(now),
@@ -603,6 +661,36 @@ mod tests {
         assert_eq!(
             normalize_theme_slug("My Theme").expect("failed to normalize slug"),
             "my-theme"
+        );
+    }
+
+    #[test]
+    fn theme_clone_url_converts_common_forge_ssh_urls_to_https() {
+        assert_eq!(
+            theme_clone_url("git@github.com:owner/theme.git")
+                .expect("failed to convert github scp-style url"),
+            "https://github.com/owner/theme.git"
+        );
+        assert_eq!(
+            theme_clone_url("ssh://git@gitlab.com/owner/theme.git")
+                .expect("failed to convert gitlab ssh url"),
+            "https://gitlab.com/owner/theme.git"
+        );
+        assert_eq!(
+            theme_clone_url("ssh://git@bitbucket.org/owner/theme.git")
+                .expect("failed to convert bitbucket ssh url"),
+            "https://bitbucket.org/owner/theme.git"
+        );
+    }
+
+    #[test]
+    fn theme_clone_url_rejects_unsupported_ssh_hosts_before_clone() {
+        let error = theme_clone_url("git@example.com:owner/theme.git")
+            .expect_err("unsupported ssh host should fail before gix clone");
+        assert!(
+            error
+                .to_string()
+                .contains("does not invoke an external ssh program")
         );
     }
 
