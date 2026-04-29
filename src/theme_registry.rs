@@ -173,7 +173,8 @@ pub async fn list_theme_ssh_keys(key_dir: &Path) -> Result<Vec<ThemeSshKeyOption
         let Ok(file_type) = entry.file_type().await else {
             continue;
         };
-        if !file_type.is_file() {
+        if !file_type.is_file() && !file_type.is_symlink() {
+            // symlinks are required in k8s
             continue;
         }
         if fs::File::open(entry.path()).await.is_err() {
@@ -1287,6 +1288,26 @@ mod tests {
         assert_eq!(
             keys.into_iter().map(|key| key.name).collect::<Vec<_>>(),
             vec!["a_key".to_string(), "z_key".to_string()]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_theme_ssh_keys_includes_readable_symlinked_key() {
+        let key_dir = TempDir::new().expect("failed to create ssh key dir");
+        let target_key = key_dir.path().join("mounted-key-target");
+        let symlink_key = key_dir.path().join("mounted-key");
+        std::fs::write(&target_key, "key").expect("failed to write symlink target key");
+        std::os::unix::fs::symlink(&target_key, &symlink_key)
+            .expect("failed to create symlinked key");
+
+        let keys = list_theme_ssh_keys(key_dir.path())
+            .await
+            .expect("failed to enumerate ssh keys");
+
+        assert!(
+            keys.iter().any(|key| key.name == "mounted-key"),
+            "symlinked ssh key should be selectable"
         );
     }
 
