@@ -10,6 +10,7 @@ pub struct Model {
     pub slug: String,
     pub repo_url: String,
     pub branch: Option<String>,
+    pub ssh_key_name: Option<String>,
     pub created_at: ChronoDateTime<Utc>,
     pub updated_at: ChronoDateTime<Utc>,
 }

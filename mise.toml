@@ -1,6 +1,6 @@
 [tools]
 "github:xd009642/tarpaulin" = "latest"
-pnpm = "10.30.3"
+pnpm = "latest"
 python = "3.13"
 semgrep = "latest"
 

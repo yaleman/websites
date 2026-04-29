@@ -147,6 +147,10 @@ pub(crate) fn build_admin_app(
         )
         .route("/admin/themes", get(admin_themes).post(admin_themes_create))
         .route(
+            "/admin/themes/{slug}/edit",
+            get(admin_theme_edit).post(admin_theme_edit_update),
+        )
+        .route(
             "/admin/themes/{slug}/update",
             axum::routing::post(admin_theme_update),
         )
@@ -189,6 +193,7 @@ pub(crate) fn build_admin_app(
         .with_state(state)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_admin_server(
     db: Arc<DatabaseConnection>,
     listen: &str,
@@ -197,6 +202,8 @@ pub async fn run_admin_server(
     upload_root: PathBuf,
     rendered_root: PathBuf,
     log_path: PathBuf,
+    theme_ssh_key_dir: PathBuf,
+    theme_ssh_known_hosts_path: PathBuf,
 ) -> Result<(), anyhow::Error> {
     let jwt_secret = ensure_jwt_hs256_secret(db.as_ref())
         .await
@@ -217,6 +224,8 @@ pub async fn run_admin_server(
         log_path: log_path.clone(),
         site_templates_root,
         rendered_root,
+        theme_ssh_key_dir,
+        theme_ssh_known_hosts_path,
     };
 
     let pool = db.get_sqlite_connection_pool();

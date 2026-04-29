@@ -1133,6 +1133,12 @@ fn test_admin_state(db: std::sync::Arc<DatabaseConnection>) -> AdminState {
             .join(format!("websites-templates-test-{}", Uuid::now_v7())),
         rendered_root: std::env::temp_dir()
             .join(format!("websites-rendered-test-{}", Uuid::now_v7())),
+        theme_ssh_key_dir: std::env::temp_dir()
+            .join(format!("websites-theme-keys-test-{}", Uuid::now_v7())),
+        theme_ssh_known_hosts_path: std::env::temp_dir().join(format!(
+            "websites-theme-known-hosts-test-{}",
+            Uuid::now_v7()
+        )),
     }
 }
 

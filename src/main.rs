@@ -51,6 +51,8 @@ async fn main() {
         &upload_root,
         &cli.rendered_dir,
         &cli.log_path,
+        &cli.theme_ssh_key_dir,
+        &cli.theme_ssh_known_hosts_path,
         &cli.oidc,
     )
     .await
