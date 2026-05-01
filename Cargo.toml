@@ -10,7 +10,7 @@ default-run = "websites"
 [dependencies]
 anyhow = "1.0.102"
 askama = "0.15.4"
-askama_web = { version = "0.15.2", features = ["axum-0.8", "tracing-0.1"] }
+askama_web = { version = "0.16.0", features = ["axum-0.8", "tracing-0.1"] }
 async-trait = "0.1.89"
 aws-config = "1.8.16"
 aws-credential-types = "1.2.14"
