@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, atomic::AtomicBool};
 use tokio::fs;
 use tokio_util::io::SyncIoBridge;
+use url::Url;
 use uuid::Uuid;
 
 type BlockingGitTransport = gix_transport::client::git::blocking_io::Connection<
@@ -112,13 +113,46 @@ fn theme_key_display(key_name: Option<&str>) -> String {
     key_name.unwrap_or("None").to_string()
 }
 
-fn is_ssh_repo_url(repo_url: &str) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThemeRepoKind {
+    LocalPath,
+    Https,
+    Ssh,
+}
+
+fn classify_theme_repo_url(repo_url: &str) -> Result<ThemeRepoKind, SiteError> {
     let trimmed = repo_url.trim();
-    trimmed.starts_with("ssh://")
-        || trimmed.starts_with("git+ssh://")
-        || trimmed
-            .split_once(':')
-            .is_some_and(|(host_part, _)| host_part.contains('@') && !host_part.contains('/'))
+    if trimmed.is_empty() {
+        return Err(SiteError::BadRequest("missing repository url".to_string()));
+    }
+    if !trimmed.contains("://") {
+        if trimmed.contains('@') && trimmed.contains(':') {
+            return Err(SiteError::BadRequest(
+                "scp-style SSH theme repository URLs are not supported; use ssh://".to_string(),
+            ));
+        }
+        return Ok(ThemeRepoKind::LocalPath);
+    }
+
+    let parsed = Url::parse(trimmed)
+        .map_err(|error| SiteError::BadRequest(format!("invalid theme repository URL: {error}")))?;
+    match parsed.scheme() {
+        "https" => Ok(ThemeRepoKind::Https),
+        "ssh" => Ok(ThemeRepoKind::Ssh),
+        "git" => Err(SiteError::BadRequest(
+            "git:// theme repository URLs are not supported; use ssh:// or https://".to_string(),
+        )),
+        "git+ssh" => Err(SiteError::BadRequest(
+            "git+ssh:// theme repository URLs are not supported; use ssh://".to_string(),
+        )),
+        scheme => Err(SiteError::BadRequest(format!(
+            "unsupported theme repository URL scheme {scheme}; use ssh:// or https://"
+        ))),
+    }
+}
+
+fn is_ssh_repo_url(repo_url: &str) -> bool {
+    matches!(classify_theme_repo_url(repo_url), Ok(ThemeRepoKind::Ssh))
 }
 
 fn normalize_theme_ssh_key_name(input: Option<String>) -> Result<Option<String>, SiteError> {
@@ -490,7 +524,7 @@ fn parse_ssh_repo_url(repo_url: &str) -> Result<SshRepoUrl, SiteError> {
             user: user.to_string(),
             host: host.to_string(),
             port,
-            path: format!("/{path}"),
+            path: path.to_string(),
         });
     }
 
@@ -783,6 +817,7 @@ async fn clone_theme_repo(
     ssh_key_path: Option<PathBuf>,
     known_hosts_path: PathBuf,
 ) -> Result<(), SiteError> {
+    let repo_kind = classify_theme_repo_url(&repo_url)?;
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).await.map_err(|error| {
             SiteError::internal(format!(
@@ -799,7 +834,7 @@ async fn clone_theme_repo(
                 destination.display()
             )));
         }
-        if is_ssh_repo_url(&repo_url) {
+        if repo_kind == ThemeRepoKind::Ssh {
             let key_path = ssh_key_path.ok_or_else(|| {
                 SiteError::BadRequest(
                     "SSH theme repositories require a selected SSH key".to_string(),
@@ -845,6 +880,7 @@ pub async fn install_theme(
     known_hosts_path: &Path,
     request: ThemeInstallRequest,
 ) -> Result<theme_registry::Model, SiteError> {
+    classify_theme_repo_url(&request.repo_url)?;
     let slug = match request.slug {
         Some(slug) if !slug.trim().is_empty() => normalize_theme_slug(&slug)?,
         _ => normalize_theme_slug(&derive_theme_slug(&request.repo_url))?,
@@ -1044,6 +1080,7 @@ pub async fn update_theme_metadata(
     actor_sub: &str,
     slug: &str,
     templates_root: &Path,
+    ssh_key_dir: &Path,
     request: ThemeUpdateRequest,
 ) -> Result<theme_registry::Model, SiteError> {
     sync_discovered_themes(db, templates_root).await?;
@@ -1054,14 +1091,13 @@ pub async fn update_theme_metadata(
         .map_err(|error| SiteError::internal(format!("failed to load theme {slug}: {error}")))?
         .ok_or_else(|| SiteError::SiteNotFound(slug.to_string()))?;
     let repo_url = request.repo_url.trim().to_string();
-    if repo_url.is_empty() {
-        return Err(SiteError::BadRequest("missing repository url".to_string()));
-    }
+    classify_theme_repo_url(&repo_url)?;
     let branch = request
         .branch
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let ssh_key_name = normalize_theme_ssh_key_name(request.ssh_key_name)?;
+    resolve_theme_ssh_key_path(ssh_key_dir, ssh_key_name.as_deref(), &repo_url)?;
 
     let txn = db.begin().await?;
     let now = Utc::now();
@@ -1229,13 +1265,52 @@ mod tests {
     }
 
     #[test]
-    fn ssh_repo_urls_are_kept_as_ssh() {
-        assert!(is_ssh_repo_url("git@github.com:owner/theme.git"));
-        assert!(is_ssh_repo_url("ssh://git@gitlab.com/owner/theme.git"));
-        assert!(is_ssh_repo_url(
-            "git+ssh://git@bitbucket.org/owner/theme.git"
+    fn theme_repo_urls_only_allow_https_ssh_or_local_paths() {
+        assert!(matches!(
+            classify_theme_repo_url("ssh://git@gitlab.com/owner/theme.git"),
+            Ok(ThemeRepoKind::Ssh)
         ));
-        assert!(!is_ssh_repo_url("https://github.com/owner/theme.git"));
+        assert!(matches!(
+            classify_theme_repo_url("https://github.com/owner/theme.git"),
+            Ok(ThemeRepoKind::Https)
+        ));
+        assert!(matches!(
+            classify_theme_repo_url("/tmp/theme-repo"),
+            Ok(ThemeRepoKind::LocalPath)
+        ));
+    }
+
+    #[test]
+    fn theme_repo_urls_reject_unsupported_git_schemes() {
+        assert!(
+            classify_theme_repo_url("git://github.com/owner/theme.git")
+                .expect_err("git protocol should be rejected")
+                .to_string()
+                .contains("git://")
+        );
+        assert!(
+            classify_theme_repo_url("git+ssh://git@github.com/owner/theme.git")
+                .expect_err("git+ssh protocol should be rejected")
+                .to_string()
+                .contains("use ssh://")
+        );
+        assert!(
+            classify_theme_repo_url("git@github.com:owner/theme.git")
+                .expect_err("scp-style ssh should be rejected")
+                .to_string()
+                .contains("scp-style SSH")
+        );
+    }
+
+    #[test]
+    fn ssh_repo_url_parser_keeps_standard_repo_path_relative() {
+        let parsed = parse_ssh_repo_url("ssh://git@github.com/owner/theme.git")
+            .expect("failed to parse ssh repo url");
+        assert_eq!(parsed.path, "owner/theme.git");
+
+        let absolute = parse_ssh_repo_url("ssh://git@example.com//srv/git/theme.git")
+            .expect("failed to parse absolute ssh repo url");
+        assert_eq!(absolute.path, "/srv/git/theme.git");
     }
 
     #[test]
@@ -1253,7 +1328,8 @@ mod tests {
     fn ssh_clone_config_requires_selected_key() {
         let key_dir = Path::new("/tmp/theme-keys");
         assert!(
-            resolve_theme_ssh_key_path(key_dir, None, "git@example.com:owner/theme.git").is_err()
+            resolve_theme_ssh_key_path(key_dir, None, "ssh://git@example.com/owner/theme.git")
+                .is_err()
         );
         assert!(
             resolve_theme_ssh_key_path(key_dir, None, "https://example.com/owner/theme.git")
@@ -1264,7 +1340,7 @@ mod tests {
             resolve_theme_ssh_key_path(
                 key_dir,
                 Some("id_ed25519"),
-                "git@example.com:owner/theme.git"
+                "ssh://git@example.com/owner/theme.git"
             )
             .expect("ssh key should resolve"),
             Some(key_dir.join("id_ed25519"))

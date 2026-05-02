@@ -109,6 +109,7 @@ pub(crate) async fn admin_theme_edit_update(
         &actor,
         &slug,
         state.site_templates_root.as_path(),
+        &state.theme_ssh_key_dir,
         ThemeUpdateRequest {
             repo_url: form.repo_url,
             branch: form.branch,
