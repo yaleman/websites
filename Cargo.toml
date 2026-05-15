@@ -38,7 +38,7 @@ image = "0.25.10"
 markdown = "1.0.0"
 mime_guess = "2.0.5"
 openidconnect = { version = "4.0.1", features = ["reqwest"] }
-quick-xml = "0.39.3"
+quick-xml = "0.40.0"
 rand = "0.10.1"
 regex = "1.12.3"
 reqwest = { version = "0.12", default-features = false, features = [
