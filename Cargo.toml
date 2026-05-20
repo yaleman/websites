@@ -38,7 +38,7 @@ image = "0.25.10"
 markdown = "1.0.0"
 mime_guess = "2.0.5"
 openidconnect = { version = "4.0.1", features = ["reqwest"] }
-quick-xml = "0.40.0"
+quick-xml = "0.40.1"
 rand = "0.10.1"
 regex = "1.12.3"
 reqwest = { version = "0.12", default-features = false, features = [
@@ -82,7 +82,7 @@ tokio-util = { version = "0.7.18", default-features = false, features = [
     "io",
     "io-util",
 ] }
-tower-http = { version = "0.6.10", features = ["fs"] }
+tower-http = { version = "0.6.11", features = ["fs"] }
 tower-sessions = "0.15.0"
 # TODO: remove this vendored tower-sessions-sqlx-store dependency once the upstream dependencies are updated.
 tower-sessions-sqlx-store = { path = "vendor/tower-sessions-sqlx-store", features = [
