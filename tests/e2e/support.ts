@@ -912,8 +912,20 @@ export async function createAuthenticatedApiContext(
 	const api = await playwrightRequest.newContext({
 		baseURL: harness.baseUrl,
 		ignoreHTTPSErrors: true,
-		extraHTTPHeaders: {
-			Cookie: `id=${sessionId}`,
+		storageState: {
+			cookies: [
+				{
+					name: "id",
+					value: sessionId,
+					domain: "127.0.0.1",
+					path: "/",
+					expires: -1,
+					httpOnly: false,
+					secure: true,
+					sameSite: "Lax",
+				},
+			],
+			origins: [],
 		},
 	});
 	return { api, sessionId };
