@@ -63,17 +63,21 @@ jobs:
         if: steps.changed-files.outputs.should_repair == 'true'
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      - name: Regenerate admin assets for lockfile-driven frontend updates
+        if: steps.changed-files.outputs.should_repair == 'true'
+        run: pnpm run build:admin
+
       - name: Commit lockfile repair
         id: commit-lockfile-repair
         env:
           HEAD_REF: ${{ github.head_ref }}
         run: |
           pushed_fix=false
-          if [ "${{ steps.changed-files.outputs.should_repair }}" = "true" ] && ! git diff --quiet -- package.json; then
+          if [ "${{ steps.changed-files.outputs.should_repair }}" = "true" ] && ! git diff --quiet -- package.json admin-ui-assets; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add package.json
-            git commit -m "Repair pnpm override config"
+            git add package.json admin-ui-assets
+            git commit -m "Repair pnpm frontend outputs"
             git push origin "HEAD:${HEAD_REF}"
             pushed_fix=true
           fi
