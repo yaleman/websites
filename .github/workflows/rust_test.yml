@@ -10,7 +10,82 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  repair_pnpm_lockfile:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      pushed_fix: ${{ steps.commit-lockfile-repair.outputs.pushed_fix }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Check whether this run should repair a Dependabot pnpm PR first
+        id: changed-files
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          should_repair=false
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] && [ "${PR_AUTHOR}" = "dependabot[bot]" ]; then
+            git fetch origin "${GITHUB_BASE_REF}"
+            if git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD" | grep -Fxq "pnpm-lock.yaml"; then
+              should_repair=true
+            fi
+          fi
+
+          echo "should_repair=${should_repair}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Rust toolchain
+        if: steps.changed-files.outputs.should_repair == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up pnpm
+        if: steps.changed-files.outputs.should_repair == 'true'
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.30.3
+          run_install: false
+
+      - name: Set up Node.js
+        if: steps.changed-files.outputs.should_repair == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Repair package.json pnpm overrides from the updated lockfile
+        if: steps.changed-files.outputs.should_repair == 'true'
+        run: cargo run --quiet --manifest-path tools/repair-pnpm-lockfile/Cargo.toml -- .
+
+      - name: Install frontend dependencies without package scripts
+        if: steps.changed-files.outputs.should_repair == 'true'
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Commit lockfile repair
+        id: commit-lockfile-repair
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          pushed_fix=false
+          if [ "${{ steps.changed-files.outputs.should_repair }}" = "true" ] && ! git diff --quiet -- package.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add package.json
+            git commit -m "Repair pnpm override config"
+            git push origin "HEAD:${HEAD_REF}"
+            pushed_fix=true
+          fi
+
+          echo "pushed_fix=${pushed_fix}" >> "${GITHUB_OUTPUT}"
+
+  # Keep the legacy rust_test job name because branch protection requires it,
+  # even though this job now covers mixed Rust, frontend, and generated-artifact checks.
   rust_test:
+    needs:
+      - repair_pnpm_lockfile
+    if: ${{ needs.repair_pnpm_lockfile.outputs.pushed_fix != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -144,3 +219,32 @@ jobs:
 
       - name: Run end-to-end tests
         run: pnpm exec playwright test
+
+  build_container:
+    needs:
+      - rust_test
+    uses: docker/github-builder/.github/workflows/build.yml@v1
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    with:
+      output: image
+      platforms: linux/amd64,linux/arm64
+      push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      distribute: true
+      setup-qemu: false
+      cache: true
+      cache-mode: max
+      cache-scope: websites-container
+      context: .
+      file: ./Dockerfile
+      meta-images: ghcr.io/${{ github.repository }}
+      meta-tags: |
+        type=sha,prefix=sha-
+        type=raw,value=latest
+    secrets:
+      registry-auths: |
+        - registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}

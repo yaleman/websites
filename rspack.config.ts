@@ -28,6 +28,7 @@ export default defineConfig({
 			{
 				test: /\.css$/,
 				use: ["postcss-loader"],
+				type: "css",
 			},
 		],
 	},
