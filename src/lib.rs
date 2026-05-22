@@ -61,6 +61,7 @@ pub mod images;
 pub mod middleware;
 pub mod migration;
 pub mod oidc;
+pub mod pnpm_lockfile_repair;
 pub mod publish;
 pub mod site_export;
 pub mod telemetry;

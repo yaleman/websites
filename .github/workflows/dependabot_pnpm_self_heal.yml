@@ -1,5 +1,4 @@
----
-name: Dependabot pnpm self-heal
+name: Dependabot pnpm lockfile repair
 
 "on": pull_request
 
@@ -8,7 +7,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  sync_pnpm_overrides:
+  repair_pnpm_lockfile:
     runs-on: ubuntu-latest
     if: ${{ github.actor == 'dependabot[bot]' }}
     steps:
@@ -16,6 +15,9 @@ jobs:
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
@@ -28,7 +30,7 @@ jobs:
         with:
           node-version: 22
 
-      - name: Check whether pnpm-lock.yaml changed
+      - name: Check whether the Dependabot PR changes pnpm-lock.yaml
         id: changed-files
         run: |
           git fetch origin "${GITHUB_BASE_REF}"
@@ -38,15 +40,15 @@ jobs:
             echo "lockfile_changed=false" >> "${GITHUB_OUTPUT}"
           fi
 
-      - name: Sync pnpm overrides into package.json
+      - name: Repair package.json pnpm overrides from the updated lockfile
         if: steps.changed-files.outputs.lockfile_changed == 'true'
-        run: node scripts/sync-pnpm-overrides.mjs .
+        run: cargo run --quiet --bin repair_pnpm_lockfile -- .
 
       - name: Install frontend dependencies without package scripts
         if: steps.changed-files.outputs.lockfile_changed == 'true'
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Commit self-heal changes
+      - name: Commit lockfile repair
         if: steps.changed-files.outputs.lockfile_changed == 'true'
         run: |
           if git diff --quiet -- package.json; then
@@ -57,5 +59,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package.json
-          git commit -m "Sync pnpm overrides"
+          git commit -m "Repair pnpm override config"
           git push origin "HEAD:${GITHUB_HEAD_REF}"
