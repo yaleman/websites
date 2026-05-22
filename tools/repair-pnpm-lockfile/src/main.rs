@@ -1,19 +1,49 @@
+#![forbid(unsafe_code)]
+#![deny(warnings)]
+#![deny(deprecated)]
+#![warn(unused_extern_crates)]
+#![deny(clippy::suspicious)]
+#![deny(clippy::perf)]
+#![deny(clippy::todo)]
+#![deny(clippy::unimplemented)]
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
+#![deny(clippy::panic)]
+#![deny(clippy::await_holding_lock)]
+#![deny(clippy::needless_pass_by_value)]
+#![deny(clippy::trivially_copy_pass_by_ref)]
+#![deny(clippy::disallowed_types)]
+#![deny(clippy::manual_let_else)]
+#![deny(clippy::indexing_slicing)]
+#![deny(clippy::unreachable)]
+
+use clap::Parser;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 use yaml_rust::{Yaml, YamlLoader};
 
+#[derive(Debug, Parser)]
+#[command(
+    name = "repair-pnpm-lockfile",
+    about = "Repair package.json pnpm overrides from pnpm-lock.yaml"
+)]
+struct Cli {
+    #[arg(default_value = ".", value_name = "DIR")]
+    target_dir: PathBuf,
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum RepairOutcome {
+enum RepairOutcome {
     NoOverridesInLockfile,
     AlreadyConsistent,
     UpdatedPackageJson,
 }
 
 #[derive(Debug, Error)]
-pub enum RepairError {
+enum RepairError {
     #[error("failed to read {path}: {source}")]
     ReadFile {
         path: String,
@@ -44,7 +74,30 @@ pub enum RepairError {
     ParsePackageJson(#[from] serde_json::Error),
 }
 
-pub fn repair_package_json_from_lockfile(target_dir: &Path) -> Result<RepairOutcome, RepairError> {
+fn main() {
+    let cli = Cli::parse();
+    let outcome = match repair_package_json_from_lockfile(&cli.target_dir) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            eprintln!("error: {error}");
+            std::process::exit(1);
+        }
+    };
+
+    match outcome {
+        RepairOutcome::NoOverridesInLockfile => {
+            println!("No top-level overrides found in pnpm-lock.yaml; nothing to repair.");
+        }
+        RepairOutcome::AlreadyConsistent => {
+            println!("package.json already matches pnpm-lock.yaml overrides.");
+        }
+        RepairOutcome::UpdatedPackageJson => {
+            println!("Repaired package.json pnpm.overrides from pnpm-lock.yaml.");
+        }
+    }
+}
+
+fn repair_package_json_from_lockfile(target_dir: &Path) -> Result<RepairOutcome, RepairError> {
     let package_json_path = target_dir.join("package.json");
     let lockfile_path = target_dir.join("pnpm-lock.yaml");
 

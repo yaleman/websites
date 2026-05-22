@@ -42,7 +42,7 @@ jobs:
 
       - name: Repair package.json pnpm overrides from the updated lockfile
         if: steps.changed-files.outputs.lockfile_changed == 'true'
-        run: cargo run --quiet --bin repair_pnpm_lockfile -- .
+        run: cargo run --quiet --manifest-path tools/repair-pnpm-lockfile/Cargo.toml -- .
 
       - name: Install frontend dependencies without package scripts
         if: steps.changed-files.outputs.lockfile_changed == 'true'
