@@ -100,7 +100,7 @@ jobs:
           echo "WEBSITES_TLS_KEY_PATH=${RUNNER_TEMP}/tls/tls.key" >> "${GITHUB_ENV}"
 
       - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Install Playwright browser dependencies
         run: pnpm exec playwright install --with-deps chromium

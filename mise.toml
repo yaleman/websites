@@ -25,7 +25,7 @@ run = "cargo fmt --all --"
 run = "cargo test --all --quiet"
 
 [tasks.frontend_install]
-run = "pnpm install --frozen-lockfile"
+run = "pnpm install --frozen-lockfile --ignore-scripts"
 
 [tasks.frontend_build]
 depends = ["frontend_install", "openapi-to-ts"]
