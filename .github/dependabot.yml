@@ -12,6 +12,11 @@ updates:
   patterns:
   - "*"
   multi-ecosystem-group: dependencies
+- package-ecosystem: cargo
+  directory: /tools/repair-pnpm-lockfile
+  patterns:
+  - "*"
+  multi-ecosystem-group: dependencies
 - package-ecosystem: npm
   directory: /
   patterns:
