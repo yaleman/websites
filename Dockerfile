@@ -12,7 +12,7 @@ RUN corepack enable
 
 COPY package.json pnpm-lock.yaml /app/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile
+    pnpm install --frozen-lockfile --ignore-scripts
 
 COPY rspack.config.ts tsconfig.json /app/
 COPY assets /app/assets
