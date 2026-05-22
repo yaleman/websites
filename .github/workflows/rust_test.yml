@@ -10,6 +10,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Keep the legacy rust_test job name because branch protection requires it,
+  # even though this job now covers mixed Rust, frontend, and generated-artifact checks.
   rust_test:
     runs-on: ubuntu-latest
     steps:
@@ -144,3 +146,32 @@ jobs:
 
       - name: Run end-to-end tests
         run: pnpm exec playwright test
+
+  build_container:
+    needs:
+      - rust_test
+    uses: docker/github-builder/.github/workflows/build.yml@v1
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    with:
+      output: image
+      platforms: linux/amd64,linux/arm64
+      push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      distribute: true
+      setup-qemu: false
+      cache: true
+      cache-mode: max
+      cache-scope: websites-container
+      context: .
+      file: ./Dockerfile
+      meta-images: ghcr.io/${{ github.repository }}
+      meta-tags: |
+        type=sha,prefix=sha-
+        type=raw,value=latest
+    secrets:
+      registry-auths: |
+        - registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
