@@ -148,7 +148,7 @@ test.describe("content remediation", () => {
 				pageType: "page",
 				title: "Remote Image Page",
 				slug: "remote-image-page",
-				pageContent: `<img src="http://127.0.0.1:${address.port}/remote-banner.png" alt="Remote banner" />`,
+				pageContent: `<strong>Leave Me Bold</strong><img src="http://127.0.0.1:${address.port}/remote-banner.png" alt="Remote banner" />`,
 				creatorSub: subject,
 			});
 
@@ -164,10 +164,11 @@ test.describe("content remediation", () => {
 			);
 			await page.getByRole("button", { name: "Scan content" }).click();
 
-			const remoteCheckbox = page.getByLabel("Import remote image");
-			await expect(remoteCheckbox).toBeVisible();
-			await remoteCheckbox.check();
-			await page.getByRole("button", { name: "Apply selected fixes" }).click();
+			const remoteImportButton = page.getByRole("button", {
+				name: "Import remote image",
+			});
+			await expect(remoteImportButton).toBeVisible();
+			await remoteImportButton.click();
 
 			await expect(page.locator("body")).toContainText(
 				"Remote Image Page updated",
@@ -186,6 +187,12 @@ test.describe("content remediation", () => {
 			await expect(page.locator("#page_content")).toContainText("[[asset id=");
 			await expect(page.locator("#page_content")).toContainText(
 				'alt="Remote banner"',
+			);
+			await expect(page.locator("#page_content")).toContainText(
+				"<strong>Leave Me Bold</strong>",
+			);
+			await expect(page.locator("#page_content")).not.toContainText(
+				"**Leave Me Bold**",
 			);
 
 			await context.close();

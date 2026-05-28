@@ -156,14 +156,14 @@
             <div class="scan-issue__asset-actions">
               <button type="button" class="editor-button" data-pick-asset>Choose asset</button>
               {% if issue.can_import_remote %}
-              <label class="scan-issue__remote">
-                <input
-                  type="checkbox"
-                  name="remote_import_issue_id"
-                  value="{{ issue.issue_id }}"
-                  data-remote-import />
+              <button
+                type="submit"
+                class="editor-button"
+                name="remote_import_issue_id"
+                value="{{ issue.issue_id }}"
+                data-remote-import-submit>
                 Import remote image
-              </label>
+              </button>
               <span class="scan-issue__remote-url">{{ issue.remote_url }}</span>
               {% endif %}
             </div>

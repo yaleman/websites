@@ -125,10 +125,6 @@
 		@apply grid-cols-1 items-start lg:grid-cols-[auto_auto_1fr];
 	}
 
-	.scan-issue__remote {
-		@apply inline-flex items-center gap-2;
-	}
-
 	.scan-modal__variant {
 		@apply mt-4;
 	}
