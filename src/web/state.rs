@@ -252,6 +252,7 @@ pub(crate) struct AdminMassAssetImportTemplate {
     pub(crate) scan_limit: usize,
     pub(crate) rows: Vec<AdminMassAssetImportRow>,
     pub(crate) message: Option<String>,
+    pub(crate) warnings: Vec<String>,
 }
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]

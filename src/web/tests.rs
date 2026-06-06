@@ -991,6 +991,81 @@ async fn admin_site_assets_mass_import_updates_all_matching_uses() {
 }
 
 #[tokio::test]
+async fn admin_site_assets_mass_import_flags_missing_settings() {
+    let db = Arc::new(test_db_start().await);
+    let site = crate::create_site(
+        db.as_ref(),
+        "mass-import-warnings".to_string(),
+        "Mass Import Warnings".to_string(),
+        DEFAULT_TEMPLATE_NAME.to_string(),
+    )
+    .await
+    .expect("failed to create site");
+    let author = crate::entities::user::create_user(
+        db.as_ref(),
+        "mass-import-warning-author",
+        Some("author@example.com"),
+        Some("Author"),
+        false,
+    )
+    .await
+    .expect("failed to create author");
+    crate::create_membership(
+        db.as_ref(),
+        crate::NewMembership {
+            site_id: site.id,
+            user_id: author.id,
+            role: SiteRole::Author,
+        },
+    )
+    .await
+    .expect("failed to create author membership");
+
+    let import_root = tempfile::tempdir().expect("failed to create import root");
+    let missing_import_path = import_root.path().join("missing-assets");
+    crate::update_site_settings(
+        db.as_ref(),
+        site.id,
+        site.full_title.clone(),
+        site.template_name.clone(),
+        site.publish_on_render,
+        Vec::new(),
+        Some(missing_import_path.to_string_lossy().to_string()),
+    )
+    .await
+    .expect("failed to update import settings");
+
+    let session_store = MemoryStore::default();
+    let test_router = test_app_router(test_admin_state(db.clone()), session_store.clone());
+    let cookie = seed_session_cookie(
+        test_admin_state(db.clone()),
+        test_router.session_store.clone(),
+        author.id,
+    )
+    .await;
+
+    let response = test_router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/admin/site/{}/assets/mass-import", site.id))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("failed to build mass import request"),
+        )
+        .await
+        .expect("failed to call mass import route");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read mass import body");
+    let body = String::from_utf8(body.to_vec()).expect("invalid mass import body");
+    assert!(body.contains("Internal domains are not configured."));
+    assert!(body.contains("The configured mass import assets path could not be found."));
+}
+
+#[tokio::test]
 async fn admin_site_assets_create_rejects_mixed_file_and_source_url() {
     let db = Arc::new(test_db_start().await);
     let site = crate::create_site(

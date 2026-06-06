@@ -18,6 +18,16 @@
     </div>
   </form>
 
+  {% if !warnings.is_empty() %}
+  <div class="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+    <ul>
+      {% for warning in warnings %}
+      <li>{{ warning }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
   {% if let Some(message) = message %}
   <p class="inline-body">{{ message }}</p>
   {% endif %}

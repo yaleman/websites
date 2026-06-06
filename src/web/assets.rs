@@ -610,7 +610,36 @@ pub(crate) async fn admin_site_assets_mass_import(
     let scan_limit = query.limit.unwrap_or(20).clamp(1, 100);
     let import_path = site.mass_import_assets.clone().unwrap_or_default();
     let mut message = None;
+    let mut warnings = Vec::new();
     let mut rows = Vec::new();
+    let import_root = if import_path.trim().is_empty() {
+        warnings.push("Mass import assets path is not configured.".to_string());
+        None
+    } else {
+        match fs::metadata(&import_path).await {
+            Ok(metadata) if metadata.is_dir() => Some(PathBuf::from(&import_path)),
+            Ok(_) => {
+                warnings
+                    .push("The configured mass import assets path is not a directory.".to_string());
+                None
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                warnings
+                    .push("The configured mass import assets path could not be found.".to_string());
+                None
+            }
+            Err(error) => {
+                warnings.push(format!(
+                    "The configured mass import assets path could not be read: {error}."
+                ));
+                None
+            }
+        }
+    };
+
+    if site.internal_domains.is_empty() {
+        warnings.push("Internal domains are not configured.".to_string());
+    }
 
     if import_path.trim().is_empty() {
         message = Some("Configure a mass import assets path in site settings first.".to_string());
@@ -620,10 +649,13 @@ pub(crate) async fn admin_site_assets_mass_import(
             .map_err(SiteError::internal)?;
         let groups = find_missing_asset_groups(content, &site.internal_domains, scan_limit);
         for group in groups {
-            let candidates =
-                find_local_asset_candidates(StdPath::new(&import_path), &group.normalized_path, 5)
+            let candidates = if let Some(import_root) = import_root.as_ref() {
+                find_local_asset_candidates(import_root.as_path(), &group.normalized_path, 5)
                     .await
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
             rows.push(AdminMassAssetImportRow {
                 import_href: format!(
                     "/admin/site/{site_id}/assets/mass-import/missing?path={}",
@@ -653,6 +685,7 @@ pub(crate) async fn admin_site_assets_mass_import(
         scan_limit,
         rows,
         message,
+        warnings,
     })
 }
 
