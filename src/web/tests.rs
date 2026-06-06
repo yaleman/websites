@@ -760,6 +760,237 @@ async fn admin_site_assets_create_accepts_multiple_files_and_redirects() {
 }
 
 #[tokio::test]
+async fn admin_site_assets_mass_import_updates_all_matching_uses() {
+    let db = Arc::new(test_db_start().await);
+    let site = crate::create_site(
+        db.as_ref(),
+        "mass-import-site".to_string(),
+        "Mass Import Site".to_string(),
+        DEFAULT_TEMPLATE_NAME.to_string(),
+    )
+    .await
+    .expect("failed to create site");
+    let author = crate::entities::user::create_user(
+        db.as_ref(),
+        "mass-import-author",
+        Some("author@example.com"),
+        Some("Author"),
+        false,
+    )
+    .await
+    .expect("failed to create author");
+    crate::create_membership(
+        db.as_ref(),
+        crate::NewMembership {
+            site_id: site.id,
+            user_id: author.id,
+            role: SiteRole::Author,
+        },
+    )
+    .await
+    .expect("failed to create author membership");
+
+    let import_root = tempfile::tempdir().expect("failed to create import root");
+    let candidate_dir = import_root.path().join("wp-content/uploads/2020");
+    tokio::fs::create_dir_all(&candidate_dir)
+        .await
+        .expect("failed to create import candidate directory");
+    tokio::fs::write(candidate_dir.join("hero.png"), TINY_PNG_BYTES)
+        .await
+        .expect("failed to write import candidate");
+
+    crate::update_site_settings(
+        db.as_ref(),
+        site.id,
+        site.full_title.clone(),
+        site.template_name.clone(),
+        site.publish_on_render,
+        vec!["example.com".to_string()],
+        Some(import_root.path().to_string_lossy().to_string()),
+    )
+    .await
+    .expect("failed to update import settings");
+    let older_content = crate::create_content(
+        db.as_ref(),
+        crate::NewContent {
+            site_id: site.id,
+            page_type: PageType::Post,
+            title: "Older Uses Hero".to_string(),
+            slug: "older-uses-hero".to_string(),
+            page_content: "![Hero](https://example.com/wp-content/uploads/2020/hero.png)"
+                .to_string(),
+            draft: false,
+            creator_sub: "mass-import-author".to_string(),
+            created_at: Some(
+                DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+                    .expect("invalid test date")
+                    .with_timezone(&Utc),
+            ),
+            published_at: None,
+        },
+    )
+    .await
+    .expect("failed to create older content");
+    let newer_content = crate::create_content(
+        db.as_ref(),
+        crate::NewContent {
+            site_id: site.id,
+            page_type: PageType::Post,
+            title: "Newer Uses Hero".to_string(),
+            slug: "newer-uses-hero".to_string(),
+            page_content: r#"<img src="/wp-content/uploads/2020/hero.png" alt="Hero" />"#
+                .to_string(),
+            draft: false,
+            creator_sub: "mass-import-author".to_string(),
+            created_at: Some(
+                DateTime::parse_from_rfc3339("2026-02-01T00:00:00Z")
+                    .expect("invalid test date")
+                    .with_timezone(&Utc),
+            ),
+            published_at: None,
+        },
+    )
+    .await
+    .expect("failed to create newer content");
+
+    let session_store = MemoryStore::default();
+    let test_router = test_app_router(test_admin_state(db.clone()), session_store.clone());
+    let cookie = seed_session_cookie(
+        test_admin_state(db.clone()),
+        test_router.session_store.clone(),
+        author.id,
+    )
+    .await;
+    let encoded_path = url::form_urlencoded::byte_serialize(b"/wp-content/uploads/2020/hero.png")
+        .collect::<String>();
+
+    let list_response = test_router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/admin/site/{}/assets/mass-import", site.id))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("failed to build mass import request"),
+        )
+        .await
+        .expect("failed to call mass import route");
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let list_body = to_bytes(list_response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read mass import body");
+    let list_body = String::from_utf8(list_body.to_vec()).expect("invalid mass import body");
+    assert!(list_body.contains("/wp-content/uploads/2020/hero.png"));
+    assert!(list_body.contains("2 content item(s)"));
+    assert!(list_body.contains("2 occurrence(s)"));
+
+    let missing_response = test_router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/admin/site/{}/assets/mass-import/missing?path={encoded_path}",
+                    site.id
+                ))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("failed to build missing import request"),
+        )
+        .await
+        .expect("failed to call missing import route");
+    assert_eq!(missing_response.status(), StatusCode::OK);
+    let missing_body = to_bytes(missing_response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read missing import body");
+    let missing_body = String::from_utf8(missing_body.to_vec()).expect("invalid missing body");
+    assert!(missing_body.contains("Newer Uses Hero"));
+    assert!(missing_body.contains("Older Uses Hero"));
+    assert!(missing_body.contains("wp-content/uploads/2020/hero.png"));
+
+    let mut form = url::form_urlencoded::Serializer::new(String::new());
+    form.append_pair("normalized_path", "/wp-content/uploads/2020/hero.png");
+    form.append_pair("candidate", "wp-content/uploads/2020/hero.png");
+    let response = test_router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/admin/site/{}/assets/mass-import/missing",
+                    site.id
+                ))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(form.finish()))
+                .expect("failed to build missing import post request"),
+        )
+        .await
+        .expect("failed to call missing import post route");
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+    let assets = crate::list_assets(db.as_ref(), site.id)
+        .await
+        .expect("failed to list imported assets");
+    assert_eq!(assets.len(), 1);
+    let asset = assets.first().expect("expected one imported asset");
+    let shortcode_prefix = format!(r#"[[asset id="{}""#, asset.id);
+    let older_content = crate::get_content_for_site(db.as_ref(), site.id, older_content.id)
+        .await
+        .expect("failed to reload older content")
+        .expect("missing older content");
+    let newer_content = crate::get_content_for_site(db.as_ref(), site.id, newer_content.id)
+        .await
+        .expect("failed to reload newer content")
+        .expect("missing newer content");
+    assert!(older_content.page_content.contains(&shortcode_prefix));
+    assert!(newer_content.page_content.contains(&shortcode_prefix));
+    assert!(
+        !older_content
+            .page_content
+            .contains("/wp-content/uploads/2020/hero.png")
+    );
+    assert!(
+        !newer_content
+            .page_content
+            .contains("/wp-content/uploads/2020/hero.png")
+    );
+
+    let recheck_response = test_router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/admin/site/{}/assets/mass-import/recheck",
+                    site.id
+                ))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "path": "/wp-content/uploads/2020/hero.png"
+                    })
+                    .to_string(),
+                ))
+                .expect("failed to build recheck request"),
+        )
+        .await
+        .expect("failed to call recheck route");
+    assert_eq!(recheck_response.status(), StatusCode::OK);
+    let recheck_body = to_bytes(recheck_response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read recheck body");
+    let recheck_body: serde_json::Value =
+        serde_json::from_slice(&recheck_body).expect("recheck body should be json");
+    assert_eq!(recheck_body["complete"], true);
+    assert_eq!(recheck_body["occurrence_count"], 0);
+}
+
+#[tokio::test]
 async fn admin_site_assets_create_rejects_mixed_file_and_source_url() {
     let db = Arc::new(test_db_start().await);
     let site = crate::create_site(
@@ -1738,6 +1969,8 @@ async fn render_site_auto_publishes_when_enabled() {
         site.full_title.clone(),
         site.template_name.clone(),
         true,
+        site.internal_domains.clone().into_vec(),
+        site.mass_import_assets.clone(),
     )
     .await
     .expect("failed to enable publish on render");
@@ -2728,6 +2961,8 @@ async fn admin_site_import_allows_global_admin_and_creates_site() {
             full_title: "Imported Site".to_string(),
             template_name: DEFAULT_TEMPLATE_NAME.to_string(),
             publish_on_render: false,
+            internal_domains: Vec::new(),
+            mass_import_assets: None,
             created_at: Utc::now(),
             updated_at: None,
             publish_config: None,
@@ -2874,6 +3109,8 @@ async fn admin_site_import_replaces_existing_site_when_requested() {
             full_title: "Replaced Site".to_string(),
             template_name: DEFAULT_TEMPLATE_NAME.to_string(),
             publish_on_render: false,
+            internal_domains: Vec::new(),
+            mass_import_assets: None,
             created_at: Utc::now(),
             updated_at: None,
             publish_config: None,
@@ -2957,6 +3194,8 @@ async fn admin_site_import_rejects_non_admin_users() {
             full_title: "Blocked Import".to_string(),
             template_name: DEFAULT_TEMPLATE_NAME.to_string(),
             publish_on_render: false,
+            internal_domains: Vec::new(),
+            mass_import_assets: None,
             created_at: Utc::now(),
             updated_at: None,
             publish_config: None,

@@ -1,0 +1,64 @@
+{% extends "base_template.html" %}
+{% block header %}
+  <script src="/admin/assets/mass_asset_import.js" defer></script>
+{% endblock %}
+{% block body %}
+<section class="surface grid gap-4 p-4 md:p-6" data-mass-asset-import-root data-site-id="{{ site_id }}">
+  <form method="get" action="/admin/site/{{ site_id }}/assets/mass-import" class="stack-form">
+    <div class="form-field">
+      <label for="scan_limit">Missing Paths To Show</label>
+      <input id="scan_limit" name="limit" type="number" min="1" max="100" value="{{ scan_limit }}" />
+    </div>
+    <div class="form-field">
+      <label for="import_path">Mass Import Assets Path</label>
+      <input id="import_path" value="{{ import_path }}" readonly />
+    </div>
+    <div class="form-actions">
+      <button type="submit">Scan assets</button>
+    </div>
+  </form>
+
+  {% if let Some(message) = message %}
+  <p class="inline-body">{{ message }}</p>
+  {% endif %}
+
+  {% if rows.is_empty() %}
+  <p class="inline-body">No missing asset paths found.</p>
+  {% else %}
+  <table>
+    <thead>
+      <tr>
+        <th>Missing path</th>
+        <th>Uses</th>
+        <th>Local candidates</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr data-mass-asset-row data-normalized-path="{{ row.normalized_path }}">
+        <td><code>{{ row.normalized_path }}</code></td>
+        <td>{{ row.affected_post_count }} content item(s), {{ row.occurrence_count }} occurrence(s)</td>
+        <td>
+          {% if row.candidate_paths.is_empty() %}
+          No files found.
+          {% else %}
+          <ul>
+            {% for candidate in row.candidate_paths %}
+            <li><code>{{ candidate }}</code></li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </td>
+        <td>
+          <a class="btn" href="{{ row.import_href }}" target="_blank" rel="noopener">Open import</a>
+          <button type="button" class="btn" data-recheck-mass-asset>Recheck</button>
+          <span data-recheck-status></span>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endblock %}

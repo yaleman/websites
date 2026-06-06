@@ -1,0 +1,62 @@
+{% extends "base_template.html" %}
+{% block body %}
+<section class="surface grid gap-4 p-4 md:p-6">
+  <h2>Missing Image Import</h2>
+  <p><code>{{ normalized_path }}</code></p>
+
+  {% if let Some(message) = message %}
+  <p class="inline-body">{{ message }}</p>
+  {% endif %}
+
+  <section class="grid gap-3">
+    <h3>Affected Content</h3>
+    {% if affected_content.is_empty() %}
+    <p class="inline-body">No current content uses this path.</p>
+    {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th>Content</th>
+          <th>Occurrences</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in affected_content %}
+        <tr>
+          <td>{{ item.title }}</td>
+          <td>{{ item.occurrence_count }}</td>
+          <td><a href="{{ item.edit_href }}">Open editor</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </section>
+
+  <section class="grid gap-3">
+    <h3>Local Candidates</h3>
+    {% if candidates.is_empty() %}
+    <p class="inline-body">No local file candidates found.</p>
+    {% else %}
+    <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {% for candidate in candidates %}
+      <article class="surface grid gap-3 p-4">
+        <img class="max-h-56 max-w-full object-contain" src="{{ candidate.preview_url }}" alt="" loading="lazy" />
+        <div>
+          <strong>{{ candidate.rank_label }}</strong><br />
+          <code>{{ candidate.relative_path }}</code><br />
+          {{ candidate.byte_length }} / {{ candidate.dimensions }}
+        </div>
+        <form method="post" action="/admin/site/{{ site_id }}/assets/mass-import/missing">
+          <input type="hidden" name="normalized_path" value="{{ normalized_path }}" />
+          <input type="hidden" name="candidate" value="{{ candidate.relative_path }}" />
+          <button type="submit">Import and fix all uses</button>
+        </form>
+      </article>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </section>
+</section>
+{% endblock %}

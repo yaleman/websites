@@ -244,6 +244,28 @@ pub(crate) struct AdminAssetsNewTemplate {
 }
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
+#[template(path = "admin_mass_asset_import.html")]
+pub(crate) struct AdminMassAssetImportTemplate {
+    pub(crate) template_shared: AdminTemplateData,
+    pub(crate) site_id: Uuid,
+    pub(crate) import_path: String,
+    pub(crate) scan_limit: usize,
+    pub(crate) rows: Vec<AdminMassAssetImportRow>,
+    pub(crate) message: Option<String>,
+}
+#[allow(dead_code)]
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_missing_image_import.html")]
+pub(crate) struct AdminMissingImageImportTemplate {
+    pub(crate) template_shared: AdminTemplateData,
+    pub(crate) site_id: Uuid,
+    pub(crate) normalized_path: String,
+    pub(crate) affected_content: Vec<AdminMassAssetAffectedContentRow>,
+    pub(crate) candidates: Vec<AdminLocalAssetCandidateRow>,
+    pub(crate) message: Option<String>,
+}
+#[allow(dead_code)]
+#[derive(Template, WebTemplate)]
 #[template(path = "admin_assets_replace.html")]
 pub(crate) struct AdminAssetReplaceTemplate {
     pub(crate) template_shared: AdminTemplateData,
@@ -334,6 +356,8 @@ pub(crate) struct AdminSiteSettingsTemplate {
     pub(crate) full_title: String,
     pub(crate) template_name: String,
     pub(crate) publish_on_render: bool,
+    pub(crate) internal_domains: String,
+    pub(crate) mass_import_assets: String,
     pub(crate) can_delete_site: bool,
     pub(crate) can_import_wordpress: bool,
     pub(crate) can_manage_publish: bool,
@@ -538,6 +562,31 @@ pub(crate) struct AdminContentListSortHeader {
 }
 
 #[derive(Debug)]
+pub(crate) struct AdminMassAssetImportRow {
+    pub(crate) normalized_path: String,
+    pub(crate) affected_post_count: usize,
+    pub(crate) occurrence_count: usize,
+    pub(crate) candidate_paths: Vec<String>,
+    pub(crate) import_href: String,
+}
+
+#[derive(Debug)]
+pub(crate) struct AdminMassAssetAffectedContentRow {
+    pub(crate) title: String,
+    pub(crate) occurrence_count: usize,
+    pub(crate) edit_href: String,
+}
+
+#[derive(Debug)]
+pub(crate) struct AdminLocalAssetCandidateRow {
+    pub(crate) relative_path: String,
+    pub(crate) preview_url: String,
+    pub(crate) byte_length: String,
+    pub(crate) dimensions: String,
+    pub(crate) rank_label: String,
+}
+
+#[derive(Debug)]
 pub(crate) struct AdminSiteTagRow {
     pub(crate) id: Uuid,
     pub(crate) name: String,
@@ -735,6 +784,8 @@ pub(crate) struct UpdateSiteSettingsForm {
     pub(crate) full_title: String,
     pub(crate) template_name: String,
     pub(crate) publish_on_render: Option<String>,
+    pub(crate) internal_domains: Option<String>,
+    pub(crate) mass_import_assets: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -831,6 +882,39 @@ pub(crate) struct AdminAssetListQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct AdminMassAssetImportQuery {
+    pub(crate) limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct MissingImageImportQuery {
+    pub(crate) path: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct MissingImagePreviewQuery {
+    pub(crate) candidate: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct MissingImageImportForm {
+    pub(crate) normalized_path: String,
+    pub(crate) candidate: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct MassAssetRecheckRequest {
+    pub(crate) path: String,
+    pub(crate) content_id: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct MassAssetRecheckResponse {
+    pub(crate) complete: bool,
+    pub(crate) occurrence_count: usize,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct AdminSiteRenderQuery {
     pub(crate) publish: Option<usize>,
 }
@@ -921,7 +1005,6 @@ pub(crate) struct SourceEditorQuery {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ContentScanForm {
-    pub(crate) domains: String,
     pub(crate) scan_limit: Option<usize>,
     pub(crate) filter: Option<String>,
     pub(crate) content_id: Option<Uuid>,
@@ -929,7 +1012,6 @@ pub(crate) struct ContentScanForm {
 
 #[derive(Debug)]
 pub(crate) struct ContentScanApplyForm {
-    pub(crate) domains: String,
     pub(crate) scan_limit: Option<usize>,
     pub(crate) filter: Option<String>,
     pub(crate) selected_issue_ids_json: Option<String>,
@@ -1499,18 +1581,19 @@ pub(crate) async fn load_content_scan_reports(
     db: &DatabaseConnection,
     site_id: Uuid,
     content_id: Option<Uuid>,
-    domains_raw: &str,
+    internal_domains: &[String],
     scan_limit: usize,
 ) -> Result<LoadedContentScanReports, SiteError> {
-    let context = ScanContext::load(db, site_id, content_id, domains_raw).await?;
+    let context = ScanContext::load(db, site_id, content_id, internal_domains).await?;
     let mut content_items = list_content(db, site_id, None, None)
         .await
         .map_err(SiteError::internal)?;
     content_items.sort_by(|left, right| {
-        left.last_updated
-            .unwrap_or(left.created_at)
-            .cmp(&right.last_updated.unwrap_or(right.created_at))
-            .then_with(|| left.created_at.cmp(&right.created_at))
+        right
+            .last_updated
+            .unwrap_or(right.created_at)
+            .cmp(&left.last_updated.unwrap_or(left.created_at))
+            .then_with(|| right.created_at.cmp(&left.created_at))
             .then_with(|| left.title.to_lowercase().cmp(&right.title.to_lowercase()))
     });
 
@@ -1537,7 +1620,6 @@ pub(crate) async fn load_content_scan_reports(
 pub(crate) fn build_content_scan_template(
     site: &entities::site::Model,
     site_publish_configured: bool,
-    domains: String,
     scan_limit: usize,
     current_filter: &str,
     reports: Vec<ContentScanReport>,
@@ -1556,7 +1638,7 @@ pub(crate) fn build_content_scan_template(
                 AdminLink::new(&format!("/admin/site/{}/assets", site.id), "Assets"),
             ]),
         site_id: site.id,
-        domains,
+        domains: site.internal_domains.join("\n"),
         scan_limit,
         filter_options: content_scan_filter_options(current_filter),
         current_filter: current_filter.to_string(),
@@ -1891,10 +1973,7 @@ pub(crate) fn parse_optional_usize(
 
 pub(crate) fn parse_content_scan_apply_form(raw: &[u8]) -> Result<ContentScanApplyForm, SiteError> {
     let values = collect_form_values(raw);
-    let domains = first_form_value(&values, "domains")
-        .ok_or_else(|| SiteError::BadRequest("missing domains field".to_string()))?;
     Ok(ContentScanApplyForm {
-        domains,
         scan_limit: parse_optional_usize(first_form_value(&values, "scan_limit"), "scan_limit")?,
         filter: first_form_value(&values, "filter"),
         selected_issue_ids_json: first_form_value(&values, "selected_issue_ids_json"),

@@ -1,6 +1,10 @@
 use super::state::*;
 use super::*;
 use crate::collect_asset_filenames;
+use crate::mass_asset_import::{
+    LocalAssetCandidate, LocalAssetCandidateRank, MissingAssetGroup, find_local_asset_candidates,
+    find_missing_asset_groups, validate_import_candidate,
+};
 
 fn multipart_site_error(
     action: &str,
@@ -466,6 +470,10 @@ pub(crate) async fn admin_site_assets(
             .with_links(vec![
                 AdminLink::new(&format!("/admin/site/{site_id}/assets/new"), "Upload"),
                 AdminLink::new(
+                    &format!("/admin/site/{site_id}/assets/mass-import"),
+                    "Mass import",
+                ),
+                AdminLink::new(
                     &format!("/admin/site/{site_id}/content"),
                     "Back to site dashboard",
                 ),
@@ -588,6 +596,407 @@ pub(crate) async fn admin_site_assets_create(
     }
 
     Ok(Redirect::to(&format!("/admin/site/{site_id}/assets")))
+}
+
+pub(crate) async fn admin_site_assets_mass_import(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    Query(query): Query<AdminMassAssetImportQuery>,
+) -> Result<AdminMassAssetImportTemplate, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site_id).await?;
+    let scan_limit = query.limit.unwrap_or(20).clamp(1, 100);
+    let import_path = site.mass_import_assets.clone().unwrap_or_default();
+    let mut message = None;
+    let mut rows = Vec::new();
+
+    if import_path.trim().is_empty() {
+        message = Some("Configure a mass import assets path in site settings first.".to_string());
+    } else {
+        let content = list_content(state.db.as_ref(), site_id, None, None)
+            .await
+            .map_err(SiteError::internal)?;
+        let groups = find_missing_asset_groups(content, &site.internal_domains, scan_limit);
+        for group in groups {
+            let candidates =
+                find_local_asset_candidates(StdPath::new(&import_path), &group.normalized_path, 5)
+                    .await
+                    .unwrap_or_default();
+            rows.push(AdminMassAssetImportRow {
+                import_href: format!(
+                    "/admin/site/{site_id}/assets/mass-import/missing?path={}",
+                    encode_query_value(&group.normalized_path)
+                ),
+                normalized_path: group.normalized_path,
+                affected_post_count: group.affected_content.len(),
+                occurrence_count: group.occurrence_count,
+                candidate_paths: candidates
+                    .into_iter()
+                    .map(|candidate| candidate.relative_path.to_string_lossy().to_string())
+                    .collect(),
+            });
+        }
+    }
+
+    Ok(AdminMassAssetImportTemplate {
+        template_shared: AdminTemplateData::new("Mass Asset Import")
+            .with_site_context(&site)
+            .with_site_publish_configured(site_publish_configured)
+            .with_links(vec![
+                AdminLink::new(&format!("/admin/site/{site_id}/settings"), "Site settings"),
+                AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Assets"),
+            ]),
+        site_id,
+        import_path,
+        scan_limit,
+        rows,
+        message,
+    })
+}
+
+pub(crate) async fn admin_site_assets_mass_import_missing(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    Query(query): Query<MissingImageImportQuery>,
+) -> Result<AdminMissingImageImportTemplate, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site_id).await?;
+    let import_root = configured_import_root(&site)?;
+    let content = list_content(state.db.as_ref(), site_id, None, None)
+        .await
+        .map_err(SiteError::internal)?;
+    let group = find_group_for_path(content, &site.internal_domains, &query.path);
+    let affected_content = group
+        .as_ref()
+        .map(|group| {
+            group
+                .affected_content
+                .iter()
+                .map(|row| AdminMassAssetAffectedContentRow {
+                    title: row.title.clone(),
+                    occurrence_count: row.occurrence_count,
+                    edit_href: format!("/admin/site/{site_id}/content/{}/edit", row.content_id),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let candidates = find_local_asset_candidates(import_root.as_path(), &query.path, 20)
+        .await
+        .unwrap_or_default();
+    let candidate_rows = build_candidate_rows(site_id, candidates).await;
+    let message = if group.is_none() {
+        Some("This missing asset path no longer appears in current content.".to_string())
+    } else if candidate_rows.is_empty() {
+        Some("No local file candidates were found for this path.".to_string())
+    } else {
+        None
+    };
+
+    Ok(AdminMissingImageImportTemplate {
+        template_shared: AdminTemplateData::new("Missing Image Import")
+            .with_site_context(&site)
+            .with_site_publish_configured(site_publish_configured)
+            .with_links(vec![AdminLink::new(
+                &format!("/admin/site/{site_id}/assets/mass-import"),
+                "Mass asset import",
+            )]),
+        site_id,
+        normalized_path: query.path,
+        affected_content,
+        candidates: candidate_rows,
+        message,
+    })
+}
+
+pub(crate) async fn admin_site_assets_mass_import_preview(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    Query(query): Query<MissingImagePreviewQuery>,
+) -> Result<Response, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let import_root = configured_import_root(&site)?;
+    let candidate =
+        validate_import_candidate(import_root.as_path(), &import_root.join(&query.candidate))
+            .await?;
+    let bytes = fs::read(&candidate).await.map_err(SiteError::from)?;
+    let mime_type = mime_guess::from_path(&candidate)
+        .first_raw()
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    Ok(([(header::CONTENT_TYPE, mime_type)], bytes).into_response())
+}
+
+pub(crate) async fn admin_site_assets_mass_import_apply(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    Form(form): Form<MissingImageImportForm>,
+) -> Result<Redirect, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let actor = current_user(&session).await?;
+    let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let import_root = configured_import_root(&site)?;
+    let candidate_path =
+        validate_import_candidate(import_root.as_path(), &import_root.join(&form.candidate))
+            .await?;
+    let bytes = fs::read(&candidate_path).await.map_err(SiteError::from)?;
+    let original_filename = candidate_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_string())
+        .ok_or_else(|| SiteError::BadRequest("candidate is missing a filename".to_string()))?;
+    let mime_type = mime_guess::from_path(&candidate_path)
+        .first_raw()
+        .map(|value| value.to_string());
+    let content = list_content(state.db.as_ref(), site_id, None, None)
+        .await
+        .map_err(SiteError::internal)?;
+    let group = find_group_for_path(content, &site.internal_domains, &form.normalized_path)
+        .ok_or_else(|| SiteError::BadRequest("missing asset path no longer appears".to_string()))?;
+    let txn = state.db.begin().await?;
+    let mut cleanup_filenames = HashSet::new();
+    let result: Result<Uuid, SiteError> = async {
+        let asset = store_uploaded_asset_with_audit(
+            &txn,
+            AssetUploadAuditContext {
+                upload_root: &state.upload_root,
+                site_id,
+                actor_sub: &actor.subject,
+                event_type: "mass_import_asset",
+            },
+            UploadedAssetFile {
+                bytes,
+                original_filename,
+                mime_type,
+            },
+            &mut cleanup_filenames,
+        )
+        .await?;
+        let shortcode = format_asset_shortcode(
+            asset.id,
+            "original",
+            &asset_alt_text(&form.normalized_path),
+            None,
+        );
+        apply_group_replacements(&txn, site_id, &actor.subject, &group, &shortcode).await?;
+        let refreshed = load_content_for_site(&txn, site_id).await?;
+        if find_group_for_path(refreshed, &site.internal_domains, &form.normalized_path).is_some() {
+            return Err(SiteError::internal(
+                "mass asset import did not clear the missing path".to_string(),
+            ));
+        }
+        log_audit_event(
+            &txn,
+            &actor.subject,
+            "mass_asset_import_apply",
+            "content_item",
+            &site_id.to_string(),
+            Some(site_id),
+            Some(json!({
+                "normalized_path": form.normalized_path,
+                "asset_id": asset.id,
+                "affected_content_count": group.affected_content.len(),
+                "occurrence_count": group.occurrence_count,
+            })),
+        )
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!("failed to log mass import audit: {error}"))
+        })?;
+        Ok(asset.id)
+    }
+    .await;
+
+    if let Err(error) = result {
+        cleanup_uploaded_files(&state.upload_root, &cleanup_filenames).await?;
+        return Err(error);
+    }
+    txn.commit().await?;
+
+    Ok(Redirect::to(&format!(
+        "/admin/site/{site_id}/assets/mass-import"
+    )))
+}
+
+pub(crate) async fn admin_site_assets_mass_import_recheck(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    Json(payload): Json<MassAssetRecheckRequest>,
+) -> Result<Json<MassAssetRecheckResponse>, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let content = if let Some(content_id) = payload.content_id {
+        vec![
+            get_content_for_site(state.db.as_ref(), site_id, content_id)
+                .await?
+                .ok_or(SiteError::NotFound)?,
+        ]
+    } else {
+        list_content(state.db.as_ref(), site_id, None, None)
+            .await
+            .map_err(SiteError::internal)?
+    };
+    let group = find_group_for_path(content, &site.internal_domains, &payload.path);
+    let occurrence_count = group
+        .as_ref()
+        .map(|group| group.occurrence_count)
+        .unwrap_or(0);
+    Ok(Json(MassAssetRecheckResponse {
+        complete: occurrence_count == 0,
+        occurrence_count,
+    }))
+}
+
+fn configured_import_root(site: &entities::site::Model) -> Result<PathBuf, SiteError> {
+    let Some(import_path) = site.mass_import_assets.as_ref() else {
+        return Err(SiteError::BadRequest(
+            "mass import assets path is not configured".to_string(),
+        ));
+    };
+    if import_path.trim().is_empty() {
+        return Err(SiteError::BadRequest(
+            "mass import assets path is not configured".to_string(),
+        ));
+    }
+    Ok(PathBuf::from(import_path))
+}
+
+fn find_group_for_path(
+    content: Vec<entities::content_item::Model>,
+    internal_domains: &[String],
+    normalized_path: &str,
+) -> Option<MissingAssetGroup> {
+    find_missing_asset_groups(content, internal_domains, usize::MAX)
+        .into_iter()
+        .find(|group| group.normalized_path == normalized_path)
+}
+
+async fn build_candidate_rows(
+    site_id: Uuid,
+    candidates: Vec<LocalAssetCandidate>,
+) -> Vec<AdminLocalAssetCandidateRow> {
+    let mut rows = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let relative_path = candidate.relative_path.to_string_lossy().to_string();
+        rows.push(AdminLocalAssetCandidateRow {
+            preview_url: format!(
+                "/admin/site/{site_id}/assets/mass-import/preview?candidate={}",
+                encode_query_value(&relative_path)
+            ),
+            byte_length: format_byte_length(candidate.byte_length),
+            dimensions: candidate_dimensions(candidate.absolute_path.clone())
+                .await
+                .unwrap_or_else(|| "n/a".to_string()),
+            rank_label: match candidate.rank {
+                LocalAssetCandidateRank::PathSuffix => "Path match".to_string(),
+                LocalAssetCandidateRank::Filename => "Filename match".to_string(),
+            },
+            relative_path,
+        });
+    }
+    rows
+}
+
+async fn candidate_dimensions(path: PathBuf) -> Option<String> {
+    tokio::task::spawn_blocking(move || image::image_dimensions(path).ok())
+        .await
+        .ok()
+        .flatten()
+        .map(|(width, height)| format!("{width} x {height}"))
+}
+
+async fn load_content_for_site<C: ConnectionTrait>(
+    db: &C,
+    site_id: Uuid,
+) -> Result<Vec<entities::content_item::Model>, SiteError> {
+    entities::content_item::Entity::find()
+        .filter(entities::content_item::Column::SiteId.eq(site_id))
+        .all(db)
+        .await
+        .map_err(SiteError::from)
+}
+
+async fn apply_group_replacements<C: ConnectionTrait>(
+    db: &C,
+    site_id: Uuid,
+    actor_sub: &str,
+    group: &MissingAssetGroup,
+    shortcode: &str,
+) -> Result<(), SiteError> {
+    for affected in &group.affected_content {
+        let content = entities::content_item::Entity::find_by_id(affected.content_id)
+            .filter(entities::content_item::Column::SiteId.eq(site_id))
+            .one(db)
+            .await
+            .map_err(SiteError::from)?
+            .ok_or(SiteError::NotFound)?;
+        let mut page_content = content.page_content.clone();
+        let mut occurrences = group
+            .occurrences
+            .iter()
+            .filter(|occurrence| occurrence.content_id == content.id)
+            .collect::<Vec<_>>();
+        occurrences.sort_by_key(|occurrence| std::cmp::Reverse(occurrence.start));
+        for occurrence in occurrences {
+            let Some(current) = page_content.get(occurrence.start..occurrence.end) else {
+                return Err(SiteError::BadRequest(
+                    "content changed before mass import could apply".to_string(),
+                ));
+            };
+            if !current.contains(&occurrence.original_link) {
+                return Err(SiteError::BadRequest(
+                    "content changed before mass import could apply".to_string(),
+                ));
+            }
+            page_content.replace_range(occurrence.start..occurrence.end, shortcode);
+        }
+        update_content(
+            db,
+            crate::UpdateContent {
+                content_id: content.id,
+                page_type: None,
+                title: Some(content.title),
+                slug: Some(content.slug),
+                page_content: Some(page_content),
+                draft: Some(content.draft),
+                published_at: content.published_at,
+                editor_sub: actor_sub.to_string(),
+            },
+        )
+        .await
+        .map_err(SiteError::internal)?;
+    }
+    Ok(())
+}
+
+fn asset_alt_text(normalized_path: &str) -> String {
+    StdPath::new(normalized_path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(|value| value.replace(['-', '_'], " "))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "Imported image".to_string())
+}
+
+fn format_byte_length(bytes: u64) -> String {
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    if bytes < 1024 * 1024 {
+        return format!("{:.1} KB", bytes as f64 / 1024.0);
+    }
+    format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+}
+
+fn encode_query_value(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
 
 pub(crate) async fn remove_file_if_exists(path: &StdPath) -> Result<(), SiteError> {

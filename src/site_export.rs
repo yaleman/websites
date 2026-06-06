@@ -37,6 +37,10 @@ pub struct ExportSite {
     pub template_name: String,
     #[serde(default)]
     pub publish_on_render: bool,
+    #[serde(default)]
+    pub internal_domains: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mass_import_assets: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -574,6 +578,8 @@ pub async fn export_site_with_roots(
             full_title: site.full_title,
             template_name: site.template_name,
             publish_on_render: site.publish_on_render,
+            internal_domains: site.internal_domains.into_vec(),
+            mass_import_assets: site.mass_import_assets,
             created_at: site.created_at,
             updated_at: site.updated_at,
             publish_config,
@@ -640,6 +646,10 @@ pub async fn import_site_export<C: ConnectionTrait>(
         full_title: Set(export.site.full_title.clone()),
         template_name: Set(export.site.template_name.clone()),
         publish_on_render: Set(export.site.publish_on_render),
+        internal_domains: Set(entities::site::InternalDomains::from(
+            crate::normalize_internal_domains(export.site.internal_domains.clone()),
+        )),
+        mass_import_assets: Set(export.site.mass_import_assets.clone()),
         created_at: Set(export.site.created_at),
         updated_at: Set(export.site.updated_at),
     }
@@ -1251,6 +1261,8 @@ mod tests {
             site.full_title.clone(),
             site.template_name.clone(),
             true,
+            site.internal_domains.clone().into_vec(),
+            site.mass_import_assets.clone(),
         )
         .await
         .expect("failed to enable publish on render");
@@ -1576,6 +1588,8 @@ mod tests {
                 full_title: "Duplicate".to_string(),
                 template_name: "default".to_string(),
                 publish_on_render: false,
+                internal_domains: Vec::new(),
+                mass_import_assets: None,
                 created_at: Utc::now(),
                 updated_at: None,
                 publish_config: None,
@@ -1650,6 +1664,8 @@ mod tests {
                 full_title: "Test".to_string(),
                 template_name: "default".to_string(),
                 publish_on_render: false,
+                internal_domains: Vec::new(),
+                mass_import_assets: None,
                 created_at: Utc::now(),
                 updated_at: None,
                 publish_config: None,

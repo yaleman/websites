@@ -82,11 +82,9 @@ impl ScanContext {
         db: &DatabaseConnection,
         site_id: Uuid,
         content_id: Option<Uuid>,
-        domains_raw: &str,
+        domains: &[String],
     ) -> Result<Self, SiteError> {
-        let internal_domains = parse_domain_list(domains_raw)
-            .into_iter()
-            .collect::<HashSet<_>>();
+        let internal_domains = domains.iter().cloned().collect::<HashSet<_>>();
 
         let mut content_items = entities::content_item::Entity::find()
             .filter(entities::content_item::Column::SiteId.eq(site_id));

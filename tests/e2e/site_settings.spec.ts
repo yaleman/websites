@@ -42,6 +42,9 @@ test.describe("site settings", () => {
 				ownerSession.page.getByRole("link", { name: "Scan content" }),
 			).toBeVisible();
 			await expect(
+				ownerSession.page.getByRole("link", { name: "Mass asset import" }),
+			).toBeVisible();
+			await expect(
 				ownerSession.page.getByRole("link", {
 					name: "Download site export JSON",
 				}),

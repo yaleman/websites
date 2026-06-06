@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import {
 	addMembership,
@@ -12,8 +12,25 @@ import {
 	createUser,
 	setupHarness,
 	tinyPngBytes,
+	type TestHarness,
 } from "./support";
 import { defaultTimeout } from "./global_setup";
+
+async function configureInternalDomains(
+	page: Page,
+	harness: TestHarness,
+	domains: string,
+): Promise<void> {
+	await page.goto(
+		`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/settings`,
+		{ waitUntil: "domcontentloaded" },
+	);
+	await page.getByLabel("Internal Domains").fill(domains);
+	await page.getByRole("button", { name: "Save settings" }).click();
+	await expect(page).toHaveURL(
+		`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/settings`,
+	);
+}
 
 test.describe("content remediation", () => {
 	test.setTimeout(defaultTimeout);
@@ -60,12 +77,12 @@ test.describe("content remediation", () => {
 				harness,
 				subject,
 			);
+			await configureInternalDomains(page, harness, "example.com");
 
 			await page.goto(
 				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/scan`,
 				{ waitUntil: "domcontentloaded" },
 			);
-			await page.getByLabel("Internal Domains").fill("example.com");
 			await page.getByRole("button", { name: "Scan content" }).click();
 
 			await expect(page.locator("body")).toContainText("Needs Cleanup");
@@ -210,7 +227,7 @@ test.describe("content remediation", () => {
 		}
 	});
 
-	test("limits results to the oldest pages with issues", async ({
+	test("limits results to the newest pages with issues", async ({
 		browser,
 	}) => {
 		const harness = await setupHarness();
@@ -240,18 +257,18 @@ test.describe("content remediation", () => {
 				harness,
 				subject,
 			);
+			await configureInternalDomains(page, harness, "example.com");
 
 			await page.goto(
 				`https://127.0.0.1:${harness.port}/admin/site/${harness.siteId}/content/scan`,
 				{ waitUntil: "domcontentloaded" },
 			);
-			await page.getByLabel("Internal Domains").fill("example.com");
 			await page.getByLabel("Pages With Issues To Show").fill("1");
 			await page.getByRole("button", { name: "Scan content" }).click();
 
 			const body = page.locator("body");
-			await expect(body).toContainText("Oldest Broken Page");
-			await expect(body).not.toContainText("Newest Broken Page");
+			await expect(body).toContainText("Newest Broken Page");
+			await expect(body).not.toContainText("Oldest Broken Page");
 			await expect(body).toContainText("1");
 			await expect(body).toContainText("issue pages shown");
 

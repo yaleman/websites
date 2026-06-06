@@ -119,6 +119,22 @@ pub(crate) fn build_admin_app(
                 .layer(DefaultBodyLimit::max(ASSET_UPLOAD_MAX_BYTES)),
         )
         .route(
+            "/admin/site/{site_id}/assets/mass-import",
+            get(admin_site_assets_mass_import),
+        )
+        .route(
+            "/admin/site/{site_id}/assets/mass-import/missing",
+            get(admin_site_assets_mass_import_missing).post(admin_site_assets_mass_import_apply),
+        )
+        .route(
+            "/admin/site/{site_id}/assets/mass-import/preview",
+            get(admin_site_assets_mass_import_preview),
+        )
+        .route(
+            "/admin/site/{site_id}/assets/mass-import/recheck",
+            axum::routing::post(admin_site_assets_mass_import_recheck),
+        )
+        .route(
             "/admin/site/{site_id}/assets/{asset_id}/replace",
             get(admin_site_asset_replace)
                 .post(admin_site_asset_replace_update)

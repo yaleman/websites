@@ -686,7 +686,6 @@ pub(crate) async fn admin_site_content_scan(
     Ok(build_content_scan_template(
         &site,
         site_publish_configured,
-        String::new(),
         5,
         "all",
         Vec::new(),
@@ -708,7 +707,7 @@ pub(crate) async fn admin_site_content_scan_run(
         state.db.as_ref(),
         site_id,
         form.content_id,
-        &form.domains,
+        &site.internal_domains,
         scan_limit,
     )
     .await?;
@@ -716,7 +715,6 @@ pub(crate) async fn admin_site_content_scan_run(
     Ok(build_content_scan_template(
         &site,
         site_publish_configured,
-        form.domains,
         scan_limit,
         scan_filter_value(form.filter.as_deref()),
         scan_reports.reports,
@@ -742,9 +740,14 @@ pub(crate) async fn admin_site_content_scan_apply(
     remote_import_issue_ids.extend(form.remote_import_issue_id);
     selected_issue_ids.extend(remote_import_issue_ids.iter().cloned());
     let manual_asset_map = deserialize_manual_asset_map(form.asset_selections_json.as_deref())?;
-    let scan_reports =
-        load_content_scan_reports(state.db.as_ref(), site_id, None, &form.domains, scan_limit)
-            .await?;
+    let scan_reports = load_content_scan_reports(
+        state.db.as_ref(),
+        site_id,
+        None,
+        &site.internal_domains,
+        scan_limit,
+    )
+    .await?;
 
     let mut updated_items = Vec::new();
     let mut skipped_messages = Vec::new();
@@ -902,9 +905,14 @@ pub(crate) async fn admin_site_content_scan_apply(
     .map_err(|error| SiteError::internal(format!("failed to log scan apply audit: {error}")))?;
     txn.commit().await?;
 
-    let refreshed_reports =
-        load_content_scan_reports(state.db.as_ref(), site_id, None, &form.domains, scan_limit)
-            .await?;
+    let refreshed_reports = load_content_scan_reports(
+        state.db.as_ref(),
+        site_id,
+        None,
+        &site.internal_domains,
+        scan_limit,
+    )
+    .await?;
     let summary = Some(build_scan_summary(
         &refreshed_reports,
         applied_count,
@@ -914,7 +922,6 @@ pub(crate) async fn admin_site_content_scan_apply(
     Ok(build_content_scan_template(
         &site,
         site_publish_configured,
-        form.domains,
         scan_limit,
         scan_filter_value(form.filter.as_deref()),
         refreshed_reports.reports,
@@ -1764,12 +1771,11 @@ mod tests {
 
     #[test]
     fn parse_content_scan_apply_form_parses_repeated_and_optional_fields() {
-        let raw = b"domains=example.com&scan_limit=12&filter=review&selected_issue_ids_json=%5B%22issue-1%22%5D&remote_import_issue_ids_json=%5B%22remote-1%22%5D&remote_import_issue_id=remote-a&remote_import_issue_id=remote-b&asset_selections_json=%7B%22issue-1%22%3A%7B%22asset_id%22%3A%22019d%22%7D%7D";
+        let raw = b"scan_limit=12&filter=review&selected_issue_ids_json=%5B%22issue-1%22%5D&remote_import_issue_ids_json=%5B%22remote-1%22%5D&remote_import_issue_id=remote-a&remote_import_issue_id=remote-b&asset_selections_json=%7B%22issue-1%22%3A%7B%22asset_id%22%3A%22019d%22%7D%7D";
 
         let form =
             parse_content_scan_apply_form(raw).expect("expected content scan apply form to parse");
 
-        assert_eq!(form.domains, "example.com");
         assert_eq!(form.scan_limit, Some(12));
         assert_eq!(form.filter.as_deref(), Some("review"));
         assert_eq!(
@@ -1791,15 +1797,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_content_scan_apply_form_rejects_missing_domains() {
-        let error = parse_content_scan_apply_form(b"scan_limit=12")
-            .expect_err("missing domains should fail");
+    fn parse_content_scan_apply_form_allows_missing_domains() {
+        let form = parse_content_scan_apply_form(b"scan_limit=12")
+            .expect("domains are stored on the site");
 
-        match error {
-            SiteError::BadRequest(message) => {
-                assert!(message.contains("missing domains field"));
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert_eq!(form.scan_limit, Some(12));
     }
 }
