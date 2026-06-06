@@ -25,4 +25,5 @@ The system manages site metadata, content, tags, assets, and memberships in a SQ
 - All askama templates should derive `askama_web::WebTemplate` so we don't have to manually implement `IntoResponse`
 - All admin templates should be based on `base_template.html` to keep navigation/UI consistent.
 - Each admin view should have its own template file (no shared admin view template).
+- After any design, UI, or layout-affecting change, visually check the affected page in a browser at desktop and narrow widths before finishing. Confirm headings, tables, forms, cards, and media previews have clear padding inside bordered surfaces and that no text or image touches or overlaps a border. Use Playwright or the in-app browser to capture screenshots; do not rely on code inspection alone.
 @docs/src/System-Design-Updates.md

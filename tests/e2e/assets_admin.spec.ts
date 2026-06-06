@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { expect, test } from "@playwright/test";
@@ -9,6 +9,7 @@ import {
 	cleanupHarness,
 	createAssetWithThumbnail,
 	createAuthenticatedPage,
+	createContent,
 	createUser,
 	setupHarness,
 	tinyPngBytes,
@@ -69,6 +70,108 @@ test.describe("assets admin", () => {
 			).toBeVisible();
 			await expect(page.locator("body")).toContainText("banner.png");
 			await expect(page.getByRole("img", { name: "banner.png" })).toBeVisible();
+
+			await context.close();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
+	test("missing image import page keeps section content padded", async ({
+		browser,
+	}, testInfo) => {
+		const harness = await setupHarness();
+
+		try {
+			const subject = "missing-image-layout";
+			const userId = await createUser(harness, subject);
+			await addMembership(harness, userId, "owner");
+
+			const importRoot = path.join(harness.tempRoot, "mass-import-assets");
+			const candidateDir = path.join(
+				importRoot,
+				"wp-content",
+				"uploads",
+				"2020",
+			);
+			await mkdir(candidateDir, { recursive: true });
+			await writeFile(path.join(candidateDir, "hero.png"), tinyPngBytes);
+
+			await createContent(harness, {
+				pageType: "page",
+				title: "Missing Image Layout",
+				slug: "missing-image-layout",
+				pageContent:
+					'![Hero](https://example.com/wp-content/uploads/2020/hero.png)',
+				creatorSub: subject,
+			});
+
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				subject,
+			);
+
+			await page.goto(
+				`${harness.baseUrl}/admin/site/${harness.siteId}/settings`,
+				{ waitUntil: "domcontentloaded" },
+			);
+			await page.getByLabel("Internal Domains").fill("example.com");
+			await page.getByLabel("Mass Import Assets Path").fill(importRoot);
+			await page.getByRole("button", { name: "Save settings" }).click();
+			await expect(page).toHaveURL(
+				`${harness.baseUrl}/admin/site/${harness.siteId}/settings`,
+			);
+
+			const missingPath = encodeURIComponent(
+				"/wp-content/uploads/2020/hero.png",
+			);
+			const missingUrl = `${harness.baseUrl}/admin/site/${harness.siteId}/assets/mass-import/missing?path=${missingPath}`;
+			await page.goto(missingUrl, { waitUntil: "domcontentloaded" });
+			await expect(
+				page.getByRole("heading", {
+					level: 1,
+					name: "Missing Image Import",
+				}),
+			).toBeVisible();
+
+			const assertSubsectionPadding = async (minimumInset: number) => {
+				const surfaceBox = await page
+					.locator("main > section.surface")
+					.boundingBox();
+				const affectedBox = await page
+					.getByRole("heading", { name: "Affected Content" })
+					.boundingBox();
+				const candidatesBox = await page
+					.getByRole("heading", { name: "Local Candidates" })
+					.boundingBox();
+				expect(surfaceBox).not.toBeNull();
+				expect(affectedBox).not.toBeNull();
+				expect(candidatesBox).not.toBeNull();
+				if (!surfaceBox || !affectedBox || !candidatesBox) {
+					throw new Error("missing import layout boxes were not available");
+				}
+				expect(affectedBox.x - surfaceBox.x).toBeGreaterThanOrEqual(
+					minimumInset,
+				);
+				expect(candidatesBox.x - surfaceBox.x).toBeGreaterThanOrEqual(
+					minimumInset,
+				);
+			};
+
+			await assertSubsectionPadding(23);
+			await page.screenshot({
+				path: testInfo.outputPath("missing-import-desktop.png"),
+				fullPage: true,
+			});
+
+			await page.setViewportSize({ width: 430, height: 900 });
+			await page.goto(missingUrl, { waitUntil: "domcontentloaded" });
+			await assertSubsectionPadding(15);
+			await page.screenshot({
+				path: testInfo.outputPath("missing-import-mobile.png"),
+				fullPage: true,
+			});
 
 			await context.close();
 		} finally {

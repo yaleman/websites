@@ -908,6 +908,10 @@ async fn admin_site_assets_mass_import_updates_all_matching_uses() {
     assert!(missing_body.contains("Newer Uses Hero"));
     assert!(missing_body.contains("Older Uses Hero"));
     assert!(missing_body.contains("wp-content/uploads/2020/hero.png"));
+    assert!(
+        !missing_body.contains(r#"<section class="grid gap-3">"#),
+        "missing image import subgroups must not render unpadded section surfaces"
+    );
 
     let mut form = url::form_urlencoded::Serializer::new(String::new());
     form.append_pair("normalized_path", "/wp-content/uploads/2020/hero.png");
