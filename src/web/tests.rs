@@ -852,6 +852,26 @@ async fn admin_site_assets_mass_import_updates_all_matching_uses() {
     )
     .await
     .expect("failed to create newer content");
+    let newest_other_content = crate::create_content(
+        db.as_ref(),
+        crate::NewContent {
+            site_id: site.id,
+            page_type: PageType::Post,
+            title: "Newest Uses Other".to_string(),
+            slug: "newest-uses-other".to_string(),
+            page_content: "![Other](/wp-content/uploads/2020/other.png)".to_string(),
+            draft: false,
+            creator_sub: "mass-import-author".to_string(),
+            created_at: Some(
+                DateTime::parse_from_rfc3339("2026-03-01T00:00:00Z")
+                    .expect("invalid test date")
+                    .with_timezone(&Utc),
+            ),
+            published_at: None,
+        },
+    )
+    .await
+    .expect("failed to create newest other content");
 
     let session_store = MemoryStore::default();
     let test_router = test_app_router(test_admin_state(db.clone()), session_store.clone());
@@ -882,8 +902,19 @@ async fn admin_site_assets_mass_import_updates_all_matching_uses() {
         .expect("failed to read mass import body");
     let list_body = String::from_utf8(list_body.to_vec()).expect("invalid mass import body");
     assert!(list_body.contains("/wp-content/uploads/2020/hero.png"));
+    assert!(list_body.contains("/wp-content/uploads/2020/other.png"));
     assert!(list_body.contains("2 content item(s)"));
     assert!(list_body.contains("2 occurrence(s)"));
+    let other_index = list_body
+        .find("/wp-content/uploads/2020/other.png")
+        .expect("expected other image in mass import body");
+    let hero_index = list_body
+        .find("/wp-content/uploads/2020/hero.png")
+        .expect("expected hero image in mass import body");
+    assert!(
+        other_index < hero_index,
+        "expected freshest missing image path to be listed first"
+    );
 
     let missing_response = test_router
         .router
@@ -960,6 +991,21 @@ async fn admin_site_assets_mass_import_updates_all_matching_uses() {
         !newer_content
             .page_content
             .contains("/wp-content/uploads/2020/hero.png")
+    );
+    let newest_other_content =
+        crate::get_content_for_site(db.as_ref(), site.id, newest_other_content.id)
+            .await
+            .expect("failed to reload newest other content")
+            .expect("missing newest other content");
+    assert!(
+        newest_other_content
+            .page_content
+            .contains("/wp-content/uploads/2020/other.png")
+    );
+    assert!(
+        !newest_other_content
+            .page_content
+            .contains(&shortcode_prefix)
     );
 
     let recheck_response = test_router
