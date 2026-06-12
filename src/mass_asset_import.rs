@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -46,6 +46,23 @@ pub struct LocalAssetCandidate {
     pub relative_path: PathBuf,
     pub rank: LocalAssetCandidateRank,
     pub byte_length: u64,
+}
+
+#[derive(Clone, Debug)]
+struct LocalAssetCandidateQuery {
+    normalized_path: String,
+    normalized_relative: String,
+    normalized_suffix: String,
+    filename: String,
+}
+
+#[derive(Clone, Debug)]
+struct IndexedLocalAsset {
+    absolute_path: PathBuf,
+    relative_path: PathBuf,
+    relative_lower: String,
+    filename: String,
+    byte_length: u64,
 }
 
 pub fn normalize_asset_link(raw: &str, internal_domains: &[String]) -> Option<String> {
@@ -136,17 +153,79 @@ pub async fn find_local_asset_candidates(
     normalized_path: &str,
     limit: usize,
 ) -> Result<Vec<LocalAssetCandidate>, SiteError> {
+    let mut matches =
+        find_local_asset_candidates_for_paths(import_root, &[normalized_path.to_string()], limit)
+            .await?;
+    Ok(matches.remove(normalized_path).unwrap_or_default())
+}
+
+pub async fn find_exact_local_asset_candidates_for_paths(
+    import_root: &Path,
+    normalized_paths: &[String],
+    limit: usize,
+) -> Result<HashMap<String, Vec<LocalAssetCandidate>>, SiteError> {
     let canonical_root = fs::canonicalize(import_root).await.map_err(|error| {
         SiteError::BadRequest(format!("failed to read mass import path: {error}"))
     })?;
-    let normalized_relative = normalized_path.trim_start_matches('/').to_ascii_lowercase();
-    let filename = Path::new(normalized_path)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_ascii_lowercase())
-        .unwrap_or_default();
+    let mut candidates = HashMap::<String, Vec<LocalAssetCandidate>>::new();
+    let mut seen_candidates = HashSet::<(String, PathBuf)>::new();
+    for normalized_path in normalized_paths {
+        candidates.entry(normalized_path.clone()).or_default();
+        let Some(query) = build_candidate_query(normalized_path) else {
+            continue;
+        };
+        let direct_path = canonical_root.join(&query.normalized_relative);
+        let Ok(Some(local_asset)) =
+            build_indexed_local_asset_if_present(&canonical_root, &direct_path).await
+        else {
+            continue;
+        };
+        let Some(rank) = rank_indexed_local_asset(&local_asset, &query) else {
+            continue;
+        };
+        if let Some(matches) = candidates.get_mut(&query.normalized_path)
+            && seen_candidates.insert((
+                query.normalized_path.clone(),
+                local_asset.absolute_path.clone(),
+            ))
+        {
+            matches.push(LocalAssetCandidate {
+                absolute_path: local_asset.absolute_path,
+                relative_path: local_asset.relative_path,
+                rank,
+                byte_length: local_asset.byte_length,
+            });
+            matches.truncate(limit);
+        }
+    }
+    Ok(candidates)
+}
 
-    let mut candidates = Vec::new();
+pub async fn find_local_asset_candidates_for_paths(
+    import_root: &Path,
+    normalized_paths: &[String],
+    limit: usize,
+) -> Result<HashMap<String, Vec<LocalAssetCandidate>>, SiteError> {
+    let canonical_root = fs::canonicalize(import_root).await.map_err(|error| {
+        SiteError::BadRequest(format!("failed to read mass import path: {error}"))
+    })?;
+    let mut candidates = HashMap::<String, Vec<LocalAssetCandidate>>::new();
+    let mut queries = Vec::new();
+    for normalized_path in normalized_paths {
+        candidates.entry(normalized_path.clone()).or_default();
+        let Some(query) = build_candidate_query(normalized_path) else {
+            continue;
+        };
+        if !queries.iter().any(|existing: &LocalAssetCandidateQuery| {
+            existing.normalized_path == query.normalized_path
+        }) {
+            queries.push(query);
+        }
+    }
+    if queries.is_empty() {
+        return Ok(candidates);
+    }
+
     let mut pending = vec![canonical_root.clone()];
     while let Some(directory) = pending.pop() {
         let mut entries = fs::read_dir(&directory).await.map_err(SiteError::from)?;
@@ -165,23 +244,34 @@ pub async fn find_local_asset_candidates(
             if !file_type.is_file() {
                 continue;
             }
-            let Ok(candidate) =
-                build_candidate(&canonical_root, &path, &normalized_relative, &filename).await
+            let Ok(Some(local_asset)) = build_indexed_local_asset(&canonical_root, &path).await
             else {
                 continue;
             };
-            if let Some(candidate) = candidate {
-                candidates.push(candidate);
+            for query in &queries {
+                let Some(rank) = rank_indexed_local_asset(&local_asset, query) else {
+                    continue;
+                };
+                if let Some(matches) = candidates.get_mut(&query.normalized_path) {
+                    matches.push(LocalAssetCandidate {
+                        absolute_path: local_asset.absolute_path.clone(),
+                        relative_path: local_asset.relative_path.clone(),
+                        rank,
+                        byte_length: local_asset.byte_length,
+                    });
+                }
             }
         }
     }
 
-    candidates.sort_by(|left, right| {
-        left.rank
-            .cmp(&right.rank)
-            .then_with(|| left.relative_path.cmp(&right.relative_path))
-    });
-    candidates.truncate(limit);
+    for matches in candidates.values_mut() {
+        matches.sort_by(|left, right| {
+            left.rank
+                .cmp(&right.rank)
+                .then_with(|| left.relative_path.cmp(&right.relative_path))
+        });
+        matches.truncate(limit);
+    }
     Ok(candidates)
 }
 
@@ -287,45 +377,101 @@ fn collect_regex_links(
     }
 }
 
-async fn build_candidate(
+fn build_candidate_query(normalized_path: &str) -> Option<LocalAssetCandidateQuery> {
+    let normalized_relative = normalized_path.trim_start_matches('/').to_ascii_lowercase();
+    if normalized_relative.is_empty() {
+        return None;
+    }
+    let filename = Path::new(normalized_path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+    Some(LocalAssetCandidateQuery {
+        normalized_path: normalized_path.to_string(),
+        normalized_suffix: format!("/{normalized_relative}"),
+        normalized_relative,
+        filename,
+    })
+}
+
+async fn build_indexed_local_asset(
     canonical_root: &Path,
     path: &Path,
-    normalized_relative: &str,
-    filename: &str,
-) -> Result<Option<LocalAssetCandidate>, SiteError> {
-    let canonical_path = validate_import_candidate(canonical_root, path).await?;
+) -> Result<Option<IndexedLocalAsset>, SiteError> {
+    let canonical_path = fs::canonicalize(path).await.map_err(|error| {
+        SiteError::BadRequest(format!("failed to read import candidate: {error}"))
+    })?;
+    build_indexed_local_asset_from_canonical(canonical_root, canonical_path).await
+}
+
+async fn build_indexed_local_asset_if_present(
+    canonical_root: &Path,
+    path: &Path,
+) -> Result<Option<IndexedLocalAsset>, SiteError> {
+    let canonical_path = match fs::canonicalize(path).await {
+        Ok(canonical_path) => canonical_path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(SiteError::BadRequest(format!(
+                "failed to read import candidate: {error}"
+            )));
+        }
+    };
+    build_indexed_local_asset_from_canonical(canonical_root, canonical_path).await
+}
+
+async fn build_indexed_local_asset_from_canonical(
+    canonical_root: &Path,
+    canonical_path: PathBuf,
+) -> Result<Option<IndexedLocalAsset>, SiteError> {
+    if !canonical_path.starts_with(canonical_root) {
+        return Ok(None);
+    }
+    if !path_has_image_extension(&canonical_path) {
+        return Ok(None);
+    }
+    let metadata = fs::metadata(&canonical_path)
+        .await
+        .map_err(SiteError::from)?;
+    if !metadata.is_file() {
+        return Ok(None);
+    }
     let relative_path = canonical_path
         .strip_prefix(canonical_root)
         .map_err(|error| SiteError::internal(format!("failed to strip import root: {error}")))?
         .to_path_buf();
     let relative_string = relative_path.to_string_lossy().replace('\\', "/");
     let relative_lower = relative_string.to_ascii_lowercase();
-    let candidate_filename = canonical_path
+    let filename = canonical_path
         .file_name()
         .and_then(|value| value.to_str())
         .map(|value| value.to_ascii_lowercase())
         .unwrap_or_default();
-    let rank = if relative_lower == normalized_relative
-        || relative_lower.ends_with(&format!("/{normalized_relative}"))
+    Ok(Some(IndexedLocalAsset {
+        absolute_path: canonical_path,
+        relative_path,
+        relative_lower,
+        filename,
+        byte_length: metadata.len(),
+    }))
+}
+
+fn rank_indexed_local_asset(
+    local_asset: &IndexedLocalAsset,
+    query: &LocalAssetCandidateQuery,
+) -> Option<LocalAssetCandidateRank> {
+    if local_asset.relative_lower == query.normalized_relative
+        || local_asset
+            .relative_lower
+            .ends_with(&query.normalized_suffix)
     {
         Some(LocalAssetCandidateRank::PathSuffix)
-    } else if !filename.is_empty() && candidate_filename == filename {
+    } else if !query.filename.is_empty() && local_asset.filename == query.filename {
         Some(LocalAssetCandidateRank::Filename)
     } else {
         None
-    };
-    let Some(rank) = rank else {
-        return Ok(None);
-    };
-    let metadata = fs::metadata(&canonical_path)
-        .await
-        .map_err(SiteError::from)?;
-    Ok(Some(LocalAssetCandidate {
-        absolute_path: canonical_path,
-        relative_path,
-        rank,
-        byte_length: metadata.len(),
-    }))
+    }
 }
 
 fn normalize_asset_path(raw: &str) -> Option<String> {
@@ -526,6 +672,125 @@ mod tests {
         );
         assert_eq!(matches[0].rank, super::LocalAssetCandidateRank::PathSuffix);
         assert_eq!(matches[1].rank, super::LocalAssetCandidateRank::Filename);
+    }
+
+    #[tokio::test]
+    async fn finds_local_asset_candidates_for_multiple_paths() {
+        let temp = tempfile::tempdir().expect("failed to create temp dir");
+        let import_root = temp.path();
+        tokio::fs::create_dir_all(import_root.join("wp-content/uploads/2024"))
+            .await
+            .expect("failed to create nested dir");
+        tokio::fs::create_dir_all(import_root.join("elsewhere"))
+            .await
+            .expect("failed to create fallback dir");
+        tokio::fs::write(
+            import_root.join("wp-content/uploads/2024/hero.jpg"),
+            b"full",
+        )
+        .await
+        .expect("failed to write full match");
+        tokio::fs::write(import_root.join("elsewhere/hero.jpg"), b"name")
+            .await
+            .expect("failed to write name match");
+        tokio::fs::write(
+            import_root.join("wp-content/uploads/2024/other.png"),
+            b"other",
+        )
+        .await
+        .expect("failed to write other match");
+
+        let paths = vec![
+            "/wp-content/uploads/2024/hero.jpg".to_string(),
+            "/wp-content/uploads/2024/other.png".to_string(),
+            "/wp-content/uploads/2024/missing.gif".to_string(),
+        ];
+        let matches = super::find_local_asset_candidates_for_paths(import_root, &paths, 10)
+            .await
+            .expect("failed to find candidates");
+
+        let hero_matches = matches
+            .get("/wp-content/uploads/2024/hero.jpg")
+            .expect("expected hero key");
+        assert_eq!(hero_matches.len(), 2);
+        assert_eq!(
+            hero_matches[0]
+                .relative_path
+                .to_str()
+                .expect("path should be utf-8"),
+            "wp-content/uploads/2024/hero.jpg"
+        );
+        assert_eq!(
+            hero_matches[0].rank,
+            super::LocalAssetCandidateRank::PathSuffix
+        );
+        assert_eq!(
+            hero_matches[1].rank,
+            super::LocalAssetCandidateRank::Filename
+        );
+
+        let other_matches = matches
+            .get("/wp-content/uploads/2024/other.png")
+            .expect("expected other key");
+        assert_eq!(other_matches.len(), 1);
+        assert_eq!(
+            other_matches[0]
+                .relative_path
+                .to_str()
+                .expect("path should be utf-8"),
+            "wp-content/uploads/2024/other.png"
+        );
+
+        let missing_matches = matches
+            .get("/wp-content/uploads/2024/missing.gif")
+            .expect("expected missing key");
+        assert!(missing_matches.is_empty());
+    }
+
+    #[tokio::test]
+    async fn exact_local_asset_candidates_do_not_walk_for_filename_fallbacks() {
+        let temp = tempfile::tempdir().expect("failed to create temp dir");
+        let import_root = temp.path();
+        tokio::fs::create_dir_all(import_root.join("wp-content/uploads/2024"))
+            .await
+            .expect("failed to create nested dir");
+        tokio::fs::create_dir_all(import_root.join("elsewhere"))
+            .await
+            .expect("failed to create fallback dir");
+        tokio::fs::write(
+            import_root.join("wp-content/uploads/2024/hero.jpg"),
+            b"full",
+        )
+        .await
+        .expect("failed to write full match");
+        tokio::fs::write(import_root.join("elsewhere/fallback.jpg"), b"name")
+            .await
+            .expect("failed to write name match");
+
+        let paths = vec![
+            "/wp-content/uploads/2024/hero.jpg".to_string(),
+            "/wp-content/uploads/2024/fallback.jpg".to_string(),
+        ];
+        let matches = super::find_exact_local_asset_candidates_for_paths(import_root, &paths, 10)
+            .await
+            .expect("failed to find exact candidates");
+
+        let hero_matches = matches
+            .get("/wp-content/uploads/2024/hero.jpg")
+            .expect("expected hero key");
+        assert_eq!(hero_matches.len(), 1);
+        assert_eq!(
+            hero_matches[0]
+                .relative_path
+                .to_str()
+                .expect("path should be utf-8"),
+            "wp-content/uploads/2024/hero.jpg"
+        );
+
+        let fallback_matches = matches
+            .get("/wp-content/uploads/2024/fallback.jpg")
+            .expect("expected fallback key");
+        assert!(fallback_matches.is_empty());
     }
 
     #[tokio::test]

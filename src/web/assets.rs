@@ -2,7 +2,8 @@ use super::state::*;
 use super::*;
 use crate::collect_asset_filenames;
 use crate::mass_asset_import::{
-    LocalAssetCandidate, LocalAssetCandidateRank, MissingAssetGroup, find_local_asset_candidates,
+    LocalAssetCandidate, LocalAssetCandidateRank, MissingAssetGroup,
+    find_exact_local_asset_candidates_for_paths, find_local_asset_candidates,
     find_missing_asset_groups, validate_import_candidate,
 };
 use sea_orm::QuerySelect;
@@ -655,14 +656,23 @@ pub(crate) async fn admin_site_assets_mass_import(
             scan_limit,
         )
         .await?;
+        let mut candidate_map = if let Some(import_root) = import_root.as_ref()
+            && !groups.is_empty()
+        {
+            let normalized_paths = groups
+                .iter()
+                .map(|group| group.normalized_path.clone())
+                .collect::<Vec<_>>();
+            find_exact_local_asset_candidates_for_paths(import_root.as_path(), &normalized_paths, 5)
+                .await
+                .unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
         for group in groups {
-            let candidates = if let Some(import_root) = import_root.as_ref() {
-                find_local_asset_candidates(import_root.as_path(), &group.normalized_path, 5)
-                    .await
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            };
+            let candidates = candidate_map
+                .remove(&group.normalized_path)
+                .unwrap_or_default();
             rows.push(AdminMassAssetImportRow {
                 import_href: format!(
                     "/admin/site/{site_id}/assets/mass-import/missing?path={}",
