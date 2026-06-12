@@ -256,6 +256,18 @@ pub(crate) struct AdminMassAssetImportTemplate {
 }
 #[allow(dead_code)]
 #[derive(Template, WebTemplate)]
+#[template(path = "admin_mass_asset_import_content.html")]
+pub(crate) struct AdminMassAssetImportContentTemplate {
+    pub(crate) template_shared: AdminTemplateData,
+    pub(crate) site_id: Uuid,
+    pub(crate) content_id: Uuid,
+    pub(crate) content_title: String,
+    pub(crate) edit_href: String,
+    pub(crate) rows: Vec<AdminMassAssetImportContentPathRow>,
+    pub(crate) message: Option<String>,
+}
+#[allow(dead_code)]
+#[derive(Template, WebTemplate)]
 #[template(path = "admin_missing_image_import.html")]
 pub(crate) struct AdminMissingImageImportTemplate {
     pub(crate) template_shared: AdminTemplateData,
@@ -565,6 +577,7 @@ pub(crate) struct AdminContentListSortHeader {
 #[derive(Debug)]
 pub(crate) struct AdminMassAssetImportPageGroup {
     pub(crate) first_content_title: String,
+    pub(crate) first_content_href: String,
     pub(crate) rows: Vec<AdminMassAssetImportRow>,
 }
 
@@ -582,6 +595,25 @@ pub(crate) struct AdminMassAssetAffectedContentRow {
     pub(crate) title: String,
     pub(crate) occurrence_count: usize,
     pub(crate) edit_href: String,
+}
+
+#[derive(Debug)]
+pub(crate) struct AdminMassAssetImportContentPathRow {
+    pub(crate) normalized_path: String,
+    pub(crate) post_occurrence_count: usize,
+    pub(crate) affected_post_count: usize,
+    pub(crate) site_occurrence_count: usize,
+    pub(crate) candidates: Vec<AdminMassAssetImportContentCandidateRow>,
+}
+
+#[derive(Debug)]
+pub(crate) struct AdminMassAssetImportContentCandidateRow {
+    pub(crate) relative_path: String,
+    pub(crate) preview_url: String,
+    pub(crate) byte_length: String,
+    pub(crate) dimensions: String,
+    pub(crate) rank_label: String,
+    pub(crate) selection_value: String,
 }
 
 #[derive(Debug)]

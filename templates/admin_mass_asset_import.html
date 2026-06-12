@@ -48,7 +48,7 @@
     {% for page_group in page_groups %}
     <tbody>
       <tr class="mass-import-page-group">
-        <th colspan="4">First found on {{ page_group.first_content_title }}</th>
+        <th colspan="4">First found on <a href="{{ page_group.first_content_href }}">{{ page_group.first_content_title }}</a></th>
       </tr>
       {% for row in page_group.rows %}
       <tr data-mass-asset-row data-normalized-path="{{ row.normalized_path }}">

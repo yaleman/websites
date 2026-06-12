@@ -127,6 +127,14 @@ pub(crate) fn build_admin_app(
             get(admin_site_assets_mass_import_missing).post(admin_site_assets_mass_import_apply),
         )
         .route(
+            "/admin/site/{site_id}/assets/mass-import/content/{content_id}",
+            get(admin_site_assets_mass_import_content),
+        )
+        .route(
+            "/admin/site/{site_id}/assets/mass-import/content/{content_id}/apply",
+            axum::routing::post(admin_site_assets_mass_import_content_apply),
+        )
+        .route(
             "/admin/site/{site_id}/assets/mass-import/preview",
             get(admin_site_assets_mass_import_preview),
         )

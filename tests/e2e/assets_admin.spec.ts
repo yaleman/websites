@@ -279,6 +279,72 @@ test.describe("assets admin", () => {
 				fullPage: true,
 			});
 
+			await page
+				.getByRole("link", { name: "Newest Uses Grouped Assets" })
+				.click();
+			await expect(page).toHaveURL(
+				new RegExp(
+					`/admin/site/${harness.siteId}/assets/mass-import/content/[0-9a-f-]+$`,
+				),
+			);
+			const contentImportUrl = page.url();
+			await expect(
+				page.getByRole("heading", {
+					level: 2,
+					name: "Missing Assets For Newest Uses Grouped Assets",
+				}),
+			).toBeVisible();
+			await expect(page.locator("body")).toContainText(
+				"/wp-content/uploads/2020/other.png",
+			);
+			await expect(page.locator("body")).toContainText(
+				"/wp-content/uploads/2020/third.gif",
+			);
+			await expect(
+				page.getByRole("button", { name: "Import selected" }),
+			).toBeVisible();
+			await expect(
+				page.getByRole("button", { name: "Import this" }),
+			).toBeVisible();
+
+			const assertContentImportContained = async () => {
+				const surfaceBox = await page
+					.locator("main > section.surface")
+					.boundingBox();
+				const headingBox = await page
+					.getByRole("heading", {
+						level: 2,
+						name: "Missing Assets For Newest Uses Grouped Assets",
+					})
+					.boundingBox();
+				const candidateBox = await page
+					.locator("article", { hasText: "wp-content/uploads/2020/other.png" })
+					.first()
+					.boundingBox();
+				const previewBox = await page.locator("article img").first().boundingBox();
+				expect(surfaceBox).not.toBeNull();
+				expect(headingBox).not.toBeNull();
+				expect(candidateBox).not.toBeNull();
+				expect(previewBox).not.toBeNull();
+				if (!surfaceBox || !headingBox || !candidateBox || !previewBox) {
+					throw new Error("post mass import layout boxes were not available");
+				}
+				expect(headingBox.x - surfaceBox.x).toBeGreaterThanOrEqual(15);
+				expect(candidateBox.x).toBeGreaterThanOrEqual(surfaceBox.x);
+				expect(candidateBox.x + candidateBox.width).toBeLessThanOrEqual(
+					surfaceBox.x + surfaceBox.width,
+				);
+				expect(previewBox.x).toBeGreaterThan(candidateBox.x);
+				expect(previewBox.x + previewBox.width).toBeLessThan(
+					candidateBox.x + candidateBox.width,
+				);
+			};
+			await assertContentImportContained();
+			await page.screenshot({
+				path: testInfo.outputPath("mass-import-content-desktop.png"),
+				fullPage: true,
+			});
+
 			await page.setViewportSize({ width: 430, height: 900 });
 			await page.goto(listingUrl, { waitUntil: "domcontentloaded" });
 			await expect(
@@ -291,6 +357,23 @@ test.describe("assets admin", () => {
 			expect(documentScrollWidth).toBeLessThanOrEqual(430);
 			await page.screenshot({
 				path: testInfo.outputPath("mass-import-listing-mobile.png"),
+				fullPage: true,
+			});
+
+			await page.goto(contentImportUrl, { waitUntil: "domcontentloaded" });
+			await expect(
+				page.getByRole("heading", {
+					level: 2,
+					name: "Missing Assets For Newest Uses Grouped Assets",
+				}),
+			).toBeVisible();
+			await assertContentImportContained();
+			const contentDocumentScrollWidth = await page.evaluate(
+				() => document.documentElement.scrollWidth,
+			);
+			expect(contentDocumentScrollWidth).toBeLessThanOrEqual(430);
+			await page.screenshot({
+				path: testInfo.outputPath("mass-import-content-mobile.png"),
 				fullPage: true,
 			});
 

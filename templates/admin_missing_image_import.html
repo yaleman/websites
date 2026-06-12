@@ -42,7 +42,9 @@
     <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       {% for candidate in candidates %}
       <article class="surface grid gap-3 p-4">
-        <img class="max-h-56 max-w-full object-contain" src="{{ candidate.preview_url }}" alt="" loading="lazy" />
+        <div class="flex h-40 w-full items-center justify-center overflow-hidden rounded-md bg-slate-50">
+          <img class="max-h-full max-w-full object-contain" src="{{ candidate.preview_url }}" alt="" loading="lazy" />
+        </div>
         <div>
           <strong>{{ candidate.rank_label }}</strong><br />
           <code>{{ candidate.relative_path }}</code><br />

@@ -906,8 +906,9 @@ async fn admin_site_assets_mass_import_updates_all_matching_uses() {
     assert!(list_body.contains("/wp-content/uploads/2020/hero.png"));
     assert!(list_body.contains("/wp-content/uploads/2020/other.png"));
     assert!(list_body.contains("/wp-content/uploads/2020/third.gif"));
-    assert!(list_body.contains("First found on Newest Uses Other"));
-    assert!(list_body.contains("First found on Newer Uses Hero"));
+    assert!(list_body.contains("First found on"));
+    assert!(list_body.contains("Newest Uses Other"));
+    assert!(list_body.contains("Newer Uses Hero"));
     assert!(list_body.contains("2 content item(s)"));
     assert!(list_body.contains("2 occurrence(s)"));
     let other_index = list_body
@@ -924,15 +925,68 @@ async fn admin_site_assets_mass_import_updates_all_matching_uses() {
         "expected freshest missing image path to be listed first"
     );
     let newest_group_index = list_body
-        .find("First found on Newest Uses Other")
+        .find("Newest Uses Other")
         .expect("expected newest group heading");
     let newer_group_index = list_body
-        .find("First found on Newer Uses Hero")
+        .find("Newer Uses Hero")
         .expect("expected newer group heading");
     assert!(newest_group_index < other_index);
     assert!(newest_group_index < third_index);
     assert!(third_index < newer_group_index);
     assert!(newer_group_index < hero_index);
+    assert!(list_body.contains(&format!(
+        "/admin/site/{}/assets/mass-import/content/{}",
+        site.id, newer_content.id
+    )));
+
+    let content_import_response = test_router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/admin/site/{}/assets/mass-import/content/{}",
+                    site.id, newer_content.id
+                ))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("failed to build content import request"),
+        )
+        .await
+        .expect("failed to call content import route");
+    assert_eq!(content_import_response.status(), StatusCode::OK);
+    let content_import_body = to_bytes(content_import_response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read content import body");
+    let content_import_body =
+        String::from_utf8(content_import_body.to_vec()).expect("invalid content import body");
+    assert!(content_import_body.contains("Missing Assets For Newer Uses Hero"));
+    assert!(content_import_body.contains("/wp-content/uploads/2020/hero.png"));
+    assert!(content_import_body.contains("Import selected"));
+
+    let older_content_import_response = test_router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/admin/site/{}/assets/mass-import/content/{}",
+                    site.id, older_content.id
+                ))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("failed to build older content import request"),
+        )
+        .await
+        .expect("failed to call older content import route");
+    assert_eq!(older_content_import_response.status(), StatusCode::OK);
+    let older_content_import_body = to_bytes(older_content_import_response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read older content import body");
+    let older_content_import_body = String::from_utf8(older_content_import_body.to_vec())
+        .expect("invalid older content import body");
+    assert!(older_content_import_body.contains("Missing Assets For Older Uses Hero"));
+    assert!(older_content_import_body.contains("/wp-content/uploads/2020/hero.png"));
 
     let missing_response = test_router
         .router
@@ -1056,6 +1110,184 @@ async fn admin_site_assets_mass_import_updates_all_matching_uses() {
         serde_json::from_slice(&recheck_body).expect("recheck body should be json");
     assert_eq!(recheck_body["complete"], true);
     assert_eq!(recheck_body["occurrence_count"], 0);
+}
+
+#[tokio::test]
+async fn admin_site_assets_mass_import_content_batch_updates_selected_paths() {
+    let db = Arc::new(test_db_start().await);
+    let site = crate::create_site(
+        db.as_ref(),
+        "mass-import-content-site".to_string(),
+        "Mass Import Content Site".to_string(),
+        DEFAULT_TEMPLATE_NAME.to_string(),
+    )
+    .await
+    .expect("failed to create site");
+    let author = crate::entities::user::create_user(
+        db.as_ref(),
+        "mass-import-content-author",
+        Some("content-author@example.com"),
+        Some("Content Author"),
+        false,
+    )
+    .await
+    .expect("failed to create author");
+    crate::create_membership(
+        db.as_ref(),
+        crate::NewMembership {
+            site_id: site.id,
+            user_id: author.id,
+            role: SiteRole::Author,
+        },
+    )
+    .await
+    .expect("failed to create author membership");
+
+    let import_root = tempfile::tempdir().expect("failed to create import root");
+    let candidate_dir = import_root.path().join("wp-content/uploads/2020");
+    tokio::fs::create_dir_all(&candidate_dir)
+        .await
+        .expect("failed to create import candidate directory");
+    tokio::fs::write(candidate_dir.join("hero.png"), TINY_PNG_BYTES)
+        .await
+        .expect("failed to write hero candidate");
+    tokio::fs::write(candidate_dir.join("other.png"), TINY_PNG_BYTES)
+        .await
+        .expect("failed to write other candidate");
+
+    crate::update_site_settings(
+        db.as_ref(),
+        site.id,
+        site.full_title.clone(),
+        site.template_name.clone(),
+        site.publish_on_render,
+        vec!["example.com".to_string()],
+        Some(import_root.path().to_string_lossy().to_string()),
+    )
+    .await
+    .expect("failed to update import settings");
+
+    let target_content = crate::create_content(
+        db.as_ref(),
+        crate::NewContent {
+            site_id: site.id,
+            page_type: PageType::Post,
+            title: "Target With Missing Assets".to_string(),
+            slug: "target-with-missing-assets".to_string(),
+            page_content:
+                "![Hero](/wp-content/uploads/2020/hero.png) ![Other](/wp-content/uploads/2020/other.png)"
+                    .to_string(),
+            draft: false,
+            creator_sub: "mass-import-content-author".to_string(),
+            created_at: Some(
+                DateTime::parse_from_rfc3339("2026-02-01T00:00:00Z")
+                    .expect("invalid test date")
+                    .with_timezone(&Utc),
+            ),
+            published_at: None,
+        },
+    )
+    .await
+    .expect("failed to create target content");
+    let reused_content = crate::create_content(
+        db.as_ref(),
+        crate::NewContent {
+            site_id: site.id,
+            page_type: PageType::Post,
+            title: "Reused Missing Assets".to_string(),
+            slug: "reused-missing-assets".to_string(),
+            page_content:
+                r#"<img src="https://example.com/wp-content/uploads/2020/hero.png" /> <a href="/wp-content/uploads/2020/other.png">other</a>"#
+                    .to_string(),
+            draft: false,
+            creator_sub: "mass-import-content-author".to_string(),
+            created_at: Some(
+                DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+                    .expect("invalid test date")
+                    .with_timezone(&Utc),
+            ),
+            published_at: None,
+        },
+    )
+    .await
+    .expect("failed to create reused content");
+
+    let session_store = MemoryStore::default();
+    let test_router = test_app_router(test_admin_state(db.clone()), session_store.clone());
+    let cookie = seed_session_cookie(
+        test_admin_state(db.clone()),
+        test_router.session_store.clone(),
+        author.id,
+    )
+    .await;
+
+    let encode_selection = |normalized_path: &str, candidate: &str| {
+        let mut selection = url::form_urlencoded::Serializer::new(String::new());
+        selection.append_pair("normalized_path", normalized_path);
+        selection.append_pair("candidate", candidate);
+        selection.finish()
+    };
+    let mut form = url::form_urlencoded::Serializer::new(String::new());
+    form.append_pair(
+        "selection_hero",
+        &encode_selection(
+            "/wp-content/uploads/2020/hero.png",
+            "wp-content/uploads/2020/hero.png",
+        ),
+    );
+    form.append_pair(
+        "selection_other",
+        &encode_selection(
+            "/wp-content/uploads/2020/other.png",
+            "wp-content/uploads/2020/other.png",
+        ),
+    );
+
+    let response = test_router
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/admin/site/{}/assets/mass-import/content/{}/apply",
+                    site.id, target_content.id
+                ))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(form.finish()))
+                .expect("failed to build content import apply request"),
+        )
+        .await
+        .expect("failed to call content import apply route");
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+    let assets = crate::list_assets(db.as_ref(), site.id)
+        .await
+        .expect("failed to list imported assets");
+    assert_eq!(assets.len(), 2);
+
+    let target_content = crate::get_content_for_site(db.as_ref(), site.id, target_content.id)
+        .await
+        .expect("failed to reload target content")
+        .expect("missing target content");
+    let reused_content = crate::get_content_for_site(db.as_ref(), site.id, reused_content.id)
+        .await
+        .expect("failed to reload reused content")
+        .expect("missing reused content");
+    for content in [&target_content, &reused_content] {
+        assert!(
+            !content
+                .page_content
+                .contains("/wp-content/uploads/2020/hero.png")
+        );
+        assert!(
+            !content
+                .page_content
+                .contains("/wp-content/uploads/2020/other.png")
+        );
+        assert!(content.page_content.matches("[[asset").count() >= 2);
+    }
 }
 
 #[tokio::test]
