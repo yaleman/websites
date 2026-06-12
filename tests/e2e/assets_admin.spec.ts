@@ -7,10 +7,13 @@ import { expect, test } from "@playwright/test";
 import {
 	addMembership,
 	cleanupHarness,
+	captureResponsiveScreenshot,
 	createAssetWithThumbnail,
 	createAuthenticatedPage,
 	createContent,
 	createUser,
+	expectElementInsetWithinContainer,
+	expectNoHorizontalOverflow,
 	setupHarness,
 	tinyPngBytes,
 } from "./support";
@@ -289,6 +292,12 @@ test.describe("assets admin", () => {
 			);
 			const contentImportUrl = page.url();
 			await expect(
+				page.getByRole("link", { name: "Mass asset import" }),
+			).toHaveCount(1);
+			await expect(page.getByRole("link", { name: "Open editor" })).toHaveCount(
+				1,
+			);
+			await expect(
 				page.getByRole("heading", {
 					level: 2,
 					name: "Missing Assets For Newest Uses Grouped Assets",
@@ -317,11 +326,17 @@ test.describe("assets admin", () => {
 						name: "Missing Assets For Newest Uses Grouped Assets",
 					})
 					.boundingBox();
-				const candidateBox = await page
-					.locator("article", { hasText: "wp-content/uploads/2020/other.png" })
-					.first()
-					.boundingBox();
-				const previewBox = await page.locator("article img").first().boundingBox();
+				const pathRows = page.locator("[data-mass-import-content-path-row]");
+				await expect(pathRows).toHaveCount(2);
+				await expect(pathRows.first()).toHaveCSS("border-left-width", "0px");
+				const candidateCard = page
+					.locator("[data-mass-import-content-candidate]")
+					.first();
+				const candidateBox = await candidateCard.boundingBox();
+				const previewWell = candidateCard.locator(
+					"[data-mass-import-content-preview]",
+				);
+				const previewBox = await previewWell.boundingBox();
 				expect(surfaceBox).not.toBeNull();
 				expect(headingBox).not.toBeNull();
 				expect(candidateBox).not.toBeNull();
@@ -338,12 +353,23 @@ test.describe("assets admin", () => {
 				expect(previewBox.x + previewBox.width).toBeLessThan(
 					candidateBox.x + candidateBox.width,
 				);
+				await expectElementInsetWithinContainer(
+					candidateCard,
+					previewWell,
+					16,
+				);
+				await expectElementInsetWithinContainer(
+					candidateCard,
+					candidateCard.getByRole("button", { name: "Import this" }),
+					16,
+				);
 			};
 			await assertContentImportContained();
-			await page.screenshot({
-				path: testInfo.outputPath("mass-import-content-desktop.png"),
-				fullPage: true,
-			});
+			await captureResponsiveScreenshot(
+				page,
+				testInfo,
+				"mass-import-content-desktop",
+			);
 
 			await page.setViewportSize({ width: 430, height: 900 });
 			await page.goto(listingUrl, { waitUntil: "domcontentloaded" });
@@ -351,10 +377,7 @@ test.describe("assets admin", () => {
 				page.getByText("First found on Newest Uses Grouped Assets"),
 			).toBeVisible();
 			await assertTableContained();
-			const documentScrollWidth = await page.evaluate(
-				() => document.documentElement.scrollWidth,
-			);
-			expect(documentScrollWidth).toBeLessThanOrEqual(430);
+			await expectNoHorizontalOverflow(page, 430);
 			await page.screenshot({
 				path: testInfo.outputPath("mass-import-listing-mobile.png"),
 				fullPage: true,
@@ -368,14 +391,12 @@ test.describe("assets admin", () => {
 				}),
 			).toBeVisible();
 			await assertContentImportContained();
-			const contentDocumentScrollWidth = await page.evaluate(
-				() => document.documentElement.scrollWidth,
+			await expectNoHorizontalOverflow(page, 430);
+			await captureResponsiveScreenshot(
+				page,
+				testInfo,
+				"mass-import-content-mobile",
 			);
-			expect(contentDocumentScrollWidth).toBeLessThanOrEqual(430);
-			await page.screenshot({
-				path: testInfo.outputPath("mass-import-content-mobile.png"),
-				fullPage: true,
-			});
 
 			await context.close();
 		} finally {

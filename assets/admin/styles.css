@@ -56,7 +56,6 @@
 		@apply overflow-auto rounded-lg border border-slate-200 bg-slate-950 px-3 py-2 text-sm text-slate-100;
 	}
 
-	section,
 	.surface,
 	.scan-panel,
 	.scan-summary,

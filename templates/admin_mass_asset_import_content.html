@@ -1,11 +1,6 @@
 {% extends "base_template.html" %}
 {% block body %}
 <section class="surface grid gap-4 p-4 md:p-6">
-  <div class="form-actions">
-    <a class="btn" href="/admin/site/{{ site_id }}/assets/mass-import">Mass asset import</a>
-    <a class="btn" href="{{ edit_href }}">Open editor</a>
-  </div>
-
   <h2>Missing Assets For {{ content_title }}</h2>
 
   {% if let Some(message) = message %}
@@ -21,9 +16,9 @@
     </div>
 
     {% for row in rows %}
-    <section class="grid gap-3 border-t border-slate-200 pt-4 first:border-t-0 first:pt-0">
+    <div class="grid gap-3 border-t border-slate-200 pt-4 first:border-t-0 first:pt-0" data-mass-import-content-path-row>
       <div class="grid gap-2">
-        <h3><code>{{ row.normalized_path }}</code></h3>
+        <h3><code class="break-words">{{ row.normalized_path }}</code></h3>
         <p class="inline-body">
           {{ row.post_occurrence_count }} occurrence(s) in this content item.
           {{ row.affected_post_count }} site content item(s), {{ row.site_occurrence_count }} site occurrence(s).
@@ -35,8 +30,8 @@
       {% else %}
       <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {% for candidate in row.candidates %}
-        <article class="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/60">
-          <div class="flex h-40 w-full items-center justify-center overflow-hidden rounded-md bg-slate-50">
+        <article class="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/60" data-mass-import-content-candidate>
+          <div class="flex h-40 w-full items-center justify-center overflow-hidden rounded-md bg-slate-50" data-mass-import-content-preview>
             <img class="max-h-full max-w-full object-contain" src="{{ candidate.preview_url }}" alt="" loading="lazy" />
           </div>
           <label class="inline-checkbox">
@@ -45,15 +40,15 @@
           </label>
           <div>
             <strong>{{ candidate.rank_label }}</strong><br />
-            <code>{{ candidate.relative_path }}</code><br />
+            <code class="break-words">{{ candidate.relative_path }}</code><br />
             {{ candidate.byte_length }} / {{ candidate.dimensions }}
           </div>
-          <button type="submit" name="single_selection" value="{{ candidate.selection_value }}">Import this</button>
+          <button type="submit" name="single_selection" value="{{ candidate.selection_value }}" data-mass-import-content-action>Import this</button>
         </article>
         {% endfor %}
       </div>
       {% endif %}
-    </section>
+    </div>
     {% endfor %}
   </form>
   {% endif %}
