@@ -32,10 +32,11 @@
   <p class="inline-body">{{ message }}</p>
   {% endif %}
 
-  {% if rows.is_empty() %}
+  {% if page_groups.is_empty() %}
   <p class="inline-body">No missing asset paths found.</p>
   {% else %}
-  <table>
+  <div class="mass-import-table-wrap" data-mass-import-table-scroll>
+  <table class="mass-import-table">
     <thead>
       <tr>
         <th>Missing path</th>
@@ -44,12 +45,16 @@
         <th>Actions</th>
       </tr>
     </thead>
+    {% for page_group in page_groups %}
     <tbody>
-      {% for row in rows %}
+      <tr class="mass-import-page-group">
+        <th colspan="4">First found on {{ page_group.first_content_title }}</th>
+      </tr>
+      {% for row in page_group.rows %}
       <tr data-mass-asset-row data-normalized-path="{{ row.normalized_path }}">
-        <td><code>{{ row.normalized_path }}</code></td>
-        <td>{{ row.affected_post_count }} content item(s), {{ row.occurrence_count }} occurrence(s)</td>
-        <td>
+        <td data-label="Missing path"><code>{{ row.normalized_path }}</code></td>
+        <td data-label="Uses">{{ row.affected_post_count }} content item(s), {{ row.occurrence_count }} occurrence(s)</td>
+        <td data-label="Local candidates">
           {% if row.candidate_paths.is_empty() %}
           No files found.
           {% else %}
@@ -60,7 +65,7 @@
           </ul>
           {% endif %}
         </td>
-        <td>
+        <td data-label="Actions">
           <a class="btn" href="{{ row.import_href }}" target="_blank" rel="noopener">Open import</a>
           <button type="button" class="btn" data-recheck-mass-asset>Recheck</button>
           <span data-recheck-status></span>
@@ -68,7 +73,9 @@
       </tr>
       {% endfor %}
     </tbody>
+    {% endfor %}
   </table>
+  </div>
   {% endif %}
 </section>
 {% endblock %}

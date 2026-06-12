@@ -616,7 +616,7 @@ pub(crate) async fn admin_site_assets_mass_import(
     let import_path = site.mass_import_assets.clone().unwrap_or_default();
     let mut message = None;
     let mut warnings = Vec::new();
-    let mut rows = Vec::new();
+    let mut page_groups = Vec::<AdminMassAssetImportPageGroup>::new();
     let import_root = if import_path.trim().is_empty() {
         warnings.push("Mass import assets path is not configured.".to_string());
         None
@@ -670,10 +670,15 @@ pub(crate) async fn admin_site_assets_mass_import(
             HashMap::new()
         };
         for group in groups {
+            let first_content_title = group
+                .affected_content
+                .first()
+                .map(|row| row.title.clone())
+                .unwrap_or_else(|| "Unknown content".to_string());
             let candidates = candidate_map
                 .remove(&group.normalized_path)
                 .unwrap_or_default();
-            rows.push(AdminMassAssetImportRow {
+            let row = AdminMassAssetImportRow {
                 import_href: format!(
                     "/admin/site/{site_id}/assets/mass-import/missing?path={}",
                     encode_query_value(&group.normalized_path)
@@ -685,7 +690,18 @@ pub(crate) async fn admin_site_assets_mass_import(
                     .into_iter()
                     .map(|candidate| candidate.relative_path.to_string_lossy().to_string())
                     .collect(),
-            });
+            };
+            if let Some(page_group) = page_groups
+                .last_mut()
+                .filter(|page_group| page_group.first_content_title == first_content_title)
+            {
+                page_group.rows.push(row);
+            } else {
+                page_groups.push(AdminMassAssetImportPageGroup {
+                    first_content_title,
+                    rows: vec![row],
+                });
+            }
         }
     }
 
@@ -700,7 +716,7 @@ pub(crate) async fn admin_site_assets_mass_import(
         site_id,
         import_path,
         scan_limit,
-        rows,
+        page_groups,
         message,
         warnings,
     })

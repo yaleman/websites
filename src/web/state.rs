@@ -250,7 +250,7 @@ pub(crate) struct AdminMassAssetImportTemplate {
     pub(crate) site_id: Uuid,
     pub(crate) import_path: String,
     pub(crate) scan_limit: usize,
-    pub(crate) rows: Vec<AdminMassAssetImportRow>,
+    pub(crate) page_groups: Vec<AdminMassAssetImportPageGroup>,
     pub(crate) message: Option<String>,
     pub(crate) warnings: Vec<String>,
 }
@@ -560,6 +560,12 @@ pub(crate) struct AdminContentListSortHeader {
     pub(crate) label: &'static str,
     pub(crate) href: String,
     pub(crate) indicator: &'static str,
+}
+
+#[derive(Debug)]
+pub(crate) struct AdminMassAssetImportPageGroup {
+    pub(crate) first_content_title: String,
+    pub(crate) rows: Vec<AdminMassAssetImportRow>,
 }
 
 #[derive(Debug)]

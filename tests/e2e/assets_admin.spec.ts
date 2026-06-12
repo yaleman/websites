@@ -179,6 +179,127 @@ test.describe("assets admin", () => {
 		}
 	});
 
+	test("mass import listing groups paths by first content page", async ({
+		browser,
+	}, testInfo) => {
+		const harness = await setupHarness();
+
+		try {
+			const subject = "mass-import-listing";
+			const userId = await createUser(harness, subject);
+			await addMembership(harness, userId, "owner");
+
+			const importRoot = path.join(harness.tempRoot, "mass-import-assets");
+			await mkdir(path.join(importRoot, "wp-content", "uploads", "2020"), {
+				recursive: true,
+			});
+			await writeFile(
+				path.join(importRoot, "wp-content", "uploads", "2020", "hero.png"),
+				tinyPngBytes,
+			);
+			await writeFile(
+				path.join(importRoot, "wp-content", "uploads", "2020", "other.png"),
+				tinyPngBytes,
+			);
+
+			await createContent(harness, {
+				pageType: "page",
+				title: "Older Uses Hero",
+				slug: "older-uses-hero",
+				pageContent:
+					'![Hero](https://example.com/wp-content/uploads/2020/hero.png)',
+				creatorSub: subject,
+			});
+			await createContent(harness, {
+				pageType: "page",
+				title: "Newest Uses Grouped Assets",
+				slug: "newest-uses-grouped-assets",
+				pageContent:
+					'![Other](/wp-content/uploads/2020/other.png) [Third](/wp-content/uploads/2020/third.gif)',
+				creatorSub: subject,
+			});
+
+			const { context, page } = await createAuthenticatedPage(
+				browser,
+				harness,
+				subject,
+			);
+
+			await page.goto(
+				`${harness.baseUrl}/admin/site/${harness.siteId}/settings`,
+				{ waitUntil: "domcontentloaded" },
+			);
+			await page.getByLabel("Internal Domains").fill("example.com");
+			await page.getByLabel("Mass Import Assets Path").fill(importRoot);
+			await page.getByRole("button", { name: "Save settings" }).click();
+			await expect(page).toHaveURL(
+				`${harness.baseUrl}/admin/site/${harness.siteId}/settings`,
+			);
+
+			const listingUrl = `${harness.baseUrl}/admin/site/${harness.siteId}/assets/mass-import`;
+			await page.goto(listingUrl, { waitUntil: "domcontentloaded" });
+			await expect(
+				page.getByRole("heading", { level: 1, name: "Mass Asset Import" }),
+			).toBeVisible();
+			await expect(
+				page.getByText("First found on Newest Uses Grouped Assets"),
+			).toBeVisible();
+			await expect(
+				page.getByText("First found on Older Uses Hero"),
+			).toBeVisible();
+			await expect(page.locator("body")).toContainText(
+				"/wp-content/uploads/2020/other.png",
+			);
+			await expect(page.locator("body")).toContainText(
+				"/wp-content/uploads/2020/third.gif",
+			);
+			await expect(page.locator("body")).toContainText(
+				"/wp-content/uploads/2020/hero.png",
+			);
+			const assertTableContained = async () => {
+				const surfaceBox = await page
+					.locator("main > section.surface")
+					.boundingBox();
+				const tableScrollBox = await page
+					.locator("[data-mass-import-table-scroll]")
+					.boundingBox();
+				expect(surfaceBox).not.toBeNull();
+				expect(tableScrollBox).not.toBeNull();
+				if (!surfaceBox || !tableScrollBox) {
+					throw new Error("mass import table layout boxes were not available");
+				}
+				expect(tableScrollBox.x).toBeGreaterThanOrEqual(surfaceBox.x);
+				expect(tableScrollBox.x + tableScrollBox.width).toBeLessThanOrEqual(
+					surfaceBox.x + surfaceBox.width,
+				);
+			};
+			await assertTableContained();
+			await page.screenshot({
+				path: testInfo.outputPath("mass-import-listing-desktop.png"),
+				fullPage: true,
+			});
+
+			await page.setViewportSize({ width: 430, height: 900 });
+			await page.goto(listingUrl, { waitUntil: "domcontentloaded" });
+			await expect(
+				page.getByText("First found on Newest Uses Grouped Assets"),
+			).toBeVisible();
+			await assertTableContained();
+			const documentScrollWidth = await page.evaluate(
+				() => document.documentElement.scrollWidth,
+			);
+			expect(documentScrollWidth).toBeLessThanOrEqual(430);
+			await page.screenshot({
+				path: testInfo.outputPath("mass-import-listing-mobile.png"),
+				fullPage: true,
+			});
+
+			await context.close();
+		} finally {
+			await cleanupHarness(harness);
+		}
+	});
+
 	test("uploads multiple assets from the admin upload page", async ({
 		browser,
 	}) => {

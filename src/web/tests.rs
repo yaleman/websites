@@ -859,7 +859,9 @@ async fn admin_site_assets_mass_import_updates_all_matching_uses() {
             page_type: PageType::Post,
             title: "Newest Uses Other".to_string(),
             slug: "newest-uses-other".to_string(),
-            page_content: "![Other](/wp-content/uploads/2020/other.png)".to_string(),
+            page_content:
+                "![Other](/wp-content/uploads/2020/other.png) [Third](/wp-content/uploads/2020/third.gif)"
+                    .to_string(),
             draft: false,
             creator_sub: "mass-import-author".to_string(),
             created_at: Some(
@@ -903,11 +905,17 @@ async fn admin_site_assets_mass_import_updates_all_matching_uses() {
     let list_body = String::from_utf8(list_body.to_vec()).expect("invalid mass import body");
     assert!(list_body.contains("/wp-content/uploads/2020/hero.png"));
     assert!(list_body.contains("/wp-content/uploads/2020/other.png"));
+    assert!(list_body.contains("/wp-content/uploads/2020/third.gif"));
+    assert!(list_body.contains("First found on Newest Uses Other"));
+    assert!(list_body.contains("First found on Newer Uses Hero"));
     assert!(list_body.contains("2 content item(s)"));
     assert!(list_body.contains("2 occurrence(s)"));
     let other_index = list_body
         .find("/wp-content/uploads/2020/other.png")
         .expect("expected other image in mass import body");
+    let third_index = list_body
+        .find("/wp-content/uploads/2020/third.gif")
+        .expect("expected third image in mass import body");
     let hero_index = list_body
         .find("/wp-content/uploads/2020/hero.png")
         .expect("expected hero image in mass import body");
@@ -915,6 +923,16 @@ async fn admin_site_assets_mass_import_updates_all_matching_uses() {
         other_index < hero_index,
         "expected freshest missing image path to be listed first"
     );
+    let newest_group_index = list_body
+        .find("First found on Newest Uses Other")
+        .expect("expected newest group heading");
+    let newer_group_index = list_body
+        .find("First found on Newer Uses Hero")
+        .expect("expected newer group heading");
+    assert!(newest_group_index < other_index);
+    assert!(newest_group_index < third_index);
+    assert!(third_index < newer_group_index);
+    assert!(newer_group_index < hero_index);
 
     let missing_response = test_router
         .router
