@@ -1,0 +1,81 @@
+{% extends "base_template.html" %}
+{% block header %}
+  <script src="/admin/assets/mass_asset_import.js" defer></script>
+{% endblock %}
+{% block body %}
+<section class="surface grid gap-4 p-4 md:p-6" data-mass-asset-import-root data-site-id="{{ site_id }}">
+  <form method="get" action="/admin/site/{{ site_id }}/assets/mass-import" class="stack-form">
+    <div class="form-field">
+      <label for="scan_limit">Missing Paths To Show</label>
+      <input id="scan_limit" name="limit" type="number" min="1" max="100" value="{{ scan_limit }}" />
+    </div>
+    <div class="form-field">
+      <label for="import_path">Mass Import Assets Path</label>
+      <input id="import_path" value="{{ import_path }}" readonly />
+    </div>
+    <div class="form-actions">
+      <button type="submit">Scan assets</button>
+    </div>
+  </form>
+
+  {% if !warnings.is_empty() %}
+  <div class="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+    <ul>
+      {% for warning in warnings %}
+      <li>{{ warning }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if let Some(message) = message %}
+  <p class="inline-body">{{ message }}</p>
+  {% endif %}
+
+  {% if page_groups.is_empty() %}
+  <p class="inline-body">No missing asset paths found.</p>
+  {% else %}
+  <div class="mass-import-table-wrap" data-mass-import-table-scroll>
+  <table class="mass-import-table">
+    <thead>
+      <tr>
+        <th>Missing path</th>
+        <th>Uses</th>
+        <th>Local candidates</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    {% for page_group in page_groups %}
+    <tbody>
+      <tr class="mass-import-page-group">
+        <th colspan="4">First found on <strong><a href="{{ page_group.first_content_href }}">{{ page_group.first_content_title }}</a></strong></th>
+      </tr>
+      {% for row in page_group.rows %}
+      <tr data-mass-asset-row data-normalized-path="{{ row.normalized_path }}">
+        <td data-label="Missing path"><code>{{ row.normalized_path }}</code></td>
+        <td data-label="Uses">{{ row.affected_post_count }} content item(s), {{ row.occurrence_count }} occurrence(s)</td>
+        <td data-label="Local candidates">
+          {% if row.candidate_paths.is_empty() %}
+          No files found.
+          {% else %}
+          <ul>
+            {% for candidate in row.candidate_paths %}
+            <li><code>{{ candidate }}</code></li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </td>
+        <td data-label="Actions">
+          <a class="btn" href="{{ row.import_href }}" target="_blank" rel="noopener">Open import</a>
+          <button type="button" class="btn" data-recheck-mass-asset>Recheck</button>
+          <span data-recheck-status></span>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    {% endfor %}
+  </table>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

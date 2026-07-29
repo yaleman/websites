@@ -1,6 +1,15 @@
 use super::state::*;
 use super::*;
 use crate::collect_asset_filenames;
+use crate::mass_asset_import::{
+    LocalAssetCandidate, LocalAssetCandidateRank, MissingAssetGroup,
+    find_exact_local_asset_candidates_for_paths, find_local_asset_candidates,
+    find_local_asset_candidates_for_paths, find_missing_asset_groups, validate_import_candidate,
+};
+use sea_orm::QuerySelect;
+use sea_orm::sea_query::{Expr, Func};
+
+const MASS_IMPORT_IMAGE_EXTENSIONS: [&str; 6] = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"];
 
 fn multipart_site_error(
     action: &str,
@@ -466,6 +475,10 @@ pub(crate) async fn admin_site_assets(
             .with_links(vec![
                 AdminLink::new(&format!("/admin/site/{site_id}/assets/new"), "Upload"),
                 AdminLink::new(
+                    &format!("/admin/site/{site_id}/assets/mass-import"),
+                    "Mass import",
+                ),
+                AdminLink::new(
                     &format!("/admin/site/{site_id}/content"),
                     "Back to site dashboard",
                 ),
@@ -588,6 +601,906 @@ pub(crate) async fn admin_site_assets_create(
     }
 
     Ok(Redirect::to(&format!("/admin/site/{site_id}/assets")))
+}
+
+pub(crate) async fn admin_site_assets_mass_import(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    Query(query): Query<AdminMassAssetImportQuery>,
+) -> Result<AdminMassAssetImportTemplate, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site_id).await?;
+    let scan_limit = query.limit.unwrap_or(20).clamp(1, 100);
+    let import_path = site.mass_import_assets.clone().unwrap_or_default();
+    let mut message = None;
+    let mut warnings = Vec::new();
+    let mut page_groups = Vec::<AdminMassAssetImportPageGroup>::new();
+    let import_root = if import_path.trim().is_empty() {
+        warnings.push("Mass import assets path is not configured.".to_string());
+        None
+    } else {
+        match fs::metadata(&import_path).await {
+            Ok(metadata) if metadata.is_dir() => Some(PathBuf::from(&import_path)),
+            Ok(_) => {
+                warnings
+                    .push("The configured mass import assets path is not a directory.".to_string());
+                None
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                warnings
+                    .push("The configured mass import assets path could not be found.".to_string());
+                None
+            }
+            Err(error) => {
+                warnings.push(format!(
+                    "The configured mass import assets path could not be read: {error}."
+                ));
+                None
+            }
+        }
+    };
+
+    if site.internal_domains.is_empty() {
+        warnings.push("Internal domains are not configured.".to_string());
+    }
+
+    if import_path.trim().is_empty() {
+        message = Some("Configure a mass import assets path in site settings first.".to_string());
+    } else {
+        let groups = load_mass_import_listing_groups(
+            state.db.as_ref(),
+            site_id,
+            &site.internal_domains,
+            scan_limit,
+        )
+        .await?;
+        let mut candidate_map = if let Some(import_root) = import_root.as_ref()
+            && !groups.is_empty()
+        {
+            let normalized_paths = groups
+                .iter()
+                .map(|group| group.normalized_path.clone())
+                .collect::<Vec<_>>();
+            find_exact_local_asset_candidates_for_paths(import_root.as_path(), &normalized_paths, 5)
+                .await
+                .unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
+        for group in groups {
+            let first_content_title = group
+                .affected_content
+                .first()
+                .map(|row| row.title.clone())
+                .unwrap_or_else(|| "Unknown content".to_string());
+            let first_content_href = group
+                .affected_content
+                .first()
+                .map(|row| {
+                    format!(
+                        "/admin/site/{site_id}/assets/mass-import/content/{}",
+                        row.content_id
+                    )
+                })
+                .unwrap_or_else(|| format!("/admin/site/{site_id}/assets/mass-import"));
+            let candidates = candidate_map
+                .remove(&group.normalized_path)
+                .unwrap_or_default();
+            let row = AdminMassAssetImportRow {
+                import_href: format!(
+                    "/admin/site/{site_id}/assets/mass-import/missing?path={}",
+                    encode_query_value(&group.normalized_path)
+                ),
+                normalized_path: group.normalized_path,
+                affected_post_count: group.affected_content.len(),
+                occurrence_count: group.occurrence_count,
+                candidate_paths: candidates
+                    .into_iter()
+                    .map(|candidate| candidate.relative_path.to_string_lossy().to_string())
+                    .collect(),
+            };
+            if let Some(page_group) = page_groups
+                .last_mut()
+                .filter(|page_group| page_group.first_content_href == first_content_href)
+            {
+                page_group.rows.push(row);
+            } else {
+                page_groups.push(AdminMassAssetImportPageGroup {
+                    first_content_title,
+                    first_content_href,
+                    rows: vec![row],
+                });
+            }
+        }
+    }
+
+    Ok(AdminMassAssetImportTemplate {
+        template_shared: AdminTemplateData::new("Mass Asset Import")
+            .with_site_context(&site)
+            .with_site_publish_configured(site_publish_configured)
+            .with_links(vec![
+                AdminLink::new(&format!("/admin/site/{site_id}/settings"), "Site settings"),
+                AdminLink::new(&format!("/admin/site/{site_id}/assets"), "Assets"),
+            ]),
+        site_id,
+        import_path,
+        scan_limit,
+        page_groups,
+        message,
+        warnings,
+    })
+}
+
+pub(crate) async fn admin_site_assets_mass_import_missing(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    Query(query): Query<MissingImageImportQuery>,
+) -> Result<AdminMissingImageImportTemplate, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site_id).await?;
+    let import_root = configured_import_root(&site)?;
+    let content =
+        load_mass_import_content_for_path(state.db.as_ref(), site_id, &query.path).await?;
+    let group = find_group_for_path(content, &site.internal_domains, &query.path);
+    let affected_content = group
+        .as_ref()
+        .map(|group| {
+            group
+                .affected_content
+                .iter()
+                .map(|row| AdminMassAssetAffectedContentRow {
+                    title: row.title.clone(),
+                    occurrence_count: row.occurrence_count,
+                    edit_href: format!("/admin/site/{site_id}/content/{}/edit", row.content_id),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let candidates = find_local_asset_candidates(import_root.as_path(), &query.path, 20)
+        .await
+        .unwrap_or_default();
+    let candidate_rows = build_candidate_rows(site_id, candidates).await;
+    let message = if group.is_none() {
+        Some("This missing asset path no longer appears in current content.".to_string())
+    } else if candidate_rows.is_empty() {
+        Some("No local file candidates were found for this path.".to_string())
+    } else {
+        None
+    };
+
+    Ok(AdminMissingImageImportTemplate {
+        template_shared: AdminTemplateData::new("Missing Image Import")
+            .with_site_context(&site)
+            .with_site_publish_configured(site_publish_configured)
+            .with_links(vec![AdminLink::new(
+                &format!("/admin/site/{site_id}/assets/mass-import"),
+                "Mass asset import",
+            )]),
+        site_id,
+        normalized_path: query.path,
+        affected_content,
+        candidates: candidate_rows,
+        message,
+    })
+}
+
+pub(crate) async fn admin_site_assets_mass_import_content(
+    State(state): State<AdminState>,
+    session: Session,
+    Path((site_id, content_id)): Path<(Uuid, Uuid)>,
+) -> Result<AdminMassAssetImportContentTemplate, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let site_publish_configured = site_has_publish_config(state.db.as_ref(), site_id).await?;
+    let import_root = configured_import_root(&site)?;
+    let content = get_content_for_site(state.db.as_ref(), site_id, content_id)
+        .await?
+        .ok_or(SiteError::NotFound)?;
+    let rows = build_mass_import_content_rows(
+        state.db.as_ref(),
+        site_id,
+        &site.internal_domains,
+        import_root.as_path(),
+        &content,
+    )
+    .await?;
+    let message = if rows.is_empty() {
+        Some("No missing asset paths were found in this content item.".to_string())
+    } else {
+        None
+    };
+
+    Ok(AdminMassAssetImportContentTemplate {
+        template_shared: AdminTemplateData::new("Mass Asset Import")
+            .with_site_context(&site)
+            .with_site_publish_configured(site_publish_configured)
+            .with_links(vec![
+                AdminLink::new(
+                    &format!("/admin/site/{site_id}/assets/mass-import"),
+                    "Mass asset import",
+                ),
+                AdminLink::new(
+                    &format!("/admin/site/{site_id}/content/{content_id}/edit"),
+                    "Open editor",
+                ),
+            ]),
+        site_id,
+        content_id,
+        content_title: content.title,
+        edit_href: format!("/admin/site/{site_id}/content/{content_id}/edit"),
+        rows,
+        message,
+    })
+}
+
+pub(crate) async fn admin_site_assets_mass_import_preview(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    Query(query): Query<MissingImagePreviewQuery>,
+) -> Result<Response, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let import_root = configured_import_root(&site)?;
+    let candidate =
+        validate_import_candidate(import_root.as_path(), &import_root.join(&query.candidate))
+            .await?;
+    let bytes = fs::read(&candidate).await.map_err(SiteError::from)?;
+    let mime_type = mime_guess::from_path(&candidate)
+        .first_raw()
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    Ok(([(header::CONTENT_TYPE, mime_type)], bytes).into_response())
+}
+
+pub(crate) async fn admin_site_assets_mass_import_content_apply(
+    State(state): State<AdminState>,
+    session: Session,
+    Path((site_id, content_id)): Path<(Uuid, Uuid)>,
+    RawForm(raw_form): RawForm,
+) -> Result<Redirect, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let actor = current_user(&session).await?;
+    let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let import_root = configured_import_root(&site)?;
+    get_content_for_site(state.db.as_ref(), site_id, content_id)
+        .await?
+        .ok_or(SiteError::NotFound)?;
+    let form = parse_mass_import_content_apply_form(&raw_form)?;
+    apply_mass_import_selections(
+        &state,
+        site_id,
+        Some(content_id),
+        &site,
+        import_root.as_path(),
+        &actor.subject,
+        &form.selections,
+    )
+    .await?;
+
+    Ok(Redirect::to(&format!(
+        "/admin/site/{site_id}/assets/mass-import/content/{content_id}"
+    )))
+}
+
+pub(crate) async fn admin_site_assets_mass_import_apply(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    Form(form): Form<MissingImageImportForm>,
+) -> Result<Redirect, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let actor = current_user(&session).await?;
+    let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let import_root = configured_import_root(&site)?;
+    let candidate_path =
+        validate_import_candidate(import_root.as_path(), &import_root.join(&form.candidate))
+            .await?;
+    let bytes = fs::read(&candidate_path).await.map_err(SiteError::from)?;
+    let original_filename = candidate_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_string())
+        .ok_or_else(|| SiteError::BadRequest("candidate is missing a filename".to_string()))?;
+    let mime_type = mime_guess::from_path(&candidate_path)
+        .first_raw()
+        .map(|value| value.to_string());
+    let content =
+        load_mass_import_content_for_path(state.db.as_ref(), site_id, &form.normalized_path)
+            .await?;
+    let group = find_group_for_path(content, &site.internal_domains, &form.normalized_path)
+        .ok_or_else(|| SiteError::BadRequest("missing asset path no longer appears".to_string()))?;
+    let txn = state.db.begin().await?;
+    let mut cleanup_filenames = HashSet::new();
+    let result: Result<Uuid, SiteError> = async {
+        let asset = store_uploaded_asset_with_audit(
+            &txn,
+            AssetUploadAuditContext {
+                upload_root: &state.upload_root,
+                site_id,
+                actor_sub: &actor.subject,
+                event_type: "mass_import_asset",
+            },
+            UploadedAssetFile {
+                bytes,
+                original_filename,
+                mime_type,
+            },
+            &mut cleanup_filenames,
+        )
+        .await?;
+        let shortcode = format_asset_shortcode(
+            asset.id,
+            "original",
+            &asset_alt_text(&form.normalized_path),
+            None,
+        );
+        apply_group_replacements(&txn, site_id, &actor.subject, &group, &shortcode).await?;
+        let refreshed =
+            load_mass_import_content_for_path(&txn, site_id, &form.normalized_path).await?;
+        if find_group_for_path(refreshed, &site.internal_domains, &form.normalized_path).is_some() {
+            return Err(SiteError::internal(
+                "mass asset import did not clear the missing path".to_string(),
+            ));
+        }
+        log_audit_event(
+            &txn,
+            &actor.subject,
+            "mass_asset_import_apply",
+            "content_item",
+            &site_id.to_string(),
+            Some(site_id),
+            Some(json!({
+                "normalized_path": form.normalized_path,
+                "asset_id": asset.id,
+                "affected_content_count": group.affected_content.len(),
+                "occurrence_count": group.occurrence_count,
+            })),
+        )
+        .await
+        .map_err(|error| {
+            SiteError::internal(format!("failed to log mass import audit: {error}"))
+        })?;
+        Ok(asset.id)
+    }
+    .await;
+
+    if let Err(error) = result {
+        cleanup_uploaded_files(&state.upload_root, &cleanup_filenames).await?;
+        return Err(error);
+    }
+    txn.commit().await?;
+
+    Ok(Redirect::to(&format!(
+        "/admin/site/{site_id}/assets/mass-import"
+    )))
+}
+
+pub(crate) async fn admin_site_assets_mass_import_recheck(
+    State(state): State<AdminState>,
+    session: Session,
+    Path(site_id): Path<Uuid>,
+    Json(payload): Json<MassAssetRecheckRequest>,
+) -> Result<Json<MassAssetRecheckResponse>, SiteError> {
+    require_site_role(&state, &session, site_id, SiteRole::Author).await?;
+    let site = get_by_id(state.db.as_ref(), site_id).await?;
+    let content = if let Some(content_id) = payload.content_id {
+        vec![
+            get_content_for_site(state.db.as_ref(), site_id, content_id)
+                .await?
+                .ok_or(SiteError::NotFound)?,
+        ]
+    } else {
+        load_mass_import_content_for_path(state.db.as_ref(), site_id, &payload.path).await?
+    };
+    let group = find_group_for_path(content, &site.internal_domains, &payload.path);
+    let occurrence_count = group
+        .as_ref()
+        .map(|group| group.occurrence_count)
+        .unwrap_or(0);
+    Ok(Json(MassAssetRecheckResponse {
+        complete: occurrence_count == 0,
+        occurrence_count,
+    }))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MassImportContentApplySelection {
+    normalized_path: String,
+    candidate: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MassImportContentApplyForm {
+    selections: Vec<MassImportContentApplySelection>,
+}
+
+fn parse_mass_import_content_apply_form(
+    raw: &[u8],
+) -> Result<MassImportContentApplyForm, SiteError> {
+    let values = collect_form_values(raw);
+    let raw_selections = if let Some(single_selection) =
+        first_form_value(&values, "single_selection").filter(|value| !value.trim().is_empty())
+    {
+        vec![single_selection]
+    } else {
+        values
+            .iter()
+            .filter(|(key, _)| key.starts_with("selection_"))
+            .flat_map(|(_, values)| values.iter())
+            .filter(|value| !value.trim().is_empty())
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
+    if raw_selections.is_empty() {
+        return Err(SiteError::BadRequest(
+            "select at least one import candidate".to_string(),
+        ));
+    }
+
+    let mut selections = Vec::with_capacity(raw_selections.len());
+    let mut seen_paths = HashSet::new();
+    for raw_selection in raw_selections {
+        let selection = parse_mass_import_selection(&raw_selection)?;
+        if !seen_paths.insert(selection.normalized_path.clone()) {
+            return Err(SiteError::BadRequest(
+                "duplicate import selection for the same missing path".to_string(),
+            ));
+        }
+        selections.push(selection);
+    }
+    Ok(MassImportContentApplyForm { selections })
+}
+
+fn parse_mass_import_selection(raw: &str) -> Result<MassImportContentApplySelection, SiteError> {
+    let values = collect_form_values(raw.as_bytes());
+    let normalized_path = first_form_value(&values, "normalized_path")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| SiteError::BadRequest("missing normalized path selection".to_string()))?;
+    let candidate = first_form_value(&values, "candidate")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| SiteError::BadRequest("missing candidate selection".to_string()))?;
+    Ok(MassImportContentApplySelection {
+        normalized_path,
+        candidate,
+    })
+}
+
+fn encode_mass_import_selection(normalized_path: &str, candidate: &str) -> String {
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    serializer.append_pair("normalized_path", normalized_path);
+    serializer.append_pair("candidate", candidate);
+    serializer.finish()
+}
+
+async fn build_mass_import_content_rows<C: ConnectionTrait>(
+    db: &C,
+    site_id: Uuid,
+    internal_domains: &[String],
+    import_root: &StdPath,
+    content: &entities::content_item::Model,
+) -> Result<Vec<AdminMassAssetImportContentPathRow>, SiteError> {
+    let post_groups =
+        find_missing_asset_groups(vec![content.clone()], internal_domains, usize::MAX);
+    if post_groups.is_empty() {
+        return Ok(Vec::new());
+    }
+    let normalized_paths = post_groups
+        .iter()
+        .map(|group| group.normalized_path.clone())
+        .collect::<Vec<_>>();
+    let mut candidate_map =
+        find_local_asset_candidates_for_paths(import_root, &normalized_paths, 20)
+            .await
+            .unwrap_or_default();
+    let mut rows = Vec::with_capacity(post_groups.len());
+    for post_group in post_groups {
+        let site_content =
+            load_mass_import_content_for_path(db, site_id, &post_group.normalized_path).await?;
+        let site_group =
+            find_group_for_path(site_content, internal_domains, &post_group.normalized_path)
+                .unwrap_or_else(|| post_group.clone());
+        let candidates = candidate_map
+            .remove(&post_group.normalized_path)
+            .unwrap_or_default();
+        rows.push(AdminMassAssetImportContentPathRow {
+            normalized_path: post_group.normalized_path.clone(),
+            post_occurrence_count: post_group.occurrence_count,
+            affected_post_count: site_group.affected_content.len(),
+            site_occurrence_count: site_group.occurrence_count,
+            candidates: build_content_candidate_rows(
+                site_id,
+                &post_group.normalized_path,
+                candidates,
+            )
+            .await,
+        });
+    }
+    Ok(rows)
+}
+
+async fn build_content_candidate_rows(
+    site_id: Uuid,
+    normalized_path: &str,
+    candidates: Vec<LocalAssetCandidate>,
+) -> Vec<AdminMassAssetImportContentCandidateRow> {
+    let mut rows = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let relative_path = candidate.relative_path.to_string_lossy().to_string();
+        rows.push(AdminMassAssetImportContentCandidateRow {
+            preview_url: format!(
+                "/admin/site/{site_id}/assets/mass-import/preview?candidate={}",
+                encode_query_value(&relative_path)
+            ),
+            byte_length: format_byte_length(candidate.byte_length),
+            dimensions: candidate_dimensions(candidate.absolute_path.clone())
+                .await
+                .unwrap_or_else(|| "n/a".to_string()),
+            rank_label: match candidate.rank {
+                LocalAssetCandidateRank::PathSuffix => "Path match".to_string(),
+                LocalAssetCandidateRank::Filename => "Filename match".to_string(),
+            },
+            selection_value: encode_mass_import_selection(normalized_path, &relative_path),
+            relative_path,
+        });
+    }
+    rows
+}
+
+async fn apply_mass_import_selections(
+    state: &AdminState,
+    site_id: Uuid,
+    source_content_id: Option<Uuid>,
+    site: &entities::site::Model,
+    import_root: &StdPath,
+    actor_sub: &str,
+    selections: &[MassImportContentApplySelection],
+) -> Result<(), SiteError> {
+    let txn = state.db.begin().await?;
+    let mut cleanup_filenames = HashSet::new();
+    let result: Result<(), SiteError> = async {
+        for selection in selections {
+            let candidate_path =
+                validate_import_candidate(import_root, &import_root.join(&selection.candidate))
+                    .await?;
+            let bytes = fs::read(&candidate_path).await.map_err(SiteError::from)?;
+            let original_filename = candidate_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(|value| value.to_string())
+                .ok_or_else(|| {
+                    SiteError::BadRequest("candidate is missing a filename".to_string())
+                })?;
+            let mime_type = mime_guess::from_path(&candidate_path)
+                .first_raw()
+                .map(|value| value.to_string());
+            let content =
+                load_mass_import_content_for_path(&txn, site_id, &selection.normalized_path)
+                    .await?;
+            let group =
+                find_group_for_path(content, &site.internal_domains, &selection.normalized_path)
+                    .ok_or_else(|| {
+                        SiteError::BadRequest("missing asset path no longer appears".to_string())
+                    })?;
+            if let Some(source_content_id) = source_content_id
+                && !group
+                    .affected_content
+                    .iter()
+                    .any(|row| row.content_id == source_content_id)
+            {
+                return Err(SiteError::BadRequest(
+                    "missing asset path no longer appears in this content item".to_string(),
+                ));
+            }
+            let asset = store_uploaded_asset_with_audit(
+                &txn,
+                AssetUploadAuditContext {
+                    upload_root: &state.upload_root,
+                    site_id,
+                    actor_sub,
+                    event_type: "mass_import_asset",
+                },
+                UploadedAssetFile {
+                    bytes,
+                    original_filename,
+                    mime_type,
+                },
+                &mut cleanup_filenames,
+            )
+            .await?;
+            let shortcode = format_asset_shortcode(
+                asset.id,
+                "original",
+                &asset_alt_text(&selection.normalized_path),
+                None,
+            );
+            apply_group_replacements(&txn, site_id, actor_sub, &group, &shortcode).await?;
+            let refreshed =
+                load_mass_import_content_for_path(&txn, site_id, &selection.normalized_path)
+                    .await?;
+            if find_group_for_path(
+                refreshed,
+                &site.internal_domains,
+                &selection.normalized_path,
+            )
+            .is_some()
+            {
+                return Err(SiteError::internal(
+                    "mass asset import did not clear the missing path".to_string(),
+                ));
+            }
+            log_audit_event(
+                &txn,
+                actor_sub,
+                "mass_asset_import_content_apply",
+                "content_item",
+                &source_content_id.unwrap_or(site_id).to_string(),
+                Some(site_id),
+                Some(json!({
+                    "source_content_id": source_content_id,
+                    "normalized_path": selection.normalized_path,
+                    "asset_id": asset.id,
+                    "affected_content_count": group.affected_content.len(),
+                    "occurrence_count": group.occurrence_count,
+                })),
+            )
+            .await
+            .map_err(|error| {
+                SiteError::internal(format!("failed to log mass import audit: {error}"))
+            })?;
+        }
+        Ok(())
+    }
+    .await;
+
+    if let Err(error) = result {
+        cleanup_uploaded_files(&state.upload_root, &cleanup_filenames).await?;
+        return Err(error);
+    }
+    txn.commit().await?;
+    Ok(())
+}
+
+fn configured_import_root(site: &entities::site::Model) -> Result<PathBuf, SiteError> {
+    let Some(import_path) = site.mass_import_assets.as_ref() else {
+        return Err(SiteError::BadRequest(
+            "mass import assets path is not configured".to_string(),
+        ));
+    };
+    if import_path.trim().is_empty() {
+        return Err(SiteError::BadRequest(
+            "mass import assets path is not configured".to_string(),
+        ));
+    }
+    Ok(PathBuf::from(import_path))
+}
+
+fn find_group_for_path(
+    content: Vec<entities::content_item::Model>,
+    internal_domains: &[String],
+    normalized_path: &str,
+) -> Option<MissingAssetGroup> {
+    find_missing_asset_groups(content, internal_domains, usize::MAX)
+        .into_iter()
+        .find(|group| group.normalized_path == normalized_path)
+}
+
+async fn load_mass_import_listing_groups<C: ConnectionTrait>(
+    db: &C,
+    site_id: Uuid,
+    internal_domains: &[String],
+    scan_limit: usize,
+) -> Result<Vec<MissingAssetGroup>, SiteError> {
+    let batch_size = scan_limit.saturating_mul(25).clamp(100, 1000);
+    let mut offset = 0u64;
+    let mut discovered_paths = Vec::<String>::new();
+    let mut discovered_path_set = HashSet::<String>::new();
+
+    while discovered_paths.len() < scan_limit {
+        let content = load_mass_import_candidate_content(db, site_id, batch_size, offset).await?;
+        if content.is_empty() {
+            break;
+        }
+        let groups = find_missing_asset_groups(content, internal_domains, scan_limit);
+        for group in groups {
+            if discovered_path_set.insert(group.normalized_path.clone()) {
+                discovered_paths.push(group.normalized_path);
+                if discovered_paths.len() >= scan_limit {
+                    break;
+                }
+            }
+        }
+        offset = offset.saturating_add(batch_size as u64);
+    }
+
+    let mut groups = Vec::with_capacity(discovered_paths.len());
+    for normalized_path in discovered_paths {
+        let content = load_mass_import_content_for_path(db, site_id, &normalized_path).await?;
+        if let Some(group) = find_group_for_path(content, internal_domains, &normalized_path) {
+            groups.push(group);
+        }
+    }
+    Ok(groups)
+}
+
+async fn load_mass_import_content_for_path<C: ConnectionTrait>(
+    db: &C,
+    site_id: Uuid,
+    normalized_path: &str,
+) -> Result<Vec<entities::content_item::Model>, SiteError> {
+    let terms = mass_import_target_path_terms(normalized_path);
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut condition = Condition::any();
+    for term in terms {
+        condition = condition.add(entities::content_item::Column::PageContent.contains(&term));
+    }
+
+    entities::content_item::Entity::find()
+        .filter(entities::content_item::Column::SiteId.eq(site_id))
+        .filter(condition)
+        .order_by_desc(Expr::cust("COALESCE(last_updated, created_at)"))
+        .order_by_desc(entities::content_item::Column::CreatedAt)
+        .order_by_asc(entities::content_item::Column::Title)
+        .all(db)
+        .await
+        .map_err(SiteError::from)
+}
+
+async fn load_mass_import_candidate_content<C: ConnectionTrait>(
+    db: &C,
+    site_id: Uuid,
+    limit: usize,
+    offset: u64,
+) -> Result<Vec<entities::content_item::Model>, SiteError> {
+    let mut condition = Condition::any();
+    for extension in MASS_IMPORT_IMAGE_EXTENSIONS {
+        condition = condition.add(
+            Expr::expr(Func::lower(Expr::col(
+                entities::content_item::Column::PageContent,
+            )))
+            .like(format!("%{extension}%")),
+        );
+    }
+
+    entities::content_item::Entity::find()
+        .filter(entities::content_item::Column::SiteId.eq(site_id))
+        .filter(condition)
+        .order_by_desc(Expr::cust("COALESCE(last_updated, created_at)"))
+        .order_by_desc(entities::content_item::Column::CreatedAt)
+        .order_by_asc(entities::content_item::Column::Title)
+        .limit(limit as u64)
+        .offset(offset)
+        .all(db)
+        .await
+        .map_err(SiteError::from)
+}
+
+fn mass_import_target_path_terms(normalized_path: &str) -> Vec<String> {
+    let trimmed = normalized_path.trim();
+    let relative = trimmed.trim_start_matches('/');
+    if relative.is_empty() {
+        return Vec::new();
+    }
+    vec![format!("/{relative}"), relative.to_string()]
+}
+
+async fn build_candidate_rows(
+    site_id: Uuid,
+    candidates: Vec<LocalAssetCandidate>,
+) -> Vec<AdminLocalAssetCandidateRow> {
+    let mut rows = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let relative_path = candidate.relative_path.to_string_lossy().to_string();
+        rows.push(AdminLocalAssetCandidateRow {
+            preview_url: format!(
+                "/admin/site/{site_id}/assets/mass-import/preview?candidate={}",
+                encode_query_value(&relative_path)
+            ),
+            byte_length: format_byte_length(candidate.byte_length),
+            dimensions: candidate_dimensions(candidate.absolute_path.clone())
+                .await
+                .unwrap_or_else(|| "n/a".to_string()),
+            rank_label: match candidate.rank {
+                LocalAssetCandidateRank::PathSuffix => "Path match".to_string(),
+                LocalAssetCandidateRank::Filename => "Filename match".to_string(),
+            },
+            relative_path,
+        });
+    }
+    rows
+}
+
+async fn candidate_dimensions(path: PathBuf) -> Option<String> {
+    tokio::task::spawn_blocking(move || image::image_dimensions(path).ok())
+        .await
+        .ok()
+        .flatten()
+        .map(|(width, height)| format!("{width} x {height}"))
+}
+
+async fn apply_group_replacements<C: ConnectionTrait>(
+    db: &C,
+    site_id: Uuid,
+    actor_sub: &str,
+    group: &MissingAssetGroup,
+    shortcode: &str,
+) -> Result<(), SiteError> {
+    for affected in &group.affected_content {
+        let content = entities::content_item::Entity::find_by_id(affected.content_id)
+            .filter(entities::content_item::Column::SiteId.eq(site_id))
+            .one(db)
+            .await
+            .map_err(SiteError::from)?
+            .ok_or(SiteError::NotFound)?;
+        let mut page_content = content.page_content.clone();
+        let mut occurrences = group
+            .occurrences
+            .iter()
+            .filter(|occurrence| occurrence.content_id == content.id)
+            .collect::<Vec<_>>();
+        occurrences.sort_by_key(|occurrence| std::cmp::Reverse(occurrence.start));
+        for occurrence in occurrences {
+            let Some(current) = page_content.get(occurrence.start..occurrence.end) else {
+                return Err(SiteError::BadRequest(
+                    "content changed before mass import could apply".to_string(),
+                ));
+            };
+            if !current.contains(&occurrence.original_link) {
+                return Err(SiteError::BadRequest(
+                    "content changed before mass import could apply".to_string(),
+                ));
+            }
+            page_content.replace_range(occurrence.start..occurrence.end, shortcode);
+        }
+        update_content(
+            db,
+            crate::UpdateContent {
+                content_id: content.id,
+                page_type: None,
+                title: Some(content.title),
+                slug: Some(content.slug),
+                page_content: Some(page_content),
+                draft: Some(content.draft),
+                published_at: content.published_at,
+                editor_sub: actor_sub.to_string(),
+            },
+        )
+        .await
+        .map_err(SiteError::internal)?;
+    }
+    Ok(())
+}
+
+fn asset_alt_text(normalized_path: &str) -> String {
+    StdPath::new(normalized_path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(|value| value.replace(['-', '_'], " "))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "Imported image".to_string())
+}
+
+fn format_byte_length(bytes: u64) -> String {
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    if bytes < 1024 * 1024 {
+        return format!("{:.1} KB", bytes as f64 / 1024.0);
+    }
+    format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+}
+
+fn encode_query_value(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
 
 pub(crate) async fn remove_file_if_exists(path: &StdPath) -> Result<(), SiteError> {
@@ -824,4 +1737,205 @@ pub(crate) fn normalize_optional(value: Option<String>) -> Option<String> {
             Some(trimmed)
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::constants::DEFAULT_TEMPLATE_NAME;
+    use crate::db::test_db_start;
+    use crate::entities::PageType;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn load_mass_import_content_for_path_prefilters_matching_spellings() {
+        let db = test_db_start().await;
+        let site = crate::create_site(
+            &db,
+            "mass-import-prefilter".to_string(),
+            "Mass Import Prefilter".to_string(),
+            DEFAULT_TEMPLATE_NAME.to_string(),
+        )
+        .await
+        .expect("failed to create site");
+        let other_site = crate::create_site(
+            &db,
+            "other-prefilter-site".to_string(),
+            "Other Prefilter Site".to_string(),
+            DEFAULT_TEMPLATE_NAME.to_string(),
+        )
+        .await
+        .expect("failed to create other site");
+
+        let full_url = crate::create_content(
+            &db,
+            crate::NewContent {
+                site_id: site.id,
+                page_type: PageType::Post,
+                title: "Full URL".to_string(),
+                slug: "full-url".to_string(),
+                page_content:
+                    r#"<img src="https://example.com/wp-content/uploads/2020/hero.png" />"#
+                        .to_string(),
+                draft: false,
+                creator_sub: "tester".to_string(),
+                created_at: None,
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create full-url content");
+        let bare_relative = crate::create_content(
+            &db,
+            crate::NewContent {
+                site_id: site.id,
+                page_type: PageType::Post,
+                title: "Bare Relative".to_string(),
+                slug: "bare-relative".to_string(),
+                page_content: "![Hero](wp-content/uploads/2020/hero.png)".to_string(),
+                draft: false,
+                creator_sub: "tester".to_string(),
+                created_at: None,
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create bare-relative content");
+        crate::create_content(
+            &db,
+            crate::NewContent {
+                site_id: site.id,
+                page_type: PageType::Post,
+                title: "Other Asset".to_string(),
+                slug: "other-asset".to_string(),
+                page_content: "![Other](/wp-content/uploads/2020/other.png)".to_string(),
+                draft: false,
+                creator_sub: "tester".to_string(),
+                created_at: None,
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create unrelated content");
+        crate::create_content(
+            &db,
+            crate::NewContent {
+                site_id: other_site.id,
+                page_type: PageType::Post,
+                title: "Other Site".to_string(),
+                slug: "other-site".to_string(),
+                page_content: "![Hero](/wp-content/uploads/2020/hero.png)".to_string(),
+                draft: false,
+                creator_sub: "tester".to_string(),
+                created_at: None,
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create other-site content");
+
+        let content =
+            load_mass_import_content_for_path(&db, site.id, "/wp-content/uploads/2020/hero.png")
+                .await
+                .expect("failed to load target content");
+        let ids = content
+            .iter()
+            .map(|content| content.id)
+            .collect::<std::collections::HashSet<_>>();
+
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&full_url.id));
+        assert!(ids.contains(&bare_relative.id));
+    }
+
+    #[tokio::test]
+    async fn load_mass_import_candidate_content_prefilters_image_links() {
+        let db = test_db_start().await;
+        let site = crate::create_site(
+            &db,
+            "mass-import-candidates".to_string(),
+            "Mass Import Candidates".to_string(),
+            DEFAULT_TEMPLATE_NAME.to_string(),
+        )
+        .await
+        .expect("failed to create site");
+        let image_content = crate::create_content(
+            &db,
+            crate::NewContent {
+                site_id: site.id,
+                page_type: PageType::Post,
+                title: "Image Candidate".to_string(),
+                slug: "image-candidate".to_string(),
+                page_content: r#"<a href="/wp-content/uploads/2020/hero.PNG">hero</a>"#.to_string(),
+                draft: false,
+                creator_sub: "tester".to_string(),
+                created_at: None,
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create image content");
+        crate::create_content(
+            &db,
+            crate::NewContent {
+                site_id: site.id,
+                page_type: PageType::Post,
+                title: "Plain Text".to_string(),
+                slug: "plain-text".to_string(),
+                page_content: "No image references here.".to_string(),
+                draft: false,
+                creator_sub: "tester".to_string(),
+                created_at: None,
+                published_at: None,
+            },
+        )
+        .await
+        .expect("failed to create plain content");
+
+        let content = load_mass_import_candidate_content(&db, site.id, 100, 0)
+            .await
+            .expect("failed to load candidate content");
+
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].id, image_content.id);
+    }
+
+    #[test]
+    fn parse_mass_import_content_apply_form_collects_single_and_batch_selections() {
+        let hero_path = "/wp-content/uploads/2020/hero.png";
+        let hero_candidate = "wp-content/uploads/2020/hero.png";
+        let hero = encode_mass_import_selection(hero_path, hero_candidate);
+        let other = encode_mass_import_selection(
+            "/wp-content/uploads/2020/other.png",
+            "wp-content/uploads/2020/other.png",
+        );
+        let mut form = url::form_urlencoded::Serializer::new(String::new());
+        form.append_pair("single_selection", &hero);
+        form.append_pair("selection_other", &other);
+
+        let parsed = parse_mass_import_content_apply_form(form.finish().as_bytes())
+            .expect("expected form to parse");
+
+        assert_eq!(parsed.selections.len(), 1);
+        assert_eq!(parsed.selections[0].normalized_path, hero_path);
+        assert_eq!(parsed.selections[0].candidate, hero_candidate);
+    }
+
+    #[test]
+    fn parse_mass_import_content_apply_form_rejects_duplicate_paths() {
+        let first = encode_mass_import_selection(
+            "/wp-content/uploads/2020/hero.png",
+            "wp-content/uploads/2020/hero.png",
+        );
+        let second =
+            encode_mass_import_selection("/wp-content/uploads/2020/hero.png", "elsewhere/hero.png");
+        let mut form = url::form_urlencoded::Serializer::new(String::new());
+        form.append_pair("selection_first", &first);
+        form.append_pair("selection_second", &second);
+
+        let error = parse_mass_import_content_apply_form(form.finish().as_bytes())
+            .expect_err("duplicate normalized paths should be rejected");
+
+        assert!(error.to_string().contains("duplicate"));
+    }
 }

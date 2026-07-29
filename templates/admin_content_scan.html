@@ -9,13 +9,13 @@
     <div class="scan-panel__intro">
       <h2>Scan Site Content</h2>
       <p>
-        Enter one or more internal domains, then scan the least recently updated content first for link rewrites, image remediation, simple tag cleanup, and review-only HTML.
+        Scan the newest content first for link rewrites, image remediation, simple tag cleanup, and review-only HTML.
       </p>
     </div>
     <div class="scan-panel__grid">
       <div class="form-field">
         <label for="domains">Internal Domains</label>
-        <textarea id="domains" name="domains" rows="3" placeholder="example.com&#10;www.example.com">{{ domains }}</textarea>
+        <textarea id="domains" rows="3" readonly>{{ domains }}</textarea>
       </div>
       <div class="form-field">
         <label for="scan_limit">Pages With Issues To Show</label>
@@ -89,7 +89,6 @@
     class="scan-results"
     data-remediation-root
     data-site-id="{{ site_id }}">
-    <input type="hidden" name="domains" value="{{ domains }}" />
     <input type="hidden" name="scan_limit" value="{{ scan_limit }}" />
     <input type="hidden" name="filter" value="{{ current_filter }}" />
     <input type="hidden" name="selected_issue_ids_json" value="[]" data-selected-issues-json />
@@ -156,14 +155,14 @@
             <div class="scan-issue__asset-actions">
               <button type="button" class="editor-button" data-pick-asset>Choose asset</button>
               {% if issue.can_import_remote %}
-              <label class="scan-issue__remote">
-                <input
-                  type="checkbox"
-                  name="remote_import_issue_id"
-                  value="{{ issue.issue_id }}"
-                  data-remote-import />
+              <button
+                type="submit"
+                class="editor-button"
+                name="remote_import_issue_id"
+                value="{{ issue.issue_id }}"
+                data-remote-import-submit>
                 Import remote image
-              </label>
+              </button>
               <span class="scan-issue__remote-url">{{ issue.remote_url }}</span>
               {% endif %}
             </div>

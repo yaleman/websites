@@ -58,6 +58,7 @@ pub mod db;
 pub mod entities;
 pub mod errors;
 pub mod images;
+pub mod mass_asset_import;
 pub mod middleware;
 pub mod migration;
 pub mod oidc;
@@ -1096,6 +1097,8 @@ pub async fn create_site<C: ConnectionTrait>(
         full_title: Set(full_title),
         template_name: Set(template_name),
         publish_on_render: Set(false),
+        internal_domains: Set(entities::site::InternalDomains::default()),
+        mass_import_assets: Set(None),
         created_at: Set(now),
         updated_at: Set(None),
     };
@@ -1113,6 +1116,8 @@ pub async fn update_site_settings<C: ConnectionTrait>(
     full_title: String,
     template_name: String,
     publish_on_render: bool,
+    internal_domains: Vec<String>,
+    mass_import_assets: Option<String>,
 ) -> Result<entities::site::Model, SiteError> {
     let existing = entities::site::Entity::find_by_id(site_id).one(db).await?;
     let Some(existing) = existing else {
@@ -1122,8 +1127,36 @@ pub async fn update_site_settings<C: ConnectionTrait>(
     model.full_title = Set(full_title);
     model.template_name = Set(template_name);
     model.publish_on_render = Set(publish_on_render);
+    model.internal_domains = Set(entities::site::InternalDomains::from(
+        normalize_internal_domains(internal_domains),
+    ));
+    model.mass_import_assets = Set(normalize_optional_string(mass_import_assets));
     model.updated_at = Set(Some(Utc::now()));
     model.update(db).await.map_err(SiteError::from)
+}
+
+pub fn normalize_internal_domains(values: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut domains = Vec::new();
+    for value in values {
+        let domain = value.trim().trim_start_matches('.').to_ascii_lowercase();
+        if domain.is_empty() || !seen.insert(domain.clone()) {
+            continue;
+        }
+        domains.push(domain);
+    }
+    domains
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
 }
 
 /// Deletes a site row by id.
@@ -3113,6 +3146,8 @@ mod tests {
     async fn update_site_settings_updates_values() {
         let db = test_db_start().await;
         let site = create_site_fixture(&db).await;
+        assert_eq!(site.internal_domains, Vec::<String>::new());
+        assert_eq!(site.mass_import_assets, None);
 
         let updated = update_site_settings(
             &db,
@@ -3120,6 +3155,12 @@ mod tests {
             "Updated Title".to_string(),
             "new-template".to_string(),
             true,
+            vec![
+                "Example.com".to_string(),
+                ".example.com".to_string(),
+                "www.example.com".to_string(),
+            ],
+            Some("/Volumes/archive".to_string()),
         )
         .await
         .expect("failed to update site settings");
@@ -3127,6 +3168,14 @@ mod tests {
         assert_eq!(updated.full_title, "Updated Title");
         assert_eq!(updated.template_name, "new-template");
         assert!(updated.publish_on_render);
+        assert_eq!(
+            updated.internal_domains,
+            vec!["example.com".to_string(), "www.example.com".to_string()]
+        );
+        assert_eq!(
+            updated.mass_import_assets.as_deref(),
+            Some("/Volumes/archive")
+        );
         assert!(updated.updated_at.is_some());
     }
 

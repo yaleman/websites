@@ -56,7 +56,6 @@
 		@apply overflow-auto rounded-lg border border-slate-200 bg-slate-950 px-3 py-2 text-sm text-slate-100;
 	}
 
-	section,
 	.surface,
 	.scan-panel,
 	.scan-summary,
@@ -268,5 +267,59 @@
 
 	.membership-autocomplete__empty {
 		@apply px-3 py-2 text-sm text-slate-500;
+	}
+
+	.mass-import-table-wrap {
+		@apply min-w-0 overflow-x-auto;
+	}
+
+	@media (max-width: 640px) {
+		.mass-import-table-wrap {
+			@apply overflow-visible;
+		}
+
+		.mass-import-table {
+			@apply border-0 bg-transparent shadow-none;
+		}
+
+		.mass-import-table thead {
+			clip: rect(0, 0, 0, 0);
+			height: 1px;
+			margin: -1px;
+			overflow: hidden;
+			padding: 0;
+			position: absolute;
+			white-space: nowrap;
+			width: 1px;
+		}
+
+		.mass-import-table tbody {
+			@apply block;
+		}
+
+		.mass-import-table tr {
+			@apply mb-3 block rounded-lg border border-slate-200 bg-white shadow-sm shadow-slate-200/60;
+		}
+
+		.mass-import-table tr.mass-import-page-group {
+			@apply mb-2 border-0 bg-transparent shadow-none;
+		}
+
+		.mass-import-table tr.mass-import-page-group th {
+			@apply block rounded-md bg-slate-50 px-3 py-2 text-left text-sm normal-case tracking-normal text-slate-900;
+		}
+
+		.mass-import-table td {
+			@apply block border-t-0 px-3 py-2;
+		}
+
+		.mass-import-table td + td {
+			@apply border-t border-slate-100;
+		}
+
+		.mass-import-table td::before {
+			@apply mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600;
+			content: attr(data-label);
+		}
 	}
 }

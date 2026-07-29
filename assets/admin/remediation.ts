@@ -282,9 +282,6 @@ const initRemediation = () => {
 		const label = issue.querySelector<HTMLElement>(
 			"[data-selected-asset-label]",
 		);
-		const remoteImport = issue.querySelector<HTMLInputElement>(
-			"[data-remote-import]",
-		);
 		const issueToggle = issue
 			.closest(".scan-issue")
 			?.querySelector<HTMLInputElement>("[data-issue-select]");
@@ -293,16 +290,13 @@ const initRemediation = () => {
 			if (label) {
 				label.textContent = "No asset selected yet.";
 			}
-			if (issueToggle && !remoteImport?.checked) {
+			if (issueToggle) {
 				issueToggle.checked = false;
 			}
 			syncSelections();
 			return;
 		}
 		selections[issueId] = selection;
-		if (remoteImport) {
-			remoteImport.checked = false;
-		}
 		if (issueToggle) {
 			issueToggle.checked = true;
 		}
@@ -329,32 +323,29 @@ const initRemediation = () => {
 			issue
 				.querySelector<HTMLElement>("[data-pick-asset]")
 				?.addEventListener("click", () => openForIssue(issue));
-			issue
-				.querySelector<HTMLInputElement>("[data-remote-import]")
-				?.addEventListener("change", (event) => {
-					const input = event.currentTarget as HTMLInputElement;
-					const issueToggle = issue
-						.closest(".scan-issue")
-						?.querySelector<HTMLInputElement>("[data-issue-select]");
-					if (!input.checked) {
-						return;
-					}
-					if (issueToggle) {
-						issueToggle.checked = true;
-					}
-					updateIssueSelection(issue, null);
-				});
 		});
 	syncSelections();
-	root.addEventListener("submit", () => {
+	root.addEventListener("submit", (event) => {
+		const submitter =
+			"submitter" in event ? (event as SubmitEvent).submitter : undefined;
+		const remoteImportButton =
+			submitter instanceof HTMLButtonElement
+				? submitter.closest<HTMLButtonElement>("[data-remote-import-submit]")
+				: null;
+		if (remoteImportButton?.value) {
+			const issueId = remoteImportButton.value;
+			selectedIssuesInput.value = JSON.stringify([issueId]);
+			remoteImportInput.value = JSON.stringify([issueId]);
+			assetSelectionsInput.value = JSON.stringify(
+				selections[issueId] ? { [issueId]: selections[issueId] } : {},
+			);
+			return;
+		}
 		const selectedIssueIds = Array.from(
 			root.querySelectorAll<HTMLInputElement>("[data-issue-select]:checked"),
 		).map((input) => input.value);
-		const remoteImportIds = Array.from(
-			root.querySelectorAll<HTMLInputElement>("[data-remote-import]:checked"),
-		).map((input) => input.value);
 		selectedIssuesInput.value = JSON.stringify(selectedIssueIds);
-		remoteImportInput.value = JSON.stringify(remoteImportIds);
+		remoteImportInput.value = JSON.stringify([]);
 		syncSelections();
 	});
 

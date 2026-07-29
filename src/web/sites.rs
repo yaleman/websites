@@ -428,6 +428,10 @@ pub(crate) async fn admin_site_settings(
             &format!("/admin/site/{site_id}/content/scan"),
             "Scan content",
         ),
+        AdminLink::new(
+            &format!("/admin/site/{site_id}/assets/mass-import"),
+            "Mass asset import",
+        ),
     ];
     if viewer.admin
         || membership
@@ -472,6 +476,8 @@ pub(crate) async fn admin_site_settings(
         full_title: site.full_title,
         template_name: site.template_name,
         publish_on_render: site.publish_on_render,
+        internal_domains: site.internal_domains.join("\n"),
+        mass_import_assets: site.mass_import_assets.unwrap_or_default(),
         can_delete_site: viewer.admin,
         can_import_wordpress,
         can_manage_publish,
@@ -1074,10 +1080,20 @@ pub(crate) async fn admin_site_settings_update(
             "unknown template: {template_name}"
         )));
     }
+    let internal_domains = parse_internal_domains_form(form.internal_domains.as_deref());
+    let mass_import_assets = form.mass_import_assets;
     let txn = state.db.begin().await?;
-    let site = update_site_settings(&txn, site_id, full_title, template_name, publish_on_render)
-        .await
-        .map_err(|error| SiteError::internal(format!("failed to update site: {error}")))?;
+    let site = update_site_settings(
+        &txn,
+        site_id,
+        full_title,
+        template_name,
+        publish_on_render,
+        internal_domains,
+        mass_import_assets,
+    )
+    .await
+    .map_err(|error| SiteError::internal(format!("failed to update site: {error}")))?;
     log_audit_event(
         &txn,
         &actor,
@@ -1090,6 +1106,8 @@ pub(crate) async fn admin_site_settings_update(
             "full_title": site.full_title,
             "template_name": site.template_name,
             "publish_on_render": site.publish_on_render,
+            "internal_domains": site.internal_domains,
+            "mass_import_assets": site.mass_import_assets,
         })),
     )
     .await
@@ -1097,6 +1115,15 @@ pub(crate) async fn admin_site_settings_update(
     txn.commit().await?;
 
     Ok(Redirect::to(&format!("/admin/site/{site_id}/settings")))
+}
+
+fn parse_internal_domains_form(raw: Option<&str>) -> Vec<String> {
+    let values = raw
+        .unwrap_or_default()
+        .split([',', '\n', '\r'])
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
+    crate::normalize_internal_domains(values)
 }
 
 fn wordpress_import_message(imported: &WordpressImportFlash) -> String {

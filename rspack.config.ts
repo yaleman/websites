@@ -5,6 +5,7 @@ export default defineConfig({
 	entry: {
 		admin: "./assets/admin/admin.ts",
 		editor: "./assets/admin/editor.ts",
+		mass_asset_import: "./assets/admin/mass_asset_import.ts",
 		remediation: "./assets/admin/remediation.ts",
 	},
 	module: {

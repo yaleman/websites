@@ -24,6 +24,14 @@
         When enabled, the Render Site action automatically publishes the rendered output for this site.
       </p>
     </div>
+    <div class="form-field">
+      <label for="internal_domains">Internal Domains</label>
+      <textarea id="internal_domains" name="internal_domains" rows="3" placeholder="example.com&#10;www.example.com">{{ internal_domains }}</textarea>
+    </div>
+    <div class="form-field">
+      <label for="mass_import_assets">Mass Import Assets Path</label>
+      <input id="mass_import_assets" name="mass_import_assets" value="{{ mass_import_assets }}" />
+    </div>
 
     <div class="form-actions">
       <button type="submit" class="btn">Save settings</button>

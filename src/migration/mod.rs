@@ -11,6 +11,7 @@ mod m0008_add_site_publish_workflow;
 mod m0009_add_rsync_publish_method;
 mod m0010_add_publish_on_render;
 mod m0011_add_theme_ssh_key;
+mod m0012_add_site_import_settings;
 
 pub struct Migrator;
 
@@ -29,6 +30,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0009_add_rsync_publish_method::Migration),
             Box::new(m0010_add_publish_on_render::Migration),
             Box::new(m0011_add_theme_ssh_key::Migration),
+            Box::new(m0012_add_site_import_settings::Migration),
         ]
     }
 }

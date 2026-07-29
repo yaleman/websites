@@ -2,7 +2,10 @@ import {
 	type APIRequestContext,
 	type Browser,
 	type BrowserContext,
+	type Locator,
 	type Page,
+	type TestInfo,
+	expect,
 	request as playwrightRequest,
 } from "@playwright/test";
 import { spawn } from "node:child_process";
@@ -137,6 +140,54 @@ export const tinyPngBytes = Buffer.from(
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==",
 	"base64",
 );
+
+export async function expectNoHorizontalOverflow(
+	page: Page,
+	viewportWidth?: number,
+): Promise<void> {
+	const width = viewportWidth ?? page.viewportSize()?.width;
+	if (!width) {
+		throw new Error("viewport width is not available");
+	}
+	const scrollWidth = await page.evaluate(
+		() => document.documentElement.scrollWidth,
+	);
+	expect(scrollWidth).toBeLessThanOrEqual(width);
+}
+
+export async function expectElementInsetWithinContainer(
+	container: Locator,
+	child: Locator,
+	minimumInset: number,
+): Promise<void> {
+	const containerBox = await container.boundingBox();
+	const childBox = await child.boundingBox();
+	expect(containerBox).not.toBeNull();
+	expect(childBox).not.toBeNull();
+	if (!containerBox || !childBox) {
+		throw new Error("layout boxes were not available");
+	}
+
+	expect(childBox.x - containerBox.x).toBeGreaterThanOrEqual(minimumInset);
+	expect(childBox.y - containerBox.y).toBeGreaterThanOrEqual(minimumInset);
+	expect(
+		containerBox.x + containerBox.width - (childBox.x + childBox.width),
+	).toBeGreaterThanOrEqual(minimumInset);
+	expect(
+		containerBox.y + containerBox.height - (childBox.y + childBox.height),
+	).toBeGreaterThanOrEqual(minimumInset);
+}
+
+export async function captureResponsiveScreenshot(
+	page: Page,
+	testInfo: TestInfo,
+	name: string,
+): Promise<void> {
+	await page.screenshot({
+		path: testInfo.outputPath(`${name}.png`),
+		fullPage: true,
+	});
+}
 
 export function runCommand(
 	command: string,

@@ -11,6 +11,7 @@ use crate::{constants::SESSION_USER, entities};
 
 /// Handles request/response logging for all requests. Should be the outermost middleware so that it can log all requests, including those that fail authentication.
 pub async fn log_requests(request: Request, next: Next) -> Response {
+    let start_time = std::time::Instant::now();
     let http_method = request.method().clone();
     let uri = request.uri().clone();
     let http_path = uri
@@ -22,6 +23,7 @@ pub async fn log_requests(request: Request, next: Next) -> Response {
         http_method=http_method.as_str(),
         http_path=http_path,
         status=?res.status(),
+        time_ms=?start_time.elapsed().as_millis(),
         ""
     );
     res
