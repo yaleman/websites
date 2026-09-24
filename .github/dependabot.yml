@@ -7,39 +7,47 @@ multi-ecosystem-groups:
       time: 02:00
       timezone: Australia/Brisbane
 updates:
-- package-ecosystem: cargo
-  directory: /
-  patterns:
-  - '*'
-  multi-ecosystem-group: dependencies
-  groups:
-    cargo:
-      patterns:
-      - '*'
-- package-ecosystem: cargo
-  directory: /tools/repair-pnpm-lockfile
-  patterns:
-  - '*'
-  multi-ecosystem-group: dependencies
-  groups:
-    cargo:
-      patterns:
-      - '*'
-- package-ecosystem: npm
-  directory: /
-  patterns:
-  - '*'
-  multi-ecosystem-group: dependencies
-  groups:
-    npm:
-      patterns:
-      - '*'
-- package-ecosystem: github-actions
-  directory: /
-  patterns:
-  - '*'
-  multi-ecosystem-group: dependencies
-  groups:
-    github-actions:
-      patterns:
-      - '*'
+  - package-ecosystem: cargo
+    cooldown:
+      default-days: 7
+    directory: /
+    patterns:
+      - "*"
+    multi-ecosystem-group: dependencies
+    groups:
+      cargo:
+        patterns:
+          - "*"
+  - package-ecosystem: cargo
+    cooldown:
+      default-days: 7
+    directory: /tools/repair-pnpm-lockfile
+    patterns:
+      - "*"
+    multi-ecosystem-group: dependencies
+    groups:
+      cargo:
+        patterns:
+          - "*"
+  - package-ecosystem: npm
+    cooldown:
+      default-days: 7
+    directory: /
+    patterns:
+      - "*"
+    multi-ecosystem-group: dependencies
+    groups:
+      npm:
+        patterns:
+          - "*"
+  - package-ecosystem: github-actions
+    cooldown:
+      default-days: 7
+    directory: /
+    patterns:
+      - "*"
+    multi-ecosystem-group: dependencies
+    groups:
+      github-actions:
+        patterns:
+          - "*"

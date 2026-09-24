@@ -18,7 +18,7 @@ jobs:
     outputs:
       pushed_fix: ${{ steps.commit-lockfile-repair.outputs.pushed_fix }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
@@ -40,18 +40,18 @@ jobs:
 
       - name: Set up Rust toolchain
         if: steps.changed-files.outputs.should_repair == 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
       - name: Set up pnpm
         if: steps.changed-files.outputs.should_repair == 'true'
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           version: 10.30.3
           run_install: false
 
       - name: Set up Node.js
         if: steps.changed-files.outputs.should_repair == 'true'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
 
@@ -88,23 +88,23 @@ jobs:
     if: ${{ needs.repair_pnpm_lockfile.outputs.pushed_fix != 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-      - uses: jdx/mise-action@v4
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
       - name: Set up pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           version: 10.30.3
           run_install: false
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
           cache: pnpm
@@ -223,7 +223,7 @@ jobs:
   build_container:
     needs:
       - rust_test
-    uses: docker/github-builder/.github/workflows/build.yml@v1
+    uses: docker/github-builder/.github/workflows/build.yml@58cb9f5b71b1836d6f690c1e95effdeb9b98cb8a # v1
     permissions:
       contents: read
       packages: write
