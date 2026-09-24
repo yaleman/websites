@@ -167,3 +167,17 @@ run = [
     "mkdir -p admin-ui-assets/images",
     "rsync -av assets/images/* admin-ui-assets/images/",
 ]
+
+[tasks.semgrep]
+description = "Run semgrep checks"
+run = """          semgrep scan \
+            --config auto \
+            --error \
+            --exclude-rule python.django.security.django-no-csrf-token.django-no-csrf-token \
+            --exclude docs \
+            --exclude node_modules \
+            --exclude target \
+            --exclude admin-ui-assets \
+            --exclude assets/admin/openapi.ts \
+            --exclude openapi.json
+"""
