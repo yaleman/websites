@@ -1407,6 +1407,7 @@ pub async fn execute(
             }
         },
         Commands::DumpOpenApiSpec { output } => {
+            // Already handled in main.rs but left here for good measure.
             dump_openapi_spec(&output)
                 .await
                 .map_err(|error| format!("failed to dump OpenAPI spec: {error}"))?;

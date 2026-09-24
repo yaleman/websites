@@ -23,8 +23,8 @@
 use clap::Parser;
 
 use websites::{
-    cli::execute,
-    cli::{Commands, ServeCommands},
+    api_docs::dump_openapi_spec,
+    cli::{Commands, ServeCommands, execute},
     resolve_upload_root, telemetry,
 };
 
@@ -43,6 +43,18 @@ async fn main() {
             command: ServeCommands::Admin { listen },
         }
     });
+
+    if let Commands::DumpOpenApiSpec { output } = command {
+        if let Err(err) = dump_openapi_spec(&output)
+            .await
+            .map_err(|error| format!("failed to dump OpenAPI spec: {error}"))
+        {
+            eprintln!("error: {}", err);
+            std::process::exit(1);
+        }
+
+        return;
+    }
 
     if let Err(error) = execute(
         command,
