@@ -18,7 +18,7 @@ jobs:
     outputs:
       pushed_fix: ${{ steps.commit-lockfile-repair.outputs.pushed_fix }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
@@ -51,7 +51,7 @@ jobs:
 
       - name: Set up Node.js
         if: steps.changed-files.outputs.should_repair == 'true'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 22
 
@@ -88,7 +88,7 @@ jobs:
     if: ${{ needs.repair_pnpm_lockfile.outputs.pushed_fix != 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -99,12 +99,12 @@ jobs:
           version: 10.30.3
           run_install: false
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
