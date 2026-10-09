@@ -18,7 +18,7 @@ jobs:
     outputs:
       pushed_fix: ${{ steps.commit-lockfile-repair.outputs.pushed_fix }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
@@ -88,18 +88,18 @@ jobs:
     if: ${{ needs.repair_pnpm_lockfile.outputs.pushed_fix != 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@v5
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
         with:
           version: 10.30.3
           run_install: false
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
