@@ -38,7 +38,7 @@ image = "0.25.10"
 markdown = "1.0.0"
 mime_guess = "2.0.5"
 openidconnect = { version = "4.0.1", features = ["reqwest"] }
-quick-xml = "0.40.1"
+quick-xml = "0.42.0"
 rand = "0.10.1"
 regex = "1.12.3"
 reqwest = { version = "0.12", default-features = false, features = [
@@ -51,14 +51,14 @@ russh = { version = "0.61.2", default-features = false, features = [
     "flate2",
 ] }
 rustls = "0.23.40"
-sea-orm = { version = "1.1.20", features = [
+sea-orm = { version = "2.0.4", features = [
     "runtime-tokio-rustls",
     "sqlx-sqlite",
     "with-chrono",
     "with-json",
     "with-uuid",
 ], default-features = false }
-sea-orm-migration = { version = "1.1.20", default-features = false, features = [
+sea-orm-migration = { version = "2.0.4", default-features = false, features = [
     "runtime-tokio-rustls",
     "sqlx-sqlite",
 ] }
@@ -67,7 +67,7 @@ serde_json = "1.0.150"
 similar = "3.1.1"
 sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "sqlite"] }
 tempfile = "3.27.0"
-tera = "1.20.1"
+tera = "2.4.0"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = [
     "rt-multi-thread",
@@ -82,7 +82,7 @@ tokio-util = { version = "0.7.18", default-features = false, features = [
     "io",
     "io-util",
 ] }
-tower-http = { version = "0.6.11", features = ["fs"] }
+tower-http = { version = "0.7.1", features = ["fs"] }
 tower-sessions = "0.15.0"
 # TODO: remove this vendored tower-sessions-sqlx-store dependency once the upstream dependencies are updated.
 tower-sessions-sqlx-store = { path = "vendor/tower-sessions-sqlx-store", features = [
@@ -97,14 +97,14 @@ tracing-subscriber = { version = "0.3.23", features = [
     "env-filter",
 ] }
 url = "2.5.8"
-utoipa = { version = "5.5.0", features = [
+utoipa = { version = "6.0.0", features = [
     "url",
     "uuid",
     "time",
     "chrono",
     "axum_extras",
 ] }
-utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"] }
+utoipa-swagger-ui = { version = "10.0.1", features = ["axum", "vendored"] }
 uuid = { version = "1.23.2", features = ["v7"] }
 
 [dev-dependencies]
