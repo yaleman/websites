@@ -15,7 +15,7 @@ mod m0012_add_site_import_settings;
 
 pub struct Migrator;
 
-#[async_trait::async_trait]
+#[allow(async_fn_in_trait)]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         vec![

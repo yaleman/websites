@@ -61,7 +61,7 @@ pub struct PublishOutcome {
     pub deleted_object_count: usize,
 }
 
-#[async_trait::async_trait]
+#[allow(async_fn_in_trait)]
 pub trait PublishBackend: Send + Sync {
     async fn list_object_keys(&self, prefix: &str) -> Result<Vec<String>, SiteError>;
     async fn put_object(
@@ -166,6 +166,7 @@ impl RsyncPublishConfig {
 }
 
 impl S3PublishBackend {
+    #[allow(async_fn_in_trait)]
     pub async fn from_config(
         config: &S3CompatiblePublishConfig,
         run_id: Uuid,
@@ -208,7 +209,6 @@ fn error_chain(error: &dyn StdError) -> String {
     messages.join(": ")
 }
 
-#[async_trait::async_trait]
 impl PublishBackend for S3PublishBackend {
     async fn list_object_keys(&self, prefix: &str) -> Result<Vec<String>, SiteError> {
         let prefix = normalize_prefix(prefix);
@@ -1164,7 +1164,6 @@ printf 'Number of deleted files: %s\n' "$deleted"
         fs::set_permissions(path, permissions).expect("chmod fake rsync binary");
     }
 
-    #[async_trait::async_trait]
     impl PublishBackend for FakePublishBackend {
         async fn list_object_keys(&self, prefix: &str) -> Result<Vec<String>, SiteError> {
             let prefix = normalize_prefix(prefix);
