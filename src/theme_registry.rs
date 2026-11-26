@@ -436,17 +436,29 @@ impl russh::client::Handler for ThemeSshClient {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &russh::keys::ssh_key::PublicKey,
+        server_public_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        let encoded_key = server_public_key.to_openssh()?;
-        let known_hosts = read_theme_known_hosts(&self.known_hosts_path)?;
-        match known_hosts.get(&self.host_key_name) {
-            Some(stored_key) if stored_key == &encoded_key => Ok(true),
-            Some(_) => Err(ThemeSshError::HostKeyChanged(self.host_key_name.clone())),
-            None => {
-                write_theme_known_host(&self.known_hosts_path, &self.host_key_name, &encoded_key)?;
-                Ok(true)
+        match server_public_key {
+            russh::keys::PublicKeyOrCertificate::PublicKey { key, .. } => {
+                let encoded_key = key.to_openssh()?;
+                let known_hosts = read_theme_known_hosts(&self.known_hosts_path)?;
+                match known_hosts.get(&self.host_key_name) {
+                    Some(stored_key) if stored_key == &encoded_key => Ok(true),
+                    Some(_) => Err(ThemeSshError::HostKeyChanged(self.host_key_name.clone())),
+                    None => {
+                        write_theme_known_host(
+                            &self.known_hosts_path,
+                            &self.host_key_name,
+                            &encoded_key,
+                        )?;
+                        Ok(true)
+                    }
+                }
             }
+
+            russh::keys::PublicKeyOrCertificate::Certificate(_) => Err(ThemeSshError::KeyIo(
+                std::io::Error::other("Certificate instead of a key!"),
+            )),
         }
     }
 }

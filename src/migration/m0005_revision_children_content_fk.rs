@@ -1,4 +1,4 @@
-use sea_orm::{Statement, TransactionTrait};
+use sea_orm::TransactionTrait;
 use sea_orm_migration::prelude::*;
 
 pub struct Migration;
@@ -107,31 +107,47 @@ async fn rebuild_revision_alias_table(
     }
     schema.create_table(create_table.to_owned()).await?;
 
-    let backend = schema.get_database_backend();
-    let alias_insert_sql = if include_content_id {
-        "INSERT INTO content_revision_alias_new (id, revision_id, content_id, alias_path, kind)
-         SELECT content_revision_alias.id,
-                content_revision_alias.revision_id,
-                content_revision.content_id,
-                content_revision_alias.alias_path,
-                content_revision_alias.kind
-         FROM content_revision_alias
-         INNER JOIN content_revision ON content_revision.id = content_revision_alias.revision_id"
-            .to_string()
-    } else {
-        "INSERT INTO content_revision_alias_new (id, revision_id, alias_path, kind)
-         SELECT id,
-                revision_id,
-                alias_path,
-                kind
-         FROM content_revision_alias"
-            .to_string()
-    };
+    let mut select = Query::select();
+    select.from(ContentRevisionAlias::Table).columns([
+        (ContentRevisionAlias::Table, ContentRevisionAlias::Id),
+        (
+            ContentRevisionAlias::Table,
+            ContentRevisionAlias::RevisionId,
+        ),
+        (ContentRevisionAlias::Table, ContentRevisionAlias::AliasPath),
+        (ContentRevisionAlias::Table, ContentRevisionAlias::Kind),
+    ]);
+    let mut columns = vec![
+        ContentRevisionAliasNew::Id,
+        ContentRevisionAliasNew::RevisionId,
+        ContentRevisionAliasNew::AliasPath,
+        ContentRevisionAliasNew::Kind,
+    ];
+    if include_content_id {
+        columns.push(ContentRevisionAliasNew::ContentId);
+        select
+            .column((ContentRevision::Table, ContentRevision::ContentId))
+            .inner_join(
+                ContentRevision::Table,
+                Expr::col((ContentRevision::Table, ContentRevision::Id)).eq(Expr::col((
+                    ContentRevisionAlias::Table,
+                    ContentRevisionAlias::RevisionId,
+                ))),
+            );
+    }
 
-    schema
-        .get_connection()
-        .execute(Statement::from_string(backend, alias_insert_sql))
-        .await?;
+    let mut insert = Query::insert();
+    insert
+        .into_table(ContentRevisionAliasNew::Table)
+        .columns(columns);
+    insert
+        .select_from(select)
+        .map_err(|source| DbErr::TryIntoErr {
+            from: "SelectStatement",
+            into: "InsertStatement",
+            source: std::sync::Arc::new(source),
+        })?;
+    schema.execute(insert).await?;
 
     schema
         .drop_table(Table::drop().table(ContentRevisionAlias::Table).to_owned())
@@ -227,29 +243,42 @@ async fn rebuild_revision_tag_table(
     }
     schema.create_table(create_table.to_owned()).await?;
 
-    let backend = schema.get_database_backend();
-    let tag_insert_sql = if include_content_id {
-        "INSERT INTO content_revision_tag_new (id, revision_id, content_id, tag_id)
-         SELECT content_revision_tag.id,
-                content_revision_tag.revision_id,
-                content_revision.content_id,
-                content_revision_tag.tag_id
-         FROM content_revision_tag
-         INNER JOIN content_revision ON content_revision.id = content_revision_tag.revision_id"
-            .to_string()
-    } else {
-        "INSERT INTO content_revision_tag_new (id, revision_id, tag_id)
-         SELECT id,
-                revision_id,
-                tag_id
-         FROM content_revision_tag"
-            .to_string()
-    };
+    let mut select = Query::select();
+    select.from(ContentRevisionTag::Table).columns([
+        (ContentRevisionTag::Table, ContentRevisionTag::Id),
+        (ContentRevisionTag::Table, ContentRevisionTag::RevisionId),
+        (ContentRevisionTag::Table, ContentRevisionTag::TagId),
+    ]);
+    let mut columns = vec![
+        ContentRevisionTagNew::Id,
+        ContentRevisionTagNew::RevisionId,
+        ContentRevisionTagNew::TagId,
+    ];
+    if include_content_id {
+        columns.push(ContentRevisionTagNew::ContentId);
+        select
+            .column((ContentRevision::Table, ContentRevision::ContentId))
+            .inner_join(
+                ContentRevision::Table,
+                Expr::col((ContentRevision::Table, ContentRevision::Id)).eq(Expr::col((
+                    ContentRevisionTag::Table,
+                    ContentRevisionTag::RevisionId,
+                ))),
+            );
+    }
 
-    schema
-        .get_connection()
-        .execute(Statement::from_string(backend, tag_insert_sql))
-        .await?;
+    let mut insert = Query::insert();
+    insert
+        .into_table(ContentRevisionTagNew::Table)
+        .columns(columns);
+    insert
+        .select_from(select)
+        .map_err(|source| DbErr::TryIntoErr {
+            from: "SelectStatement",
+            into: "InsertStatement",
+            source: std::sync::Arc::new(source),
+        })?;
+    schema.execute(insert).await?;
 
     schema
         .drop_table(Table::drop().table(ContentRevisionTag::Table).to_owned())
@@ -306,11 +335,15 @@ enum ContentItem {
 enum ContentRevision {
     Table,
     Id,
+    ContentId,
 }
 
 #[derive(Iden)]
 enum ContentRevisionAlias {
     Table,
+    Id,
+    AliasPath,
+    Kind,
     RevisionId,
     ContentId,
 }
@@ -329,6 +362,7 @@ enum ContentRevisionAliasNew {
 #[derive(Iden)]
 enum ContentRevisionTag {
     Table,
+    Id,
     RevisionId,
     ContentId,
     TagId,
@@ -349,3 +383,6 @@ enum Tag {
     Table,
     Id,
 }
+
+#[cfg(test)]
+mod tests;

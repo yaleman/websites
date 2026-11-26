@@ -31,9 +31,10 @@ use chrono::{DateTime, Datelike, Utc};
 use markdown::{CompileOptions, Options, ParseOptions};
 use quick_xml::Reader;
 use quick_xml::events::Event;
+use quick_xml::name::QName;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, DbErr,
-    EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
+    EntityTrait, ExprTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
 };
 use serde::Serialize;
 use std::collections::HashSet;
@@ -1813,7 +1814,7 @@ fn parse_wordpress_wxr(xml: &str) -> Result<Vec<WordpressItem>, SiteError> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(event)) => {
-                let name = String::from_utf8_lossy(event.name().as_ref()).to_string();
+                let name = event.name().0.to_string();
                 if name == "item" {
                     in_item = true;
                     current = WordpressItem::default();
@@ -1828,7 +1829,7 @@ fn parse_wordpress_wxr(xml: &str) -> Result<Vec<WordpressItem>, SiteError> {
                 }
             }
             Ok(Event::End(event)) => {
-                let name = String::from_utf8_lossy(event.name().as_ref()).to_string();
+                let name = event.name().0.to_string();
                 if name == "item" && in_item {
                     in_item = false;
                     items.push(current.clone());
@@ -1844,7 +1845,7 @@ fn parse_wordpress_wxr(xml: &str) -> Result<Vec<WordpressItem>, SiteError> {
                     buf.clear();
                     continue;
                 }
-                let text = String::from_utf8_lossy(event.as_ref()).to_string();
+                let text = event.to_string();
                 assign_wordpress_field(
                     &mut current,
                     current_tag.as_str(),
@@ -1857,7 +1858,7 @@ fn parse_wordpress_wxr(xml: &str) -> Result<Vec<WordpressItem>, SiteError> {
                     buf.clear();
                     continue;
                 }
-                let text = String::from_utf8_lossy(event.as_ref()).to_string();
+                let text = event.to_string();
                 assign_wordpress_field(
                     &mut current,
                     current_tag.as_str(),
@@ -1879,8 +1880,8 @@ fn wordpress_category_domain(event: &quick_xml::events::BytesStart<'_>) -> Optio
     event
         .attributes()
         .flatten()
-        .find(|attribute| attribute.key.as_ref() == b"domain")
-        .map(|attribute| String::from_utf8_lossy(attribute.value.as_ref()).to_string())
+        .find(|attribute| attribute.key == QName("domain"))
+        .map(|attribute| attribute.value.to_string())
 }
 
 fn assign_wordpress_field(

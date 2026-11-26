@@ -2,8 +2,10 @@ use std::sync::Arc;
 
 use clap::Parser;
 use sea_orm::{ActiveModelTrait, IntoActiveModel as _};
-use sqlx::types::time::OffsetDateTime;
-use tower_sessions::{Session, cookie::time::Duration};
+use tower_sessions::{
+    Session,
+    cookie::time::{Duration, OffsetDateTime},
+};
 use tower_sessions_sqlx_store::SqliteStore;
 use websites::{constants::SESSION_USER, db::db_start, entities::user::upsert_user_login};
 
