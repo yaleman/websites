@@ -12,25 +12,7 @@ jobs:
     if: ${{ github.actor != 'dependabot[bot]' }}
 
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
-      - name: Install semgrep
-        run: python -m pip install --upgrade pip semgrep
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
       - name: Run semgrep
-        run: |
-          semgrep scan \
-            --config auto \
-            --error \
-            --exclude-rule python.django.security.django-no-csrf-token.django-no-csrf-token \
-            --exclude docs \
-            --exclude node_modules \
-            --exclude target \
-            --exclude admin-ui-assets \
-            --exclude assets/admin/openapi.ts \
-            --exclude openapi.json
+        run: mise run semgrep
