@@ -10,6 +10,7 @@ The system manages site metadata, content, tags, assets, and memberships in a SQ
 
 - Use Cargo tooling for dependency changes only (`cargo add`, `cargo remove`).
 - Do not use the SeaORM CLI.
+- Do not add hand-written SQL without explicit user approval. Use SeaORM entities, migrations, and SeaQuery builders for database operations, including data copies and schema changes.
 - All DB schema changes must be made through migration files in the db crate.
 - If more than one database modification is needed, start a transaction and use it, so that failures roll back all changes.
 - Any change to system design must update docs/src/System-Design-Updates.md.
