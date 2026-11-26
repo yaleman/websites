@@ -51,8 +51,17 @@ russh = { version = "0.61.2", default-features = false, features = [
     "flate2",
 ] }
 rustls = "0.23.40"
-sea-orm = { version = "1.1.20", features = ["runtime-tokio-rustls", "sqlx-sqlite", "with-chrono", "with-json", "with-uuid"], default-features = false }
-sea-orm-migration = { version = "1.1.20", default-features = false, features = ["runtime-tokio-rustls", "sqlx-sqlite"] }
+sea-orm = { version = "2.0.4", features = [
+    "runtime-tokio-rustls",
+    "sqlx-sqlite",
+    "with-chrono",
+    "with-json",
+    "with-uuid",
+], default-features = false }
+sea-orm-migration = { version = "2.0.4", default-features = false, features = [
+    "runtime-tokio-rustls",
+    "sqlx-sqlite",
+] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 similar = "3.1.1"
@@ -75,10 +84,8 @@ tokio-util = { version = "0.7.18", default-features = false, features = [
 ] }
 tower-http = { version = "0.6.11", features = ["fs"] }
 tower-sessions = "0.15.0"
-# TODO: remove this vendored tower-sessions-sqlx-store dependency once the upstream dependencies are updated.
-tower-sessions-sqlx-store = { path = "vendor/tower-sessions-sqlx-store", features = [
-    "sqlite",
-] }
+tower-sessions-sqlx-store = { version = "0.16.0", features = ["sqlite"] }
+
 tracing = { version = "0.1.44", features = ["log"] }
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = [
@@ -88,7 +95,13 @@ tracing-subscriber = { version = "0.3.23", features = [
     "env-filter",
 ] }
 url = "2.5.8"
-utoipa = { version = "5.5.0", features = ["url", "uuid", "time", "chrono", "axum_extras"] }
+utoipa = { version = "5.5.0", features = [
+    "url",
+    "uuid",
+    "time",
+    "chrono",
+    "axum_extras",
+] }
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"] }
 uuid = { version = "1.23.2", features = ["v7"] }
 

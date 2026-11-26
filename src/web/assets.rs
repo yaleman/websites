@@ -6,8 +6,8 @@ use crate::mass_asset_import::{
     find_exact_local_asset_candidates_for_paths, find_local_asset_candidates,
     find_local_asset_candidates_for_paths, find_missing_asset_groups, validate_import_candidate,
 };
-use sea_orm::QuerySelect;
 use sea_orm::sea_query::{Expr, Func};
+use sea_orm::{ExprTrait, QuerySelect};
 
 const MASS_IMPORT_IMAGE_EXTENSIONS: [&str; 6] = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"];
 

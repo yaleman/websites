@@ -33,7 +33,7 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, DbErr,
-    EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
+    EntityTrait, ExprTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
 };
 use serde::Serialize;
 use std::collections::HashSet;
