@@ -12,6 +12,8 @@ updates:
   patterns:
   - '*'
   multi-ecosystem-group: dependencies
+  cooldown:
+    default-days: 7
   groups:
     cargo:
       patterns:
@@ -21,6 +23,8 @@ updates:
   patterns:
   - '*'
   multi-ecosystem-group: dependencies
+  cooldown:
+    default-days: 7
   groups:
     cargo:
       patterns:
@@ -30,6 +34,8 @@ updates:
   patterns:
   - '*'
   multi-ecosystem-group: dependencies
+  cooldown:
+    default-days: 7
   groups:
     npm:
       patterns:
@@ -39,6 +45,8 @@ updates:
   patterns:
   - '*'
   multi-ecosystem-group: dependencies
+  cooldown:
+    default-days: 7
   groups:
     github-actions:
       patterns:
